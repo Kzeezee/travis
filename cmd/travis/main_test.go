@@ -13,7 +13,6 @@ func TestVersionStringReportsPlatform(t *testing.T) {
 	if !strings.HasPrefix(got, "travis ") {
 		t.Errorf("version string should start with %q, got %q", "travis ", got)
 	}
-	// The CI matrix relies on this to identify which runner produced the output.
 	if want := runtime.GOOS + "/" + runtime.GOARCH; !strings.Contains(got, want) {
 		t.Errorf("version string should contain %q, got %q", want, got)
 	}
