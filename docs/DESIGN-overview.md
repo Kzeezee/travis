@@ -34,7 +34,7 @@ and reversing one needs an RFC.
 
 | | Decision |
 |---|---|
-| **D-01** | **One Go module**, `github.com/<repo-owner>/travis`, at the repo root. "Modular" means one package per core capability with an enforced import graph — *not* many `go.mod` files. |
+| **D-01** | **One Go module**, `github.com/Kzeezee/travis`, at the repo root. "Modular" means one package per core capability with an enforced import graph — *not* many `go.mod` files. |
 | **D-02** | MCP is a **generic client**. Zero per-server Go code, ever. A new integration is ~8 lines of TOML. |
 | **D-03** | Tool **pruning ships with MCP** (M3), not after. 12 servers ≈ 300 tools ≈ 40k tokens. |
 | **D-04** | `fetch` is a **brokered tool**, not `exec curl`. Network and execution are different capabilities. |
@@ -122,9 +122,8 @@ travis/
 └─ testdata/                cassettes · fixtures · scenarios · redteam
 ```
 
-**Per package, required:** `README.md` (≤30 lines), `DECISIONS.md`, `doc.go`,
-`<name>test/` (the contract suite alternative implementations must pass), a
-`CODEOWNERS` entry.
+**Per package, required:** `README.md` (≤30 lines), `DECISIONS.md`, `doc.go`, and
+`<name>test/` (the contract suite alternative implementations must pass).
 
 ---
 
@@ -250,7 +249,7 @@ it necessary. Do not reorder.
 
 | Thing | Convention |
 |---|---|
-| Module path | `github.com/<repo-owner>/travis` — one, at the root |
+| Module path | `github.com/Kzeezee/travis` — one, at the root |
 | Package name | one lowercase word, no prefix: `mcp`, not `travis-mcp` |
 | Binaries | `travis`, `travis-broker`, `travis-audio` |
 | Interface | noun or `-er`, never `I`-prefixed |

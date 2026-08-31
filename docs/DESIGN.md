@@ -1,6 +1,6 @@
 # `travis` — Design Document
 
-**Status:** Draft v0.3 · **Owner:** TBD · **Last updated:** 2026-08-26
+**Status:** Draft v0.3 · **Owner:** Kzeezee · **Last updated:** 2026-08-26
 **Changes in v0.3:** project renamed `assistance` → **travis** throughout (§0.3) ·
 D-05 (OAuth subscription providers share the `Provider` seam, differ only in auth) ·
 D-06 (**Bubble Tea v2**, mandatory) · D-07 (**Windows is a first-class MVP target**;
@@ -11,7 +11,7 @@ C6/C9/C14/C15 resolved · OQ-01 closed · R-18…R-22 added
 **Changes in v0.2:** D-01 (single Go module, feature packages) · D-02 (MCP as generic
 loader) · D-03 (pruning committed to M3) · D-04 + §5.6.1 (`fetch` vs `exec curl`) ·
 §8 rewritten · C1/C3/C5 resolved · R-16, R-17 added
-**Reviewers:** TBD · **Supersedes:** — · **Related:** RFC-000 (this doc) ·
+**Reviewers:** — · **Supersedes:** — · **Related:** RFC-000 (this doc) ·
 **Short version:** [`DESIGN-overview.md`](./DESIGN-overview.md)
 
 ---
@@ -56,13 +56,13 @@ or `go get`, `go install`, and `godoc` all break. Since we have no org, the path
 simply the account that owns the repo:
 
 ```
-module github.com/<repo-owner>/travis
+module github.com/Kzeezee/travis
 ```
 
 Rules that follow, and that reviewers should enforce:
 
 - **Exactly one `go.mod`, at the repository root** (D-01). `<module>` never appears in
-  a module path — `github.com/<owner>/travis/mcp` is an *import path* of a package
+  a module path — `github.com/Kzeezee/travis/mcp` is an *import path* of a package
   inside the one module, not a second module. See §0.4 and §8.
 - The path is decided **once**, when the repo is created, and hard-coded. Do not use a
   vanity domain in v1; it adds a DNS/hosting dependency to `go build` for zero gain.
@@ -73,7 +73,7 @@ Rules that follow, and that reviewers should enforce:
 
 | Thing | Convention | Example |
 |---|---|---|
-| Go module path | `github.com/<repo-owner>/travis` (one, at root) | `github.com/kez/travis` |
+| Go module path | `github.com/Kzeezee/travis` (one, at root) | `github.com/Kzeezee/travis` |
 | Package import path | `<module>/internal/<pkg>` or `<module>/pkg/<pkg>` | `.../travis/internal/mcp` |
 | Package name | single lowercase word, no underscores, no prefix | `package mcp` |
 | Binary | `travis` | `travis chat` |
@@ -127,12 +127,12 @@ a `D-nn` tag; reversing one requires an RFC.
 
 | ID | Decision | Rationale | Supersedes |
 |---|---|---|---|
-| **D-01** | **One Go module for the repository**, path `github.com/<repo-owner>/travis`. Modularity is achieved by feature packages — one per core capability — with enforced import boundaries (§4.2), not by `go.mod` splitting. | Sixteen `go.mod` files means sixteen version bumps per `core` change and diamond-dependency risk, for zero gain in separation. Extraction later is mechanical. | OQ-21, C1 |
+| **D-01** | **One Go module for the repository**, path `github.com/Kzeezee/travis`. Modularity is achieved by feature packages — one per core capability — with enforced import boundaries (§4.2), not by `go.mod` splitting. | Sixteen `go.mod` files means sixteen version bumps per `core` change and diamond-dependency risk, for zero gain in separation. Extraction later is mechanical. | OQ-21, C1 |
 | **D-02** | **MCP support is a generic loader, not per-server integrations.** We write the MCP client once; any server in the public ecosystem is a config entry. There is never a `mcp-github` package. | This is the point of adopting MCP at all. Per-server Go code would make the ecosystem a maintenance burden instead of a multiplier. | C3 |
 | **D-03** | **Tool pruning ships in M3, with MCP, not later.** | 12 servers ≈ 300 tools ≈ 40k tokens of schema. Without pruning the app is unusable on a 32k local model the day MCP lands. | C5 |
 | **D-04** | **`fetch` is a first-class brokered tool, not `exec curl`.** | See §5.6.1. | — |
 | **D-05** | **Subscription/OAuth providers use the same `Provider` interface as API-key providers.** The difference is confined to a `Credential` seam (§5.3.1): `api_key`, `oauth`, `oauth_device`. There is no `SubscriptionProvider` type and no second code path in `brain`. | The wire protocol is identical; only how a bearer token is obtained and refreshed differs. Splitting the interface would duplicate streaming, tool-call repair, and error taxonomy for a token-refresh difference. | — |
-| **D-06** | **Bubble Tea v2 (`charmbracelet/bubbletea/v2`), not v1**, from the first commit. Same for Lipgloss v2 and Bubbles v2. | v1 cannot report key *release*, so hold-to-talk push-to-talk is impossible; v1's renderer repaints whole lines, which tears under token streaming; v1 has no colour-profile/background-colour query, which we need for Windows terminals. See §5.9.1. | — |
+| **D-06** | **Bubble Tea v2 (`charm.land/bubbletea/v2`), not v1**, from the first commit. Same for Lipgloss v2 and Bubbles v2. | v1 cannot report key *release*, so hold-to-talk push-to-talk is impossible; v1's renderer repaints whole lines, which tears under token streaming; v1 has no colour-profile/background-colour query, which we need for Windows terminals. See §5.9.1. | — |
 | **D-07** | **Linux, macOS, and Windows are all first-class MVP targets.** Windows means native `windows/amd64` and `windows/arm64` binaries, not WSL2. | The team develops on all three. Go and Bubble Tea v2 are genuinely cross-platform; the only truly OS-specific work is the sandbox layer, which is defence-in-depth *below* an OS-independent broker (§9.2.1). | OQ-01, §2.2 |
 | **D-08** | **Eight core tools: `read`, `write`, `edit`, `grep`, `exec`, `fetch`, `ask_user`, `memory`. `glob` is deleted.** | File discovery is a mode of `grep`, not a tool. `edit` stays because whole-file `write` is O(file) tokens per change and is the top cause of silent truncation on small models — see §5.6.2. | §3, §5.6 |
 | **D-09** | **Autonomy is bought with reversibility and durable decisions, not with permission prompts.** The agent acts without asking when the action is reversible and in-scope; it asks when the action is irreversible, out-of-scope, or over budget; every answer can become a persistent rule. | "Ask the human" and "be useful unattended" are only in conflict if asking is the *only* safety mechanism. See §6.4. | C6, G5 |
@@ -1170,10 +1170,18 @@ than a rewrite.
 
 #### 5.9.1 Bubble Tea **v2**, explicitly (D-06)
 
-**We build on `github.com/charmbracelet/bubbletea/v2`, with `lipgloss/v2` and
-`bubbles/v2`. v1 is not an option, and "start on v1, migrate later" is not an option
-either** — the v1→v2 changes touch `Init`/`Update` signatures, key handling, and the
-renderer, i.e. every file in this package. Pin the major version in `go.mod` at M0.
+**We build on `charm.land/bubbletea/v2`, with `charm.land/lipgloss/v2` and
+`charm.land/bubbles/v2`. v1 is not an option, and "start on v1, migrate later" is not
+an option either** — the v1→v2 changes touch `Init`/`Update` signatures, key handling,
+and the renderer, i.e. every file in this package. Pin the major version in `go.mod`
+at M0.
+
+**On the module path.** The v2 line moved to the vanity domain `charm.land`; the
+old `github.com/charmbracelet/bubbletea/v2` path does not resolve. This does not
+contradict §0.3's ban on vanity domains — that rule governs *our* module path, where
+a DNS dependency would be ours to operate. A dependency's chosen path is not ours to
+pick. Pinned at M0: `bubbletea/v2 v2.0.9`, `lipgloss/v2 v2.0.6`, `bubbles/v2 v2.2.1`;
+`bubbletea/v2` requires Go ≥ 1.25.0, which sets the module's `go` directive.
 
 The v1 limitations that would actually hurt this specific project:
 
@@ -2161,7 +2169,7 @@ journalled changes; `/decisions` lists and revokes learned approval rules (§6.4
 
 ## 8. Repository layout and build
 
-**One Go module** (`module github.com/<repo-owner>/travis`, D-01 · §0.3). Separation
+**One Go module** (`module github.com/Kzeezee/travis`, D-01 · §0.3). Separation
 comes from feature packages — one per core capability — plus a machine-enforced import
 graph, not from `go.mod` boundaries. To restate the confirmation asked for in review:
 **"modular" here means package-per-function with enforced seams, and there is exactly
@@ -2209,8 +2217,7 @@ reviewed act.
 
 **Per-package required files:** `README.md` (30 lines max — what it does, what it
 depends on, how to swap its backend), `DECISIONS.md` (dated ADR entries), `doc.go`,
-`<name>test/` (the contract suite alternative implementations must pass), and a
-`CODEOWNERS` entry.
+and `<name>test/` (the contract suite alternative implementations must pass).
 
 ### 8.1 Cross-platform rules (D-07)
 
@@ -2270,7 +2277,6 @@ would otherwise have done):
 - `deps.yaml` declares, per package, exactly which packages it may import. `make
   lint-deps` walks the import graph and fails the build on any edge not listed. Layer
   violations are caught in CI, not in review.
-- `CODEOWNERS` per package directory, so ownership is unambiguous across the team.
 - Cross-package types **MUST** live in `pkg/core`. A type defined in `internal/mcp`
   and used by `internal/brain` is a review blocker — that is the smell D-01 was
   meant to prevent, and the lint catches it directly.
@@ -2579,7 +2585,7 @@ first as skipped Windows CI jobs. Treat a red Windows job exactly like a red Lin
 | R-13 | Subagent privilege escalation | High | intersection-only token derivation | 5.14 |
 | R-14 | Approval fatigue → blind `y` | Med | irreversibility tiering, durable decision rules, non-blocking asks, red-team case | 6.4 |
 | R-15 | Voice mode hides blocking prompts | Med | **resolved by D-10**: spoken alert + mic mute + keyboard-only resolution + persisted `AwaitingHuman` | 6.5 |
-| R-16 | Feature-package boundaries erode without `go.mod` walls | Med | `deps.yaml` + blocking `lint-deps`, CODEOWNERS, shared types confined to `pkg/core` | 8, C1 |
+| R-16 | Feature-package boundaries erode without `go.mod` walls | Med | `deps.yaml` + blocking `lint-deps`, shared types confined to `pkg/core` | 8, C1 |
 | R-17 | Pressure to relax MCP sandbox defaults per broken server | Med | sticky status-bar indicator for relaxed sandboxes, curated verified profiles | C3 |
 | R-18 | Vendor blocks or bans third-party use of an OAuth subscription plan | Med | never the default; explicit ToS warning at auth; honest `User-Agent`; no credential scraping; API-key path always available | 5.3.1 |
 | R-19 | Audio device permission/enumeration differs per OS and blocks M4 | Med | helper process abstracts three backends; permission denial is a normal error; voice degrades off, never blocks startup | 5.10 |
