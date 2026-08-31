@@ -1,0 +1,22 @@
+# Line endings are normalised to LF in the repository (DESIGN.md 8.1).
+# Working-tree endings are left to the developer's core.autocrlf setting.
+* text=auto eol=lf
+
+# Windows script formats genuinely misbehave with LF. These stay CRLF.
+# Not hypothetical: MCP servers are launched via npx.cmd (DESIGN.md 8.1).
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Fixtures are compared byte-for-byte. Git must not rewrite them, or golden
+# tests fail on exactly one developer's machine and nowhere else.
+testdata/** -text
+*.golden    -text
+*.jsonl     -text
+
+# Binary assets.
+*.png binary
+*.jpg binary
+*.wav binary
+*.mp3 binary
+*.ogg binary

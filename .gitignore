@@ -1,0 +1,24 @@
+# Build output
+/travis
+/travis-broker
+/travis-audio
+*.exe
+/bin/
+/dist/
+
+# Go test and coverage artefacts
+*.test
+*.out
+coverage.*
+
+# Workspace config and state directory (DESIGN.md 5.2)
+/.travis/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
