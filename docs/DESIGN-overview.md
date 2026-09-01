@@ -27,10 +27,12 @@ Runs natively on **Linux, macOS, and Windows** — all three are MVP targets.
 
 ---
 
-## 2. Ten things that are already decided
+## 2. The decisions you must not relitigate
 
-Do not relitigate these in a PR; they each have a written rationale in `DESIGN.md` §0.5
-and reversing one needs an RFC.
+Each has a written rationale in `DESIGN.md` §0.5, and reversing one needs an RFC.
+**D-01…D-10** are also explained in plain words in `DESIGN.md` §0.6. There are
+**34 decisions in total**; the ones below are the load-bearing ones — see §0.5 for the
+rest.
 
 | | Decision |
 |---|---|
@@ -44,6 +46,16 @@ and reversing one needs an RFC.
 | **D-08** | **Eight core tools.** No `glob` (it's a mode of `grep`). `edit` stays. A ninth tool needs an ADR. |
 | **D-09** | **Autonomy is bought with reversibility and durable decisions**, not permission prompts. |
 | **D-10** | **Approvals are keyboard-only.** Voice input composes prose; it never answers yes/no. |
+| **D-11** | travis is a **general personal assistant**, not a coding agent. |
+| **D-12** | The broker is **one per session**, a child process, **no privilege elevation** — and its binary is **hash-verified before exec**. |
+| **D-13** | The change journal stores **content-addressed blobs**, not git refs. Git holds bytes only for tracked *and committed* files. |
+| **D-14** | The OS sandbox is **late but required at submission**. `strict` tier, for MCP servers, first. |
+| **D-17** | `security` is **two jobs**: policy/broker/IPC (portable Go, critical path) and the OS sandbox (platform work, late). |
+| **D-20** | **User-supplied hooks are rejected.** Internal lifecycle *hook points* are not — we need one at compaction. |
+| **D-26** | **Untrusted content is never summarised — it is dropped.** A summariser would launder it into trusted prose. |
+| **D-27** | **`exec` is irreversible** and always asks. Unrelaxable, because the journal cannot see what a subprocess writes. |
+| **D-30** | **Decision rules are written by the broker**, never by `fs.write` — otherwise the model can grant itself auto-approval. |
+| **D-31** | Tool names are **namespaced**: `fs.read`, not `read`. They are model-facing *and* config keys. |
 
 ---
 
@@ -129,7 +141,10 @@ travis/
 
 ## 5. The eight core tools
 
-`read` · `write` · `edit` · `grep` · `exec` · `fetch` · `ask_user` · `memory`
+`fs.read` · `fs.write` · `fs.edit` · `grep` · `exec` · `fetch` · `ask_user` · `memory`
+
+Names are **namespaced** (D-31) — these strings are model-facing *and* config keys, so
+`read` and `fs.read` being used interchangeably was a real bug, not a style nit.
 
 Every tool is a permanent tax: schema tokens on every step, a contract test, red-team
 cases, and one more thing a 7B model can pick wrongly. Adding one needs an ADR.
@@ -153,11 +168,20 @@ cases, and one more thing a 7B model can pick wrongly. Adding one needs an ADR.
    even a broker bug — it is defence-in-depth, never the primary control.
 4. Untrusted content (web pages, MCP results, workspace `SKILL.md`) is delimited,
    cannot change grants, and **escalates approval by one level** for tool calls in the
-   same step.
-5. Broker unreachable ⇒ **fail closed**. There is no degraded mode without enforcement.
+   same step — and is **dropped rather than summarised** at compaction, because a
+   summariser would launder it into trusted prose (D-26).
+5. A **deny-list** is evaluated first and unconditionally (D-22): `~/.ssh`, `~/.aws`,
+   `**/.env`, OS keychains, plus persistence paths for writes. Capabilities are
+   allow-globs, so "home minus secrets" needs a subtraction rule that didn't exist.
+6. Broker unreachable ⇒ **fail closed**. There is no degraded mode without enforcement.
 
 Profiles: `paranoid` (read only) · `default` (workspace) · `dev` · `yolo` (loud, red
 banner, `--i-understand`).
+
+**Two things the broker cannot do for you.** It stops *the model*. It does not stop **MCP
+servers** or `exec` children — those are processes calling the OS directly, which never
+consult the broker. Only the sandbox (§9, late per D-14) constrains those. And it assumes
+the broker binary is ours, which is why D-12 hash-verifies it before exec.
 
 ---
 
@@ -228,20 +252,26 @@ mistakes become security bugs, so:
 
 ---
 
-## 10. Milestones
+## 10. Milestones and the build plan
 
 | # | Name | Exit criterion (all three OSes — that is the point) |
 |---|---|---|
 | **M0** | Skeleton | `travis version` builds and tests pass natively on linux/darwin/windows; `lint-deps` + `lint-portability` green and blocking |
-| **M1** | Text loop | Fixes a failing test in a fixture repo, end to end |
-| **M2** | Enforcement | Red-team suite green; `paranoid` provably blocks writes; change journal + `/undo` work |
+| **M1** | Text loop | Completes a 3+ tool-call **assistant** task over a fixture notes tree (revised by D-11) |
+| **M2** | Enforcement | Red-team suite green; `paranoid` provably blocks writes; change journal + `/undo` work; sandbox tier reported as `none`, honestly |
 | **M3** | Ecosystem | 10 public MCP servers install from a pin with **zero per-server Go code**; tool schemas stay under 6k tokens |
-| **M4** | Voice | Full voice turn ≤ 900 ms to first syllable; hold-to-talk works |
-| **M5** | Rigour | Replay-based regression suite runs per PR |
-| **M6** | Swarm | A 3-subagent research task completes within budget (behind `exp_swarm`) |
+| **M4** | Sandbox + Voice | `strict` tier contains a compromised MCP server; full voice turn ≤ 900 ms to first syllable |
+| **M5** | Rigour | Replay-based regression suite runs per PR; `prompts_per_task` and `undo_rate` tracked |
+| ~~M6~~ | ~~Swarm~~ | **Rejected for v1** — C11: lowest value-per-unit-risk item in the project |
 
 **M1 → M2 ordering is deliberate:** enforcement arrives before the ecosystem that makes
 it necessary. Do not reorder.
+
+> **This table says *what* each milestone contains. It is not the build plan.**
+> Task ordering, what runs in parallel at each stage, and the priority stack when time
+> runs short live in **[`PLAN.md`](./PLAN.md)** — read that before starting a phase.
+> `PLAN.md` is newer and moves some work between milestones (cassettes to M1, the OS
+> sandbox out of M2).
 
 ---
 
@@ -278,3 +308,65 @@ never block for > 1 ms. Secrets never touch TOML or the TUI process.
 | Voice and approvals | §6.5, §5.10, §5.11 |
 | Cross-platform rules | §8.1, §9.2.1 |
 | What's still undecided | §12 (open questions), §13 (risks) |
+| How and when we build it | **[`PLAN.md`](./PLAN.md)** — phases, parallelism, priorities |
+
+---
+
+## 13. Concepts people get wrong on first read
+
+Six things that are easy to invert. Each is spelled out at length in `DESIGN.md`; these
+are the corrections worth having up front.
+
+### The broker is not an AI. It contains no model at all.
+
+It is an ordinary Go program: glob matching, path resolution, HMAC verification, socket
+handling. Deterministic. §6.5 states the principle — *"the security decision path contains
+no ML model at all."* Put a model in it and every argument in §5.12.1 collapses, because
+you are back to *persuading* a probabilistic system, which is the failure mode the project
+exists to prevent.
+
+### "Tools" means three different things
+
+**`internal/tools`** is the *registry* — namespacing, schema validation, description
+budgeting, the approval table. **`internal/coretools`** is the eight *implementations*.
+**"A tool"** is *anything the model can invoke*, behind one `Tool` interface — core tools,
+MCP tools, skill entry points, subagents. That last one is the design's central
+simplification: adding MCP is "register N more `Tool`s", and `brain` never changes.
+
+### Enforcement is two jobs, not one (D-17)
+
+**Job 1 — what actually stops the model:** capabilities (permission slips like
+`fs.write:/proj/**`), policy (allow/ask/deny), glob matching (where bypasses hide), the
+broker process, IPC, token derivation. Portable Go, identical on all three OSes, on the
+critical path. **Job 2 — the OS sandbox:** asking the kernel to physically forbid things.
+Different code per OS, specialist knowledge, and it only catches a bug in Job 1 — or code
+that never asked Job 1 in the first place.
+
+### What the sandbox adds that the broker cannot
+
+The broker governs the *conversation* between model and broker. But **MCP servers and
+`exec` children are processes with their own hands** — they never ask the broker, they call
+the OS directly. So: a *model* reading `~/.ssh/id_rsa` emits `fs.read`, gets checked, and
+is denied. A *compromised MCP server* reading the same file just calls `open()` and
+succeeds. Only the sandbox stops the second. This is why §9.1 rates "malicious MCP server"
+as merely **Partial**.
+
+### The layer rules exist for security, not tidiness
+
+"Changing outer code doesn't force inner changes" is a true consequence but the least
+important reason. The load-bearing ones: `security` may import **no** tool package, which
+keeps the enforcement layer free of what it enforces against; interfaces live in the
+*consumer* package, so `brain` compiles with zero knowledge of OpenAI. And it is enforced
+**mechanically** by `deps.yaml` + `make lint-deps` — C1 is blunt: *"if that lint is ever
+made non-blocking, C1 is back."*
+
+### Cassettes are not "AI evaluation"
+
+§5.13 splits eval into four jobs and cassettes serve exactly one. A **cassette** records a
+model conversation to a file and replays it, so tests are fast, offline, and give the same
+answer every run — that is **regression** testing ("did *we* break it?"). **Capability**
+evaluation ("is it any good?") lets the model answer freely and judges the result. They
+hold opposite things constant, so neither substitutes for the other: a cassette can never
+tell you travis is good, and an evaluation can never tell you your refactor broke
+something. Note a free local model does *not* remove the need for cassettes — it fixes
+only cost, makes speed worse, and does nothing for determinism.
