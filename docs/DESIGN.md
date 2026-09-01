@@ -53,6 +53,21 @@ six people over a year still reads like it was written by one.
 - Every module in §5 uses the **identical eight-heading template**. Do not add,
   remove, or reorder headings. If a heading is not applicable, write `N/A` and one
   sentence explaining why.
+- **State the answer, then the reason — never both in one sentence.** Where a heading's
+  answer is a short value, write it as `**Heading:** value` and put any rationale on a
+  following line starting `→ **Why:**`. Reasons buried mid-sentence get skimmed past, and
+  a reader looking up *what* a module depends on should not have to parse an argument to
+  find it:
+
+  ```
+  **Depends on:** `core`, `security`
+
+  → **Why `security`:** the microphone is a capability (`audio.capture`), so capture is
+  brokered like any other privileged effect.
+  ```
+
+  Headings whose answer is genuinely prose — *Failure modes*, *Testing* — stay as
+  paragraphs. This is for headings that answer with a value.
 - Every open question is tagged `[OQ-nn]` and MUST also appear in §12.
 - Every identified risk is tagged `[R-nn]` and MUST also appear in §11.
 - Interfaces are given as Go source. Go source in this document is **normative** —
@@ -705,8 +720,15 @@ type Clock interface{ Now() time.Time; After(time.Duration) <-chan time.Time }
 
 Plus `Tool`, `Provider`, `Policy`, `Broker`, `Capability`, `Message`, `Part`, `Cost`.
 
-**Depends on.** Nothing outside stdlib. **MUST** stay dependency-free — this is what
-lets any module be swapped without a diamond dependency conflict.
+**Depends on:** Go's standard library only. No third-party packages, ever.
+
+→ **Why:** `core` is the project's only public API (§8), and every other package imports
+it. So anything `core` depends on becomes part of our published API *and* part of the
+broker's attack surface. It must also build on all three OSes, which rules out anything
+needing C code.
+
+→ **Note:** `core` declares `type ID string` but does **not** generate IDs. Generation
+lives in its own package, which may use a ULID library freely. This is not a conflict.
 
 **Configuration.** N/A.
 
@@ -746,7 +768,7 @@ func Load(paths ...string) (*Config, Diagnostics, error)
 func (c *Config) Validate() Diagnostics   // warnings + errors, never panics
 ```
 
-**Depends on.** `core`.
+**Depends on:** `core`
 
 **Configuration.** Precedence, lowest to highest:
 
@@ -833,7 +855,7 @@ type Chunk struct {
 }
 ```
 
-**Depends on.** `core`, `config`, `log`.
+**Depends on:** `core`, `config`, `log`
 
 **Configuration.**
 
@@ -981,7 +1003,10 @@ type Brain interface {
 }
 ```
 
-**Depends on.** `core`, `config`, `tools` (registry interface only), `session`.
+**Depends on:** `core`, `config`, `tools`, `session`
+
+→ **Why `tools` is safe:** the registry *interface* only, never a concrete tool. `brain`
+compiles with zero knowledge of OpenAI or of any specific tool (§4.2).
 
 **The loop.**
 
@@ -1105,7 +1130,7 @@ type Registry interface {
 }
 ```
 
-**Depends on.** `core`, `security`.
+**Depends on:** `core`, `security`
 
 **Configuration.**
 
@@ -1169,7 +1194,7 @@ in one more thing a small model can confuse for another.
 
 **Deleted: `fs.glob`.** See §5.6.2.
 
-**Depends on.** `core`, `security`.
+**Depends on:** `core`, `security`
 
 **Configuration.**
 
@@ -1353,7 +1378,7 @@ type Spec struct {
 }
 ```
 
-**Depends on.** `core`, `security`, `config`.
+**Depends on:** `core`, `security`, `config`
 
 **Configuration.**
 
@@ -1437,7 +1462,7 @@ type Skill struct {
 }
 ```
 
-**Depends on.** `core`, `security`, `tools`.
+**Depends on:** `core`, `security`, `tools`
 
 **Three-level disclosure** (matching how the ecosystem already works):
 
@@ -1490,10 +1515,12 @@ func (a *App) Run(ctx context.Context) error
 // Elm architecture; every external input arrives as a tea.Msg wrapping a core.Event.
 ```
 
-**Depends on.** `core`, `config`. **Not** `brain`, **not** `ai`. It sends
-`core.Command` values into a sink and renders `core.Event`s out of the bus. This is
-what makes a future `travis --headless` or a web frontend a 200-line addition rather
-than a rewrite.
+**Depends on:** `core`, `config`. **Not** `brain`, **not** `ai`.
+
+→ **Why:** the TUI sends `core.Command` values into a sink and renders `core.Event`s off
+the bus, so it never imports the agent loop. That is what makes a future
+`travis --headless` or a web frontend a 200-line addition rather than a rewrite — and it
+is why `cli` can be built in parallel with `brain` (see `PLAN.md` Phase 1).
 
 #### 5.9.1 Bubble Tea **v2**, explicitly (D-06)
 
@@ -1608,7 +1635,10 @@ type Transcriber interface {
 **Pipeline.** `device → resample 16 kHz mono → VAD (Silero/WebRTC) → segment → STT →
 punctuate → dispatch`. Partials render greyed in the input box; the final replaces it.
 
-**Depends on.** `core`, `config`, `security` (mic is a capability: `audio.capture`).
+**Depends on:** `core`, `config`, `security`
+
+→ **Why `security`:** the microphone is a capability (`audio.capture`), so capture is
+brokered like any other privileged effect.
 
 **Configuration.**
 
@@ -2141,7 +2171,10 @@ Crash between steps 3 and 5 leaves an orphan blob and an untouched file — it f
 in the only direction that matters. **Testing:** crash-injection with `kill -9` between
 snapshot and write, then assert `/undo` restores correctly.
 
-**Depends on.** `core`, `security` (session files are secrets-adjacent).
+**Depends on:** `core`, `security`
+
+→ **Why `security`:** session files hold conversation history and journal blobs, which are
+secrets-adjacent and must be redacted (§5.12.3).
 
 **Configuration.** `[session] backend = "sqlite"`, `dir`, `retention = "90d"`,
 `redact = true`.
