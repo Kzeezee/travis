@@ -9,8 +9,9 @@ stage, and what gets cut first when time runs short.
 [`DESIGN.md`](./DESIGN.md) — §0.5 for the decision register (D-01…D-34), §0.6 for
 D-01…D-10 explained in plain words, §12 for open questions, §13 for risks. Concepts that
 are easy to get wrong on first read are in [`DESIGN-overview.md`](./DESIGN-overview.md)
-§13. If this document and `DESIGN.md` disagree about *what* the system is, `DESIGN.md`
-wins; if they disagree about *sequencing*, this one does.
+§13. Getting a working environment is [`DEV-SETUP.md`](./DEV-SETUP.md). If this document
+and `DESIGN.md` disagree about *what* the system is, `DESIGN.md` wins; if they disagree
+about *sequencing*, this one does.
 
 | Section | Read it when |
 | --- | --- |
