@@ -194,6 +194,27 @@ Ordered by **dependency**, not by skill. Within a phase, `‖` marks parallel wo
 strategy are additions — re-estimate accordingly. The argument for paying it here is that
 all three are *cheap now and expensive-to-impossible to retrofit*.
 
+> ⚠️ **Phase 0 is being built by one person, which moves two risks.**
+>
+> **The other four arrive cold.** They will write code against interfaces they did not help
+> shape, in a language none of them knows. Budget **an hour walking them through `pkg/core`,
+> the `Bus`, and the `Broker` interface** before this phase forks — otherwise the five tracks
+> start with four people guessing.
+>
+> **There is no code review on the foundation**, since nobody else reads Go yet. The
+> substitute is **writing the fakes first**: if `FakeProvider` and a test using it read
+> naturally, the interface is probably right; if the fake is awkward to write, the interface
+> is wrong. That is the only signal available, so do not skip it.
+>
+> **And the whole timeline is one person's availability.** If Phase 0 stalls, all five stall.
+> Worth saying out loud to the team rather than discovering it.
+>
+> **Meanwhile, work for the other four that touches none of Phase 0's files:** authoring
+> red-team cases (TOML data, no Go — and the best way to learn the threat model) · reading
+> `DESIGN.md` and raising gaps · **verifying `DEV-SETUP.md` on Linux and Windows**, which is
+> unconfirmed · researching the per-OS deny-list paths (`OQ-26`) · learning Go, specifically
+> `go test` and table-driven tests.
+
 ### Phase 1 — First fork · **5 tracks**
 
 > **In plain words:** ship a working assistant end to end — your message goes to a model,
@@ -211,7 +232,7 @@ all three are *cheap now and expensive-to-impossible to retrofit*.
 | **A · `ai`** | OpenAI-compatible chat, SSE streaming, tool-call fragment assembly across chunks, error taxonomy, `Count()`/`Budget()`, `ToolCallRepair` (R-05), **cassette record/replay** (D-16), **raw trace recorder** (a `Bus` subscriber writing JSONL — redaction comes in Phase 2) | core only |
 | **B · `tools` + `coretools`** | Registry (namespacing, schema validation); `fs.read`, `grep`, `fs.write`, `fs.edit` (+ anchor fuzz test), `ask_user`, `memory` (**with the size cap**, D-28); the `tooltest` contract suite | core + frozen protocol, against `LocalBroker` |
 | **C · `brain`** | Step loop (assemble → call → dispatch → absorb → decide), context assembly, **compaction at 60% with `context_length` from config** (D-33), stop conditions, loop detection, `FakeProvider` tests | core + interfaces. **Zero network** |
-| **D · `cli`** | Bubble Tea v2 root model, explicit focus state, viewport/textarea, **30 fps token coalescer** (R-07), status bar, tool cards, `teatest` goldens at 60/80/120/200 | **core `Bus` + events only.** `cli` never imports `brain` (§4.2), so it is fully parallel, driven by a synthetic event stream |
+| **D · `cli`** | Bubble Tea v2 root model, explicit focus state, viewport/textarea, **30 fps token coalescer** (R-07), status bar, tool cards, `teatest` goldens at 60/80/120/200. **Delete `internal/cli/deps.go`** once the real TUI imports Charm — it exists only to pin the dependencies until then, and CI drops the `-tags tools` flag with it | **core `Bus` + events only.** `cli` never imports `brain` (§4.2), so it is fully parallel, driven by a synthetic event stream |
 | **E · `config`** | Layered TOML precedence, **`Paths()` per-OS**, secret refs (`env://`, `cmd://`, `keyring://`), `Validate()` with the security-keys-are-hard-errors asymmetry | core |
 
 **Exit (M1):** completes a **3+ tool-call assistant task over a fixture notes/files tree**,
@@ -249,6 +270,18 @@ getting the rhythm wrong costs a day instead of a week.
 | **G · `session` / Journal** | **Durable snapshot-before-write ordering with `fsync` of blob *and* parent dir** (D-13, R-25); content-addressed blob store; sqlite `Store` with `Append`/`Load`/`Fork`; `kill -9` crash-injection tests; `/undo` |
 | **H · approval + autonomy** | Approval gate (reversible ∧ in-scope ∧ in-budget); approval modal; `decisions.toml` + `/decisions`; `/auto`; **`exec` classified irreversible** (D-27); `max_daily_cost_usd` (D-34) |
 | **I · deny-list + redaction** | Deny rules and the concrete per-OS list (D-22, `OQ-26`); `.travisignore`; **write-deny `.travis/` and `.git/hooks/`** (D-30); the secret scanner, which also unlocks **trace redaction** |
+
+**Pick the session backend deliberately, not by reflex.** §5.15 lists three behind the
+`Store` interface, so this is reversible — but the obvious choice is the wrong one:
+
+| Backend | Trade-off |
+| --- | --- |
+| `mattn/go-sqlite3` | ❌ **CGO** — breaks `CGO_ENABLED=0` and the single-static-binary row in §8.1's support matrix |
+| `modernc.org/sqlite` | pure Go, so no CGO, but a large dependency and slower |
+| `jsonl` | stdlib only, greppable, no indexed queries |
+
+➡️ Start with `jsonl`. Nothing in Phase 2 needs indexed queries, and it keeps the
+dependency list at zero. Revisit only if session loading becomes slow.
 
 **2c · serial:** the red-team suite (200 cases, §9.4) — the **M2 gate**. Cases authored from
 Phase 0 onward, all asserting `PolicyDenied` (D-29).
