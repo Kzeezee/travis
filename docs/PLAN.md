@@ -271,20 +271,41 @@ getting the rhythm wrong costs a day instead of a week.
 | **H · approval + autonomy** | Approval gate (reversible ∧ in-scope ∧ in-budget); approval modal; `decisions.toml` + `/decisions`; `/auto`; **`exec` classified irreversible** (D-27); `max_daily_cost_usd` (D-34) |
 | **I · deny-list + redaction** | Deny rules and the concrete per-OS list (D-22, `OQ-26`); `.travisignore`; **write-deny `.travis/` and `.git/hooks/`** (D-30); the secret scanner, which also unlocks **trace redaction** |
 
-**Pick the session backend deliberately, not by reflex.** §5.15 lists three behind the
-`Store` interface, so this is reversible — but the obvious choice is the wrong one:
+#### Session backend: start with `jsonl`
 
-| Backend | Trade-off |
+**Leading choice: `jsonl`.** ⚠️ **Confirm this when you actually build track G** — the
+reasoning below is sound but untested against real code, and §5.15's `Store` interface
+exists so the choice stays reversible.
+
+**Why `jsonl` fits.** Look at what the store does — `Create` · `Append` · `Load` · `Fork` ·
+`List`. Three of those four are "add to the end" or "read the whole thing in order", and the
+only one wanting a query (`List`) queries a few dozen *session headers*, not the millions of
+events. Indexed queries and transactions are the entire reason to reach for a database, and
+the dominant operations need neither. Specifically:
+
+- Append is `os.OpenFile(O_APPEND)` plus `json.Encoder` — no schema, no driver
+- **Zero dependencies**, so the CGO question never arises
+- **Partial-corruption recovery is trivially correct**, which §5.15 requires (*"a corrupt
+  session must load partially rather than not at all"*): read lines until one fails to
+  parse, then stop. With a database that is real recovery work
+- **Greppable and diffable** — §5.15 annotates it "(grep-friendly)" for a reason. You can
+  grep a session and diff two traces, which is a genuine debugging affordance
+- Deterministic replay for eval (§5.13) is just reading the file back in order
+- Simple enough to get right without knowing Go well
+
+**What it costs.** Larger on disk (every line repeats its keys) · `List` opens N files to
+read headers, which is fine at hundreds of sessions and slow at a hundred thousand · no
+queries, so "every turn where a policy denial happened" means scanning.
+
+**The alternatives, for the record:**
+
+| Backend | Verdict |
 | --- | --- |
-| `mattn/go-sqlite3` | ❌ **CGO** — breaks `CGO_ENABLED=0` and the single-static-binary row in §8.1's support matrix |
-| `modernc.org/sqlite` | pure Go, so no CGO, but a large dependency and slower |
-| `jsonl` | stdlib only, greppable, no indexed queries |
+| `modernc.org/sqlite` | Legitimate — pure Go, so no CGO, and real queries. But it is sqlite's C source mechanically translated to Go, on the order of a million lines: build time and binary size both grow, it is slower than the C original, and you lose greppability. Take it only if you find you need queries |
+| `mattn/go-sqlite3` | ❌ **Ruled out.** Needs CGO, which contradicts the single-static-binary row in §8.1's support matrix and the `CGO_ENABLED=0` build gate |
 
-⚠️ **UNDECIDED — decide at the start of Phase 2.** The recommendation is `jsonl`:
-nothing in Phase 2 needs indexed queries, and it keeps the dependency count at zero. But
-this has not been agreed, and `modernc.org/sqlite` is a legitimate choice if you would
-rather have real queries and accept the dependency. The only option that is genuinely
-ruled out is `mattn/go-sqlite3`, because CGO contradicts §8.1's support matrix.
+**If `jsonl` turns out too slow**, the first fix is a small index file for `List`, not a
+database. Swap the backend only once you know which queries you actually want.
 
 **2c · serial:** the red-team suite (200 cases, §9.4) — the **M2 gate**. Cases authored from
 Phase 0 onward, all asserting `PolicyDenied` (D-29).
@@ -472,7 +493,7 @@ the old names.
 | **Phase 0** | `OQ-02` bus ordering guarantees |
 | Phase 1 | `OQ-03` config hot-reload · `OQ-23` which OAuth vendors at launch · `OQ-27` is the token-count heuristic good enough |
 | **Phase 2 start** | `OQ-26` — the deny-list's four sub-questions (override? legitimate need? writes too? who owns the per-OS list?) |
-| **Phase 2 start** | Session backend: `jsonl` or `modernc.org/sqlite`. Not agreed — see track G |
+| **Phase 2, during track G** | Confirm the session backend. Leading choice `jsonl`, with reasons — but verify against real code before committing to it |
 | Phase 3 | `OQ-09` MCP sampling · `OQ-10` MCP roots · `OQ-11` skill capability grants |
 | **Phase 4 start** | `OQ-24` Windows `strict`: restricted token vs AppContainer · the licensing audit |
 | Phase 4 end | `OQ-28` does `workspace` tier for `exec` get picked up |
