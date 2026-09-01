@@ -280,8 +280,11 @@ getting the rhythm wrong costs a day instead of a week.
 | `modernc.org/sqlite` | pure Go, so no CGO, but a large dependency and slower |
 | `jsonl` | stdlib only, greppable, no indexed queries |
 
-➡️ Start with `jsonl`. Nothing in Phase 2 needs indexed queries, and it keeps the
-dependency list at zero. Revisit only if session loading becomes slow.
+⚠️ **UNDECIDED — decide at the start of Phase 2.** The recommendation is `jsonl`:
+nothing in Phase 2 needs indexed queries, and it keeps the dependency count at zero. But
+this has not been agreed, and `modernc.org/sqlite` is a legitimate choice if you would
+rather have real queries and accept the dependency. The only option that is genuinely
+ruled out is `mattn/go-sqlite3`, because CGO contradicts §8.1's support matrix.
 
 **2c · serial:** the red-team suite (200 cases, §9.4) — the **M2 gate**. Cases authored from
 Phase 0 onward, all asserting `PolicyDenied` (D-29).
@@ -469,6 +472,7 @@ the old names.
 | **Phase 0** | `OQ-02` bus ordering guarantees |
 | Phase 1 | `OQ-03` config hot-reload · `OQ-23` which OAuth vendors at launch · `OQ-27` is the token-count heuristic good enough |
 | **Phase 2 start** | `OQ-26` — the deny-list's four sub-questions (override? legitimate need? writes too? who owns the per-OS list?) |
+| **Phase 2 start** | Session backend: `jsonl` or `modernc.org/sqlite`. Not agreed — see track G |
 | Phase 3 | `OQ-09` MCP sampling · `OQ-10` MCP roots · `OQ-11` skill capability grants |
 | **Phase 4 start** | `OQ-24` Windows `strict`: restricted token vs AppContainer · the licensing audit |
 | Phase 4 end | `OQ-28` does `workspace` tier for `exec` get picked up |
