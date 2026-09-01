@@ -23,12 +23,12 @@ six people over a year still reads like it was written by one.
 
 ### 0.1 Requirement language
 
-| Keyword | Meaning |
-|---|---|
-| **MUST** | Non-negotiable. A build violating this is broken, not merely suboptimal. |
-| **SHOULD** | Strong default. Deviations require a written rationale in the module's `DECISIONS.md`. |
-| **MAY** | Genuinely optional. |
-| **WILL NOT** | Explicitly out of scope for v1. Re-opening requires an RFC. |
+| Keyword      | Meaning                                                                                |
+| ------------ | -------------------------------------------------------------------------------------- |
+| **MUST**     | Non-negotiable. A build violating this is broken, not merely suboptimal.               |
+| **SHOULD**   | Strong default. Deviations require a written rationale in the module's `DECISIONS.md`. |
+| **MAY**      | Genuinely optional.                                                                    |
+| **WILL NOT** | Explicitly out of scope for v1. Re-opening requires an RFC.                            |
 
 ### 0.2 Section conventions
 
@@ -93,31 +93,39 @@ that is the same thing.
 
 ### 0.4 Terminology (single source of truth)
 
-- **Turn** — one user input → one final assistant answer. May contain many steps.
-- **Step** — one provider call plus the tool invocations it requested.
+- **Turn** — one user input → one final assistant answer. Made of >=1 steps: if the
+  model's first reply is already final text with no tool calls, the turn is one step.
+- **Step** — one provider call plus the tool invocations it requested (zero or more;
+  a step with none ends the turn).
 - **Tool** — anything the model can invoke. Includes core tools, MCP tools, skill
   entry points, and subagents. There is exactly one `Tool` interface (§4.3).
 - **Capability** — a permission grant (e.g. `fs.write:/home/u/proj/**`). Held by a
   session, checked by the broker, never held by the model.
-- **Broker** — the process that actually performs privileged effects. See §6.1.
+- **Broker** — a separate, privileged process that is the only thing allowed to touch
+  the filesystem, network, or spawn processes. The TUI/brain process can't do any of
+  that itself; it asks the broker over IPC, which checks policy and does it instead.
+  This way, even if a tool or MCP server fully compromises the TUI process, the
+  attacker still has no direct capability to act outside the workspace. See §6.1.
 - **Skill** — a `SKILL.md` + sibling files, loaded from disk, exposed as
   progressively-disclosed instructions and optionally as tools.
-- **Provider** — a remote or local inference endpoint.
+- **Provider** — wherever the actual LLM lives and answers requests: a cloud API
+  (e.g. Anthropic, OpenAI) or a model running locally on the user's machine (e.g.
+  Ollama). `provider.Chat()` is the call that sends the conversation there and gets
+  the model's reply back.
 - **Brain** — the agent loop implementation. Distinct from the provider.
-- **Module** — in this document, a *feature package*: one directory, one Go package,
-  one owner, one clear seam, drawn around **one piece of core functionality** (the
-  agent loop; the provider transport; the MCP client; the security broker; …). It is
-  **not** a separate `go.mod`. The repository is a single Go module (§8, D-01).
-  "Module" and "package" are used interchangeably here; "Go module" always means the
-  `go.mod` sense and is spelled out in full.
+- **Module** — a single Go package: one folder of `.go` files that owns one piece
+  of core functionality, like the agent loop, or the MCP client, or the security
+  broker. It is **not** a separate `go.mod`. The repository is a single Go module
+  (§8, D-01). "Module" and "package" are used interchangeably here; "Go module"
+  always means the `go.mod` sense and is spelled out in full.
 
   **Confirmed, because it is the most misread sentence in this document:** when we say
-  travis is "radically modular", we mean *functional decomposition with enforced
-  seams* — a package per capability, each behind an interface, each swappable at
+  travis is "radically modular", we mean _functional decomposition with enforced
+  seams_ — a package per capability, each behind an interface, each swappable at
   config time, each independently testable and owned. We do **not** mean a
   multi-`go.mod` repository. Sixteen `go.mod` files would buy nothing but sixteen
   version bumps per `core` change; the separation we actually want is enforced by
-  `deps.yaml` + `make lint-deps` (§4.2, §8), which is strictly *stronger* than
+  `deps.yaml` + `make lint-deps` (§4.2, §8), which is strictly _stronger_ than
   `go.mod` walls because it also forbids legal-but-wrong edges within a layer.
 
 ### 0.5 Decisions already taken
@@ -138,6 +146,178 @@ a `D-nn` tag; reversing one requires an RFC.
 | **D-09** | **Autonomy is bought with reversibility and durable decisions, not with permission prompts.** The agent acts without asking when the action is reversible and in-scope; it asks when the action is irreversible, out-of-scope, or over budget; every answer can become a persistent rule. | "Ask the human" and "be useful unattended" are only in conflict if asking is the *only* safety mechanism. See §6.4. | C6, G5 |
 | **D-10** | **Approvals, confirmations, and any yes/no are keyboard-only. Voice input is for composing prose (prompts, dictation) only.** | An ASR mishearing on a security decision is a policy bypass, and "yes" spoken by a podcast in the background is a practical attack. Composition errors are visible and correctable; approval errors are not. | C9, R-15 |
 
+### 0.6 Decisions explained
+
+Each entry: what it means in plain words, a snippet showing what it looks like in
+practice, and the context that made it the obvious call.
+
+**D-01 — One Go module.**
+In plain words: the whole repository is one `go.mod`, one build, one version. "One
+package per capability" does not mean "one repository per capability" — separation
+comes from folder/interface boundaries, not from sixteen separately-versioned Go
+modules.
+
+```
+travis/
+  go.mod                 ← exactly one, at the repo root
+  internal/
+    brain/                (imports core, config, tools — not cli)
+    cli/                  (imports brain, tools — never the reverse)
+    tools/
+    mcp/
+```
+
+Context: a separate `go.mod` per package buys isolation you'd only need if packages
+shipped independently. They don't — they ship as one binary. Instead, `deps.yaml` +
+`make lint-deps` (§4.2, §8) fails CI if e.g. `tools` imports `cli`, which is a
+stronger guarantee than `go.mod` boundaries anyway (line 2275-2283) because it can
+forbid _legal-but-wrong_ imports within the same module, not just cross-module ones.
+
+**D-02 — MCP is a generic loader.**
+In plain words: travis ships one MCP client, ever. Adding "GitHub support" is a
+config entry, not a Go package.
+
+```toml
+[mcp.servers.github]
+command = "npx"
+args    = ["-y", "@modelcontextprotocol/server-github"]
+```
+
+No `internal/mcp/github/` package exists or ever will. Context: this is why MCP is
+worth adopting at all — if every server needed bespoke Go code, the "ecosystem" the
+public MCP registry offers would just become N maintenance burdens for the travis
+team instead of free capability growth (§C3).
+
+**D-03 — Tool pruning ships with MCP, not after.**
+In plain words: the feature that keeps tool-schema tokens small must exist the same
+milestone MCP does — never "MCP now, prune later."
+
+```go
+// Registry.Prune picks what fits the budget for *this* step; the rest stays
+// registered but invisible to the model until asked for.
+subset := registry.Prune(ctx, budget=6000, hint="editing_go_files")
+```
+
+Context: 12 connected MCP servers ≈ 300 tools ≈ 40k tokens of schemas, sent on every
+single request before the user types anything. A 32k-context local model would be
+unusable the day MCP shipped without this — so it's an M3 _exit criterion_, not a
+follow-up ticket (line 2440-2447).
+
+**D-04 — `fetch` is a brokered tool, not `exec curl`.**
+In plain words: network access from the model is its own first-class tool with its
+own policy grant (`net.http:<host-glob>`) — not achieved by letting the model shell
+out to `curl`.
+
+```toml
+[tools.approval]
+"exec"  = "ask"          # arbitrary shell — no fine-grained URL policy possible
+"fetch" = "auto"         # broker checks net.http:<host-glob> per call
+```
+
+Context: `exec curl https://evil.com` can't be scoped by the broker to specific
+hosts, can't have its response size-capped or redirect-policed centrally, and can't
+be journaled the same way — `curl` is a general-purpose escape hatch, `fetch` is a
+narrow, auditable one (§5.6.1).
+
+**D-05 — Subscription/OAuth providers share the `Provider` interface.**
+In plain words: "log in with Claude Pro" isn't a different code path from "paste an
+API key" — same `Provider`, different `Credential`.
+
+```go
+type Credential interface {
+    Kind() string                                        // api_key | oauth | oauth_device
+    Header(ctx context.Context) (string, string, error)  // ("Authorization", "Bearer …")
+    Refresh(ctx context.Context) error
+}
+```
+
+```toml
+[provider.profiles.sub]
+auth = { kind = "oauth", grant = "pkce", issuer = "anthropic" }  # only this differs
+```
+
+Context: streaming, tool-calls, and error handling are byte-for-byte identical
+between an API key and an OAuth-subscription endpoint — only _how a bearer token is
+obtained_ differs (§5.3.1). Splitting the interface would duplicate all of `brain`'s
+provider-facing logic just to special-case token refresh.
+
+**D-06 — Bubble Tea v2, not v1, from commit one.**
+In plain words: the TUI framework choice is v2 of `charm.land/bubbletea`, locked
+in before any UI code exists, not something to "upgrade into later."
+
+```go
+import tea "charm.land/bubbletea/v2"   // not v1 — no fallback path kept around
+```
+
+Context: v1 can't detect a key being _released_ (breaks push-to-talk), repaints
+whole lines (tears visibly under token streaming), and can't query terminal
+colour-profile (breaks `theme = "auto"` on Windows, D-07). These aren't fixable by
+config — they're load-bearing for features the MVP needs (§5.9.1).
+
+**D-07 — Windows is first-class, not WSL2.**
+In plain words: travis ships a native `windows/amd64` / `windows/arm64` binary. It
+does not tell Windows users "run it in WSL2."
+
+```toml
+# platform-specific paths resolved by the broker, not hardcoded by the caller
+broker_socket = "\\\\.\\pipe\\travis-<sid>"    # Windows
+# vs "$XDG_RUNTIME_DIR/travis-<uid>.sock"      # Linux/macOS
+```
+
+Context: Go and Bubble Tea v2 are genuinely cross-platform already; the only
+OS-specific work is the sandbox layer beneath the broker (seccomp/landlock on
+Linux, sandbox-exec on macOS, job objects on Windows) — and that's
+defence-in-depth _below_ an OS-independent broker interface, not a reason to
+deprioritize a whole OS (§9.2.1).
+
+**D-08 — Eight core tools; `glob` is deleted.**
+In plain words: the fixed tool list is `read, write, edit, grep, exec, fetch,
+ask_user, memory`. Finding files by pattern is a _mode_ of `grep`, not its own tool.
+
+```go
+// grep(mode="files", pattern="**/*_test.go")   ← replaces the deleted fs.glob tool
+// grep(mode="content", pattern="TODO")          ← ordinary content search
+```
+
+Context: "find files matching X" and "search file contents for X" are the same
+underlying ripgrep call with a mode flag — shipping them as two tools just doubles
+the schema tokens paid on every request for no new capability (§5.6.2). Adding a
+ninth tool now requires an ADR — the list is deliberately not casually extensible.
+
+**D-09 — Autonomy via reversibility, not permission prompts.**
+In plain words: the agent doesn't ask "can I do this?" by default — it acts when
+the action is reversible and in-scope, and only asks when it's irreversible,
+out-of-scope, or over budget. Every answer can be turned into a standing rule so the
+same question never gets asked twice.
+
+```go
+// approval gate (§6.4): reversible ∧ in-scope ∧ in-budget → auto;
+// else consult decision rules; else ask (blocking or not)
+```
+
+Context: "stay useful unattended" and "keep the human in control" only conflict if
+asking permission is the _only_ safety mechanism available. Journaling (so a write
+can be undone) and scoped capability grants (so "in-scope" is a real check, not a
+guess) are what let most actions skip the prompt safely (§6.4).
+
+**D-10 — Approvals are keyboard-only; voice is composition-only.**
+In plain words: you can _dictate_ a prompt by voice, but you can never _approve_ a
+tool call, confirm a destructive action, or answer yes/no by voice.
+
+```go
+// voicein writes prose into the input box — it is never wired to Answer(askID, a)
+type ToolIO interface {
+    Ask(ctx context.Context, q Question) (Answer, error) // keyboard-resolved only
+}
+```
+
+Context: a misheard "yes" — whether an ASR error or a podcast playing in the
+background — would be a real security bypass on an irreversible action. Mishearing
+a _sentence_ you're dictating is visible and correctable before you hit send;
+mishearing a _yes/no_ on a permission prompt is not (§C9, R-15).
+
+---
+
 ---
 
 ## 1. Summary
@@ -154,22 +334,65 @@ model, (b) unsafe by default in a way that makes people run them in throwaway VM
 or (c) mute. `travis` is the one you can point at a local Llama, hand a scoped
 capability set, and talk to while doing something else.
 
+**What Travis does, in one breath:** the AI provider only supplies the
+_reasoning_ — deciding what to do next and which tool to call. The core tools (plus
+any connected MCP service) supply the _means_ to actually act, on the user's device
+or on a connected ecosystem service. A separate enforcement layer (the broker, §6.1)
+is what actually allows or denies each action against the user's real, granted
+permissions — which is what makes it safe to let the model act with real autonomy
+instead of asking the user to approve everything. That autonomy is bounded, not
+unconditional: the model acts without asking only when an action is reversible and
+within its granted scope; an irreversible, out-of-scope, or over-budget action still
+stops and asks (D-09, §6.4).
+
+**A concrete scenario, walked step by step:**
+
+> The user says: "Add a `.env.example` entry for the new `REDIS_URL` config value."
+
+1. **The model reasons.** The provider (whatever LLM is configured) reads the
+   request and decides: "I should read the current `.env.example`, then write an
+   updated version." It does not touch any file itself — it can only emit a
+   request like `fs.write(path=".env.example", content=<new file contents>)`.
+2. **The brain receives that request.** This is the `dispatch` step of the agent
+   loop (§5.4): the brain looks up the `fs.write` tool in the registry and prepares
+   to invoke it — but invoking it means asking the broker, not touching the disk
+   directly (the brain has no filesystem access of its own, §4.4).
+3. **The broker checks the grant.** The broker holds the actual capability tokens
+   for this session, e.g. `fs.write:/home/u/proj/**`. It checks: does the requested
+   path (`.env.example`, resolved to an absolute path inside the project) match that
+   granted glob?
+   - **If yes** — and the write is reversible (journaled, inside the workspace,
+     §6.4) — the broker performs the write itself and returns success. No prompt
+     shown to the user; this is the "auto_if_reversible" case (§5.5 config).
+   - **If no** (say the model tried to write `/etc/environment` instead) — the
+     broker refuses. It never performs the syscall. It returns a policy-denial
+     error instead of a file write.
+4. **The result comes back through the brain.** Whichever happened — success or
+   denial — gets appended to the conversation as a tool result (the `absorb` step,
+   §5.4). The model sees either "file written" or "denied: outside granted scope."
+5. **The model continues.** With that result in hand, it either reports the change
+   is done, or (on denial) explains it couldn't complete the action and why.
+
+The takeaway: the AI never had the *ability* to write outside `~/proj/**`, no
+matter what it decided to do — the enforcement happened in the broker, a process
+the model can't reach or reason its way around, not in the model's own judgment.
+
 ---
 
 ## 2. Goals and non-goals
 
 ### 2.1 Goals
 
-| ID | Goal | How we know we hit it |
-|---|---|---|
-| G1 | Every subsystem is swappable at config time without recompiling. | Swap provider, TTS, STT, and policy backend by editing TOML only. |
-| G2 | Deny-by-default enforcement below the model. | Red-team suite (§9.4): 0 successful escapes out of N adversarial prompts. |
-| G3 | First-class use of the existing MCP + skills ecosystem. | Install any of the top 25 public MCP servers with one command. |
-| G4 | Sub-second perceived voice latency. | First audible syllable ≤ 900 ms p50 from end-of-user-speech. |
-| G5 | The user stays in control without being interrupted for everything. | Agent can block on `AskUser` as a typed, resumable state; and the median 20-step task raises ≤ 2 prompts (§6.4, measured in the eval scorecard). |
-| G6 | Measurable quality. | Eval suite runs in CI; regressions block merge. |
-| G7 | Readable, boring, multi-developer Go. | New contributor ships a working tool in < 1 day using only §5. |
-| G8 | **One codebase, three OSes.** | Every milestone's exit criterion is demonstrated on linux/amd64, darwin/arm64, and windows/amd64. Feature parity except the sandbox tier (§9.2.1), which is documented and surfaced in the UI. |
+| ID  | Goal                                                                | How we know we hit it                                                                                                                                                                          |
+| --- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | Every subsystem is swappable at config time without recompiling.    | Swap provider, TTS, STT, and policy backend by editing TOML only.                                                                                                                              |
+| G2  | Deny-by-default enforcement below the model.                        | Red-team suite (§9.4): 0 successful escapes out of N adversarial prompts.                                                                                                                      |
+| G3  | First-class use of the existing MCP + skills ecosystem.             | Install any of the top 25 public MCP servers with one command.                                                                                                                                 |
+| G4  | Sub-second perceived voice latency.                                 | First audible syllable ≤ 900 ms p50 from end-of-user-speech.                                                                                                                                   |
+| G5  | The user stays in control without being interrupted for everything. | Agent can block on `AskUser` as a typed, resumable state; and the median 20-step task raises ≤ 2 prompts (§6.4, measured in the eval scorecard).                                               |
+| G6  | Measurable quality.                                                 | Eval suite runs in CI; regressions block merge.                                                                                                                                                |
+| G7  | Readable, boring, multi-developer Go.                               | New contributor ships a working tool in < 1 day using only §5.                                                                                                                                 |
+| G8  | **One codebase, three OSes.**                                       | Every milestone's exit criterion is demonstrated on linux/amd64, darwin/arm64, and windows/amd64. Feature parity except the sandbox tier (§9.2.1), which is documented and surfaced in the UI. |
 
 ### 2.2 Non-goals for v1
 
@@ -220,8 +443,8 @@ capability set, and talk to while doing something else.
 12. **`eval`.** Traces, cassettes, deterministic replay, scenario suites,
     guardrail red-teaming, and scorecards.
 13. **`swarm`.** Subagents as tools, with strictly narrowing capabilities.
-14. **`session`.** Persistence, resume, branch, export. *(Added — see
-    §11 critique C7.)*
+14. **`session`.** Persistence, resume, branch, export. _(Added — see
+    §11 critique C7.)_
 
 ---
 
@@ -324,10 +547,11 @@ type Result struct {
 ```
 
 Consequences:
+
 - Adding MCP is "register N more `Tool`s". The brain does not change.
 - A skill that exposes a script is a `Tool`. The brain does not change.
 - A subagent is a `Tool` whose `Invoke` runs a nested brain. The brain does not change.
-- Policy is uniform: one place decides whether *any* tool may run.
+- Policy is uniform: one place decides whether _any_ tool may run.
 
 ### 4.4 Runtime topology (processes)
 
@@ -359,7 +583,7 @@ OS-specific; the protocol and the policy above it are not.
 
 ### 4.5 The event bus
 
-Every module emits to and reads from a typed bus in `core`. The TUI is a *subscriber*,
+Every module emits to and reads from a typed bus in `core`. The TUI is a _subscriber_,
 not a caller. This is what makes the UI truthful about state without the brain
 knowing a TUI exists.
 
@@ -404,6 +628,7 @@ Failure modes · Testing · Open questions**
 crosses a module boundary. Contains no logic beyond the bus.
 
 **Public interface.**
+
 ```go
 type ID string                     // ULID; sortable, timestamped
 type Bus interface {
@@ -412,6 +637,7 @@ type Bus interface {
 }
 type Clock interface{ Now() time.Time; After(time.Duration) <-chan time.Time }
 ```
+
 Plus `Tool`, `Provider`, `Policy`, `Broker`, `Capability`, `Message`, `Part`, `Cost`.
 
 **Depends on.** Nothing outside stdlib. **MUST** stay dependency-free — this is what
@@ -419,7 +645,7 @@ lets any module be swapped without a diamond dependency conflict.
 
 **Configuration.** N/A.
 
-**Swappable backends.** N/A — this *is* the seam.
+**Swappable backends.** N/A — this _is_ the seam.
 
 **Failure modes.** A slow subscriber must not stall publishers. `Bus.Publish` is
 non-blocking; per-subscriber ring buffer of 1024, drops oldest, emits
@@ -438,6 +664,7 @@ causal ordering by ULID sufficient for the UI to reconstruct?
 **Purpose.** Layered configuration and the module wiring manifest.
 
 **Public interface.**
+
 ```go
 type Config struct {
     Profile  string
@@ -457,6 +684,7 @@ func (c *Config) Validate() Diagnostics   // warnings + errors, never panics
 **Depends on.** `core`.
 
 **Configuration.** Precedence, lowest to highest:
+
 1. Compiled defaults
 2. System config (§5.2.1)
 3. User config (§5.2.1)
@@ -471,17 +699,17 @@ Hard-coding `~/.travis` or `$XDG_CONFIG_HOME` would be a Windows bug in the firs
 week. `config` exposes `Paths()` and **every other package MUST use it**; a literal
 `~/.travis`, `/etc/`, or `os.Getenv("HOME")` outside this package is a lint error.
 
-| Role | Linux | macOS | Windows |
-|---|---|---|---|
-| User config | `$XDG_CONFIG_HOME/travis` (→ `~/.config/travis`) | `~/Library/Application Support/travis` | `%AppData%\travis` |
-| State (sessions, traces, `mcp.lock`) | `$XDG_STATE_HOME/travis` | `~/Library/Application Support/travis` | `%LocalAppData%\travis` |
-| Cache (models, downloads) | `$XDG_CACHE_HOME/travis` | `~/Library/Caches/travis` | `%LocalAppData%\travis\cache` |
-| System config | `/etc/travis/config.toml` | `/etc/travis/config.toml` | `%ProgramData%\travis\config.toml` |
-| Broker socket | `$XDG_RUNTIME_DIR/travis-<uid>.sock` | `~/Library/Caches/TemporaryItems/travis.sock` | `\\.\pipe\travis-<sid>` |
+| Role                                 | Linux                                            | macOS                                         | Windows                            |
+| ------------------------------------ | ------------------------------------------------ | --------------------------------------------- | ---------------------------------- |
+| User config                          | `$XDG_CONFIG_HOME/travis` (→ `~/.config/travis`) | `~/Library/Application Support/travis`        | `%AppData%\travis`                 |
+| State (sessions, traces, `mcp.lock`) | `$XDG_STATE_HOME/travis`                         | `~/Library/Application Support/travis`        | `%LocalAppData%\travis`            |
+| Cache (models, downloads)            | `$XDG_CACHE_HOME/travis`                         | `~/Library/Caches/travis`                     | `%LocalAppData%\travis\cache`      |
+| System config                        | `/etc/travis/config.toml`                        | `/etc/travis/config.toml`                     | `%ProgramData%\travis\config.toml` |
+| Broker socket                        | `$XDG_RUNTIME_DIR/travis-<uid>.sock`             | `~/Library/Caches/TemporaryItems/travis.sock` | `\\.\pipe\travis-<sid>`            |
 
 On macOS we deliberately use Apple's directories rather than XDG, because that is
 where users and backup tools expect them; `TRAVIS_HOME` overrides everything for
-people who want one dotdir. Path *values inside* config are always resolved through
+people who want one dotdir. Path _values inside_ config are always resolved through
 `filepath` and may use `/` or `\`; capability globs are documented in §9.2.1 as
 case-insensitive on Windows and macOS by default.
 
@@ -514,6 +742,7 @@ downgrade-during-run attacks).
 policy decisions, no prompt construction, no tool-choice logic.
 
 **Public interface.**
+
 ```go
 type Provider interface {
     Name() string
@@ -542,6 +771,7 @@ type Chunk struct {
 **Depends on.** `core`, `config`, `log`.
 
 **Configuration.**
+
 ```toml
 [provider]
 active = "local"
@@ -573,20 +803,20 @@ summarize = "local"                # cheap work goes local
 #### 5.3.1 Credentials, and OAuth subscription plans (D-05)
 
 **The question:** should "log in with your Claude Pro / ChatGPT Plus / Copilot
-subscription" be a *different kind of provider*, or the same provider with a different
+subscription" be a _different kind of provider_, or the same provider with a different
 credential?
 
 **Answer: the same provider, a different credential.** Combine the transport,
 differentiate the auth. The reasoning is that the axis on which these endpoints differ
 is not the axis the `Provider` interface is about:
 
-| Axis | API key | OAuth subscription | Same? |
-|---|---|---|---|
-| Wire format, streaming, tool calls, multimodal parts | HTTP + SSE | HTTP + SSE | **identical** |
-| Error taxonomy, retry semantics, tool-call repair | same | same | **identical** |
-| How a bearer token is obtained | read a secret | browser/device OAuth flow | **differs** |
-| Token lifetime | forever | minutes–hours, needs refresh | **differs** |
-| What a request costs | dollars per token | a slice of a plan quota | **differs** |
+| Axis                                                 | API key           | OAuth subscription           | Same?         |
+| ---------------------------------------------------- | ----------------- | ---------------------------- | ------------- |
+| Wire format, streaming, tool calls, multimodal parts | HTTP + SSE        | HTTP + SSE                   | **identical** |
+| Error taxonomy, retry semantics, tool-call repair    | same              | same                         | **identical** |
+| How a bearer token is obtained                       | read a secret     | browser/device OAuth flow    | **differs**   |
+| Token lifetime                                       | forever           | minutes–hours, needs refresh | **differs**   |
+| What a request costs                                 | dollars per token | a slice of a plan quota      | **differs**   |
 
 Two of five differ, and both are outside `Chat()`. So we add exactly one seam:
 
@@ -619,8 +849,8 @@ refreshed proactively at 80% of lifetime; an interactive re-auth requirement is 
 
 **Budget accounting.** This is the one place a subscription genuinely leaks into the
 rest of the system, and it is why `Provider.Budget()` exists. `max_turn_cost_usd`
-(§5.4) is meaningless on a plan; the equivalent limits are *requests* and *tokens per
-window*, and the failure mode is a 429 with a reset time rather than a bill. So:
+(§5.4) is meaningless on a plan; the equivalent limits are _requests_ and _tokens per
+window_, and the failure mode is a 429 with a reset time rather than a bill. So:
 
 - `BudgetKind = Money` → dollar ceilings, as today.
 - `BudgetKind = Quota` → the brain enforces step/token ceilings, and the status bar
@@ -640,7 +870,7 @@ client's token cache) — the user completes a real OAuth flow or nothing. `[R-1
 **Testing.** A fake OAuth issuer in `testdata/` covers: PKCE happy path, device-code
 polling with `authorization_pending`, refresh-on-401, refresh race (two concurrent
 requests, one refresh), revoked refresh token → `AuthNeeded`, and clock skew.
-Cassettes record the *post-auth* HTTP exchange only, and the recorder redacts bearer
+Cassettes record the _post-auth_ HTTP exchange only, and the recorder redacts bearer
 tokens by value (§5.12.3).
 
 **Swappable backends.** Any OpenAI-compatible endpoint. A `kind = "custom"` plugin
@@ -676,6 +906,7 @@ providers, or expose them raw and let the UI deal? Leaning: normalise to a
 selection, context management, interrupts, and human handoff.
 
 **Public interface.**
+
 ```go
 type Brain interface {
     Run(ctx context.Context, in Input) error   // publishes events; returns when turn ends
@@ -688,6 +919,7 @@ type Brain interface {
 **Depends on.** `core`, `config`, `tools` (registry interface only), `session`.
 
 **The loop.**
+
 ```
 Run(input):
   1. assemble    → system prompt + persona + skills index + memory + history + input
@@ -713,6 +945,7 @@ in the order the model emitted them. This is unglamorous and prevents an entire 
 of "two agents edited the same file" bugs.
 
 **Configuration.**
+
 ```toml
 [brain]
 max_steps          = 40
@@ -730,6 +963,7 @@ Budget ceilings are expressed in whatever unit the active provider actually mete
 #### 5.4.1 Personality / persona
 
 Persona is **data, not code**. A persona is a directory:
+
 ```
 personas/ada/
   persona.md        # voice, tone, values, refusal style, verbosity
@@ -737,6 +971,7 @@ personas/ada/
   examples.jsonl    # few-shot exchanges, optional
   bindings.toml     # tool aliases, slash command shortcuts
 ```
+
 `persona.md` is injected into the system prompt after the immutable safety preamble
 and **cannot** modify capability grants — a persona that says "you may write
 anywhere" changes nothing, because grants live in the broker. Stated explicitly
@@ -746,10 +981,10 @@ because it is exactly the seam an attacker aims at. `[R-04]`
 
 Three-tier: **hot** (recent turns, verbatim) → **warm** (summarised spans) → **cold**
 (session log on disk, retrievable via a `history.search` tool). Compaction is a tool
-call to the *cheap* provider profile, not the expensive one. Compaction MUST preserve
+call to the _cheap_ provider profile, not the expensive one. Compaction MUST preserve
 verbatim: the current task statement, all unresolved `AskUser` answers, and every
 active file path. `[OQ-05]` covers whether we need embeddings for cold retrieval or
-whether grep is enough for v1. *(Position: grep is enough for v1; ship it.)*
+whether grep is enough for v1. _(Position: grep is enough for v1; ship it.)_
 
 **Swappable backends.** The whole `Brain` is an interface — a `ReActBrain` ships in
 v1; a `PlannerExecutorBrain` and a `ReplayBrain` (for eval) are alternate
@@ -757,15 +992,15 @@ implementations. This is what makes eval-by-replay possible.
 
 **Failure modes.** Loop detection: identical (tool, args) triple three times in a
 turn → inject a "you are repeating yourself" system nudge; five times → hard stop
-with `StopReason=Looping`. Budget exhaustion is a *graceful* stop that asks the user
+with `StopReason=Looping`. Budget exhaustion is a _graceful_ stop that asks the user
 whether to continue, never a crash.
 
 **Testing.** The brain is tested against a `FakeProvider` driven by a script, so
 loop logic is deterministic and fast. Zero network in brain unit tests.
 
 **Open questions.** `[OQ-05]` cold retrieval strategy. `[OQ-06]` Should the brain own
-a persistent "memory" (facts across sessions), or is that a skill? *(Position: a
-built-in `memory` tool backed by a plain markdown file, so it is inspectable.)*
+a persistent "memory" (facts across sessions), or is that a skill? _(Position: a
+built-in `memory` tool backed by a plain markdown file, so it is inspectable.)_
 
 ---
 
@@ -775,6 +1010,7 @@ built-in `memory` tool backed by a plain markdown file, so it is inspectable.)*
 and the approval-mode table.
 
 **Public interface.**
+
 ```go
 type Registry interface {
     Register(source Source, t Tool) error   // Source = core|mcp|skill|swarm
@@ -789,6 +1025,7 @@ type Registry interface {
 **Depends on.** `core`, `security`.
 
 **Configuration.**
+
 ```toml
 [tools]
 approval_default = "ask"           # auto | ask | never
@@ -815,7 +1052,7 @@ from MCP is a real, near-term problem: 12 MCP servers can easily mean 300 tools 
 40k tokens of schema. Pruning is not a nice-to-have.
 
 **Failure modes.** Name collision across sources → deterministic namespacing wins
-(`mcp.<server>.<tool>`); a collision *within* a source is a startup error listing
+(`mcp.<server>.<tool>`); a collision _within_ a source is a startup error listing
 both, never a silent overwrite. Schema validation of model-supplied args happens
 before `Invoke` — a malformed-args error goes back to the model as a tool result, not
 as a crash.
@@ -825,7 +1062,7 @@ tool)`): honours cancellation within 100 ms, never panics on adversarial args, n
 performs an effect when the broker denies, `Describe()` is stable.
 
 **Open questions.** `[OQ-07]` Should `Prune` be visible to the user in the UI ("42 of
-310 tools active")? *(Position: yes, and it's a palette command to inspect.)*
+310 tools active")? _(Position: yes, and it's a palette command to inspect.)_
 
 ---
 
@@ -836,22 +1073,23 @@ tools, and adding a ninth requires an ADR** (D-08). Every tool added here is pai
 forever: in schema tokens on every single step, in red-team cases, in contract tests,
 in one more thing a small model can confuse for another.
 
-| Tool | Effect | Capability | Notes |
-|---|---|---|---|
-| `fs.read` | read | `fs.read:<glob>` | line ranges, byte cap, binary detection |
-| `fs.write` | write | `fs.write:<glob>` | atomic temp+rename; refuses outside grant; creates dirs |
-| `fs.edit` | write | `fs.write:<glob>` | exact-match string replace; fails loudly on ambiguity (§5.6.2) |
-| `grep` | read | `fs.read:<glob>` | ripgrep semantics in-process; `mode = content \| files` — **this is also the file finder** (§5.6.2) |
-| `exec` | exec | `exec:<allowlist>` | sandboxed child, no shell by default |
-| `fetch` | net | `net.http:<host-glob>` | GET/POST, redirect policy, size cap, HTML→md |
-| `ask_user` | none | — | the human-in-the-loop primitive (§6.4) |
-| `memory` | write | `fs.write:<memdir>` | markdown-backed long-term notes |
+| Tool       | Effect | Capability             | Notes                                                                                               |
+| ---------- | ------ | ---------------------- | --------------------------------------------------------------------------------------------------- |
+| `fs.read`  | read   | `fs.read:<glob>`       | line ranges, byte cap, binary detection                                                             |
+| `fs.write` | write  | `fs.write:<glob>`      | atomic temp+rename; refuses outside grant; creates dirs                                             |
+| `fs.edit`  | write  | `fs.write:<glob>`      | exact-match string replace; fails loudly on ambiguity (§5.6.2)                                      |
+| `grep`     | read   | `fs.read:<glob>`       | ripgrep semantics in-process; `mode = content \| files` — **this is also the file finder** (§5.6.2) |
+| `exec`     | exec   | `exec:<allowlist>`     | sandboxed child, no shell by default                                                                |
+| `fetch`    | net    | `net.http:<host-glob>` | GET/POST, redirect policy, size cap, HTML→md                                                        |
+| `ask_user` | none   | —                      | the human-in-the-loop primitive (§6.4)                                                              |
+| `memory`   | write  | `fs.write:<memdir>`    | markdown-backed long-term notes                                                                     |
 
 **Deleted: `fs.glob`.** See §5.6.2.
 
 **Depends on.** `core`, `security`.
 
 **Configuration.**
+
 ```toml
 [tools.exec]
 shell        = false               # true → sh -c (unix) / cmd /c (windows); explicit opt-in
@@ -918,7 +1156,7 @@ string check. Cost is roughly 150 lines more than shelling out.
 
 **The escape hatch stays.** A user in the `dev` or `yolo` profile with `curl` on the
 `exec` allowlist can still have the model run curl, and that is fine — they granted
-`exec` deliberately. What must not happen is `exec` being the *only* road to the
+`exec` deliberately. What must not happen is `exec` being the _only_ road to the
 network, because then every network-using configuration is also an
 arbitrary-execution configuration.
 
@@ -956,7 +1194,7 @@ the answer is that it can, but at a cost that is not a matter of taste:
 2. **Whole-file rewrite is how models silently delete code.** A model that must
    reproduce 600 lines to change one will, reliably, drop a function or emit
    `// ... rest of file unchanged ...`. With `write` as the only path that is an
-   unrecoverable data loss the user may not notice for days. `edit` fails *loudly*
+   unrecoverable data loss the user may not notice for days. `edit` fails _loudly_
    instead: if the anchor string is not found, or is found twice, the call errors and
    the model retries. **Loud failure is the feature.**
 3. **It is not a new attack surface.** `edit` needs no new capability — it is
@@ -1012,6 +1250,7 @@ The unit of work when someone wants a new integration is therefore: add ~8 lines
 TOML with a pinned version and an integrity hash. Not a PR to this repository.
 
 **Public interface.**
+
 ```go
 type Manager interface {
     Install(ctx context.Context, spec Spec) (ServerID, error)
@@ -1034,6 +1273,7 @@ type Spec struct {
 **Depends on.** `core`, `security`, `config`.
 
 **Configuration.**
+
 ```toml
 [[mcp.servers]]
 name      = "github"
@@ -1084,9 +1324,9 @@ also be "curl | node whatever". Therefore:
 notifications mid-call, server-initiated sampling requests, unicode, slow start).
 Integration tests against 5 pinned real servers in CI nightly, not per-PR.
 
-**Open questions.** `[OQ-09]` MCP `sampling` (server asks *us* to call the model) —
+**Open questions.** `[OQ-09]` MCP `sampling` (server asks _us_ to call the model) —
 support in v1? It is a capability-escalation vector and few servers use it.
-*(Position: reject sampling requests in v1, log them, revisit.)*
+_(Position: reject sampling requests in v1, log them, revisit.)_
 `[OQ-10]` MCP roots and resource subscriptions — v1 or v2?
 
 ---
@@ -1097,6 +1337,7 @@ support in v1? It is a capability-escalation vector and few servers use it.
 references, with progressive disclosure so 60 skills cost ~2k tokens, not ~200k.
 
 **Public interface.**
+
 ```go
 type Loader interface {
     Discover(roots ...string) ([]Skill, Diagnostics)
@@ -1116,12 +1357,14 @@ type Skill struct {
 **Depends on.** `core`, `security`, `tools`.
 
 **Three-level disclosure** (matching how the ecosystem already works):
+
 1. **Always in context:** name + description, one line each. ~30 tokens per skill.
 2. **On demand:** the model calls `skill.open("pptx")` → full `SKILL.md` body.
 3. **Referenced:** body points at `reference.md`, `scripts/build.py` etc.; the model
    reads them with `fs.read` or runs them with `exec`.
 
 **Configuration.**
+
 ```toml
 [skills]
 # "user:" and "system:" expand via config.Paths() (§5.2.1), so one config works on
@@ -1156,6 +1399,7 @@ inherit the session's? *(Position: inherit and never widen; a skill may *narrow*
 nothing else — it holds no business logic.
 
 **Public interface.**
+
 ```go
 type App struct{ … }
 func New(bus core.Bus, cmds CommandSink, cfg UICfg) *App
@@ -1185,20 +1429,21 @@ pick. Pinned at M0: `bubbletea/v2 v2.0.9`, `lipgloss/v2 v2.0.6`, `bubbles/v2 v2.
 
 The v1 limitations that would actually hurt this specific project:
 
-| v1 limitation | Why it breaks *travis* |
-|---|---|
-| **No key-release events.** v1 delivers `KeyMsg` on press only. | Push-to-talk is *hold a key while speaking* (§5.10). On v1 the best available is a toggle, which is a worse interaction and desynchronises from VAD. v2 exposes `KeyPressMsg`/`KeyReleaseMsg` via the Kitty keyboard protocol, with graceful fallback. This alone forces v2. |
-| **Ambiguous key encoding.** v1 cannot distinguish `ctrl+space` from `ctrl+@`, or shifted/modified variants, and disagrees across terminals. | Our default PTT bind *is* `ctrl+space`, and the palette wants `ctrl+shift+*` binds. v2's enhanced keyboard support disambiguates and reports modifiers properly. |
-| **Coarse renderer.** v1 repaints from the first changed line down. | We stream tokens at 30 fps into a viewport that also holds tool cards and a live audio meter; v1 tears and burns CPU on exactly this pattern. v2's cell-based diffing renderer repaints changed cells. Directly mitigates `[R-07]`. |
-| **No colour-profile / background-colour query.** | `theme = "auto"` needs to know if the terminal is light or dark and what colour depth it has. v2 (+ `colorprofile`) queries and degrades properly — which matters most on Windows, where terminal capabilities vary widely (D-07). |
-| **Weak focus/blur and window reporting.** | Voice mode ducks the mic when the window loses focus, and the status bar shows a different hint when unfocused. |
-| **v1 is maintenance-only.** | New Charm work lands on v2. Building an 18-month project on the frozen major is a self-inflicted migration. |
+| v1 limitation                                                                                                                               | Why it breaks _travis_                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **No key-release events.** v1 delivers `KeyMsg` on press only.                                                                              | Push-to-talk is _hold a key while speaking_ (§5.10). On v1 the best available is a toggle, which is a worse interaction and desynchronises from VAD. v2 exposes `KeyPressMsg`/`KeyReleaseMsg` via the Kitty keyboard protocol, with graceful fallback. This alone forces v2. |
+| **Ambiguous key encoding.** v1 cannot distinguish `ctrl+space` from `ctrl+@`, or shifted/modified variants, and disagrees across terminals. | Our default PTT bind _is_ `ctrl+space`, and the palette wants `ctrl+shift+*` binds. v2's enhanced keyboard support disambiguates and reports modifiers properly.                                                                                                             |
+| **Coarse renderer.** v1 repaints from the first changed line down.                                                                          | We stream tokens at 30 fps into a viewport that also holds tool cards and a live audio meter; v1 tears and burns CPU on exactly this pattern. v2's cell-based diffing renderer repaints changed cells. Directly mitigates `[R-07]`.                                          |
+| **No colour-profile / background-colour query.**                                                                                            | `theme = "auto"` needs to know if the terminal is light or dark and what colour depth it has. v2 (+ `colorprofile`) queries and degrades properly — which matters most on Windows, where terminal capabilities vary widely (D-07).                                           |
+| **Weak focus/blur and window reporting.**                                                                                                   | Voice mode ducks the mic when the window loses focus, and the status bar shows a different hint when unfocused.                                                                                                                                                              |
+| **v1 is maintenance-only.**                                                                                                                 | New Charm work lands on v2. Building an 18-month project on the frozen major is a self-inflicted migration.                                                                                                                                                                  |
 
 Consequences to write down now: v2 examples are thinner than v1's, so budget review
 time; `teatest` for v2 is what golden-frame tests target (§Testing); and any
 copy-pasted v1 snippet from a blog post is a review blocker.
 
 **Architecture inside Bubble Tea.**
+
 - One `tea.Model` root, composed of `viewport`, `textarea`, `list`, and custom
   components (status bar, tool card, palette, modal stack).
 - **Rule:** `Update` **MUST** be non-blocking. Anything that can take > 1 ms is a
@@ -1216,6 +1461,7 @@ copy-pasted v1 snippet from a blog post is a review blocker.
   state in the root model, not implied.
 
 **Configuration.**
+
 ```toml
 [ui]
 theme          = "auto"     # auto | dark | light | high_contrast | mono
@@ -1246,9 +1492,9 @@ voice indicator rather than silently behaving differently.
 replays a recorded event stream at 10× speed and asserts no dropped frames or panics.
 
 **Open questions.** `[OQ-12]` Do we support scrollback-friendly inline mode (append to
-terminal scrollback, no altscreen) in addition to full-screen? *(Position: yes,
+terminal scrollback, no altscreen) in addition to full-screen? _(Position: yes,
 `ui.altscreen = false`; some users strongly prefer it, and it is cheap if the renderer
-is already an interface.)*
+is already an interface.)_
 
 ---
 
@@ -1258,12 +1504,13 @@ is already an interface.)*
 
 **Scope, narrowed by D-10.** Voice input is a **composition** device. It exists so you
 can dictate a long prompt without typing it — the transcript lands in the input box,
-where you can see it and edit it, and *you* press enter. It is **not** a control
+where you can see it and edit it, and _you_ press enter. It is **not** a control
 surface: it cannot answer an approval, confirm a destructive action, pick from a
 menu, or trigger a slash command. Those are keyboard-only, always. See §6.5 for the
 reasoning and for what happens when an approval fires while you are across the room.
 
 **Public interface.**
+
 ```go
 type Capturer interface {
     Start(ctx context.Context) (<-chan Segment, error)  // VAD-delimited
@@ -1281,6 +1528,7 @@ punctuate → dispatch`. Partials render greyed in the input box; the final repl
 **Depends on.** `core`, `config`, `security` (mic is a capability: `audio.capture`).
 
 **Configuration.**
+
 ```toml
 [voice.input]
 enabled   = true
@@ -1303,8 +1551,8 @@ is visible rather than mysterious.
 **the default**, see below), `openai` (hosted `/v1/audio/transcriptions`), `deepgram`,
 `groq`. Hosted backends reuse `ai`'s HTTP plumbing and auth but are
 separate interfaces — transcription is not chat completion, and pretending otherwise
-would contort both. *(This answers the brief's question directly: share the transport
-and auth layer, not the interface.)*
+would contort both. _(This answers the brief's question directly: share the transport
+and auth layer, not the interface.)_
 
 **Failure modes / the CGO problem.** `whisper.cpp` bindings mean CGO, which destroys
 `CGO_ENABLED=0` cross-compilation and turns "download one static binary" into a
@@ -1343,7 +1591,7 @@ wake word deferred.
 
 ### 5.11 `voiceout` (synthesis)
 
-**Purpose.** Speak *selectively* and quickly.
+**Purpose.** Speak _selectively_ and quickly.
 
 **The core idea (from the brief), made concrete.** Reading the full transcript aloud is
 what makes existing voice agents unbearable — nobody wants 400 words of code diff
@@ -1359,18 +1607,19 @@ Here's what I found. <speak>Three tests are failing, all in the auth package.</s
 This works, and the streaming parser is simple. But it depends on model compliance,
 and small local models will not comply reliably. So the design is **layered**:
 
-| Tier | Mechanism | Used when |
-|---|---|---|
-| 1 | Native structured output — a `speech` field in a JSON-schema-constrained response | provider supports `json_schema` |
-| 2 | Inline `<speak>…</speak>` markers, extracted by a streaming parser | provider supports tool/tag following |
-| 3 | **Fallback summariser** — a cheap second call: "one sentence, spoken aloud, of the following" | model emitted no speech markers and `voice.fallback = true` |
-| 4 | Silence + a UI hint "🔇 nothing to speak" | fallback disabled |
+| Tier | Mechanism                                                                                     | Used when                                                   |
+| ---- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| 1    | Native structured output — a `speech` field in a JSON-schema-constrained response             | provider supports `json_schema`                             |
+| 2    | Inline `<speak>…</speak>` markers, extracted by a streaming parser                            | provider supports tool/tag following                        |
+| 3    | **Fallback summariser** — a cheap second call: "one sentence, spoken aloud, of the following" | model emitted no speech markers and `voice.fallback = true` |
+| 4    | Silence + a UI hint "🔇 nothing to speak"                                                     | fallback disabled                                           |
 
 Tier 3 is what makes this actually work with a 7B local model, and it is cheap
 (routes to `provider.routing.summarize`). Without it the feature is fragile.
 This is a substantive gap in the original sketch. `[R-11]`
 
 **Public interface.**
+
 ```go
 type Synthesizer interface {
     Speak(ctx context.Context, text string, opt Opts) (Audio, error)
@@ -1378,13 +1627,13 @@ type Synthesizer interface {
     Voices(ctx context.Context) ([]Voice, error)
 }
 type Player interface {
-    Enqueue(Audio, Priority) 
+    Enqueue(Audio, Priority)
     Stop()          // barge-in
     Duck(bool)      // lower volume while user speaks
 }
 ```
 
-**Streaming granularity.** Synthesise per *sentence*, not per full response — first
+**Streaming granularity.** Synthesise per _sentence_, not per full response — first
 audio starts while the model is still generating. Sentence splitting must handle
 abbreviations and code; a bad splitter produces "Dot. Dot. Dot." artefacts.
 
@@ -1393,6 +1642,7 @@ and mark the interrupted text in the transcript so the model knows the human did
 hear the rest. This is a correctness issue, not a polish issue.
 
 **Configuration.**
+
 ```toml
 [voice.output]
 enabled   = true
@@ -1425,17 +1675,18 @@ drop with a notice rather than queueing.
 final (piper local). Deterministic tests use a null player that records timings.
 
 **Open questions.** `[OQ-15]` Should tool results be able to speak (`Result.Speech`)?
-It is in the interface. Risk: a chatty MCP server becomes annoying. *(Position: yes,
-but rate-limited to one per turn and off by default.)*
+It is in the interface. Risk: a chatty MCP server becomes annoying. _(Position: yes,
+but rate-limited to one per turn and off by default.)_
 
 ---
 
 ### 5.12 `security`
 
-**Purpose.** Make the guarantee real: *if a capability is not granted, the effect does
-not occur, no matter what the model outputs.*
+**Purpose.** Make the guarantee real: _if a capability is not granted, the effect does
+not occur, no matter what the model outputs._
 
 **Public interface.**
+
 ```go
 type Policy interface {
     Evaluate(ctx context.Context, req Request) Decision  // Allow | Ask | Deny
@@ -1459,7 +1710,7 @@ type Capability struct {
 Three independent layers, each sufficient alone for its class of threat:
 
 1. **Grant** — the session holds a capability set. The model never sees the tokens.
-2. **Policy** — evaluated in the broker on every call, against the *resolved* effect
+2. **Policy** — evaluated in the broker on every call, against the _resolved_ effect
    (post-symlink, post-`..`, post-`\\?\`, absolute path), not the model's stated
    intent.
 3. **Sandbox** — the OS enforces it anyway: Landlock + seccomp + namespaces (Linux),
@@ -1470,18 +1721,18 @@ Layers 1 and 2 are **pure Go and identical on all three OSes** — that is delib
 and it is why cross-platform support does not dilute the security claim. Only layer 3
 varies, and it is defence-in-depth, never the primary control.
 
-The failure mode we are explicitly designing against: *"the model was told not to, but
-did."* Under this design, a model that emits `fs.write /etc/passwd` produces a
+The failure mode we are explicitly designing against: _"the model was told not to, but
+did."_ Under this design, a model that emits `fs.write /etc/passwd` produces a
 `PolicyDenied` event and a tool error string. The `openat(2)` never happens.
 
 #### 5.12.2 Default profiles
 
-| Profile | fs.read | fs.write | exec | net | Use |
-|---|---|---|---|---|---|
-| `paranoid` | workspace | none | none | none | reading/reviewing |
-| `default` | workspace + travis state dir | workspace | allowlist, sandboxed | allowlist hosts | day-to-day |
-| `dev` | home minus secrets | workspace + OS temp dir | any, sandboxed | any, logged | active coding |
-| `yolo` | host | host | host, unsandboxed | any | requires `--i-understand`, shows a permanent red banner, disables voice-only mode |
+| Profile    | fs.read                      | fs.write                | exec                 | net             | Use                                                                               |
+| ---------- | ---------------------------- | ----------------------- | -------------------- | --------------- | --------------------------------------------------------------------------------- |
+| `paranoid` | workspace                    | none                    | none                 | none            | reading/reviewing                                                                 |
+| `default`  | workspace + travis state dir | workspace               | allowlist, sandboxed | allowlist hosts | day-to-day                                                                        |
+| `dev`      | home minus secrets           | workspace + OS temp dir | any, sandboxed       | any, logged     | active coding                                                                     |
+| `yolo`     | host                         | host                    | host, unsandboxed    | any             | requires `--i-understand`, shows a permanent red banner, disables voice-only mode |
 
 `yolo` exists because it will otherwise be reimplemented badly by users. It is loud.
 
@@ -1490,16 +1741,17 @@ did."* Under this design, a model that emits `fs.write /etc/passwd` produces a
 Secrets resolve **inside the broker** and are injected into child process
 environments there. They never enter the TUI process memory, never enter the model
 context, and are redacted from traces by a scanner that runs on every event before it
-hits the bus or disk. Redaction is by *value* (we know the secret strings) plus
+hits the bus or disk. Redaction is by _value_ (we know the secret strings) plus
 pattern (common key formats).
 
 #### 5.12.4 Prompt-injection posture
 
 Untrusted content (fetched web pages, file contents, MCP tool results, workspace
 `SKILL.md`) is:
+
 - wrapped in delimiters marked untrusted in the prompt;
 - **never** able to change capability grants;
-- flagged so that a tool call *originating* in the same step as untrusted intake
+- flagged so that a tool call _originating_ in the same step as untrusted intake
   escalates its approval mode by one level (`auto` → `ask`).
 
 That last rule is the cheapest high-value mitigation available and is not in the
@@ -1524,8 +1776,8 @@ a **pre-authorised handle**, and it is the one genuinely OS-divergent optimisati
   the client process for a directory handle where possible, and otherwise fall back to
   **batched IPC** — one request carrying up to N paths, which recovers most of the
   win because the cost is per round-trip, not per byte. The read fast path is a
-  performance feature; if it is unavailable the correct behaviour is *slower*, never
-  *unenforced*. Budget for Windows is ≤ 2 ms p99 per batched call rather than 0.4 ms
+  performance feature; if it is unavailable the correct behaviour is _slower_, never
+  _unenforced_. Budget for Windows is ≤ 2 ms p99 per batched call rather than 0.4 ms
   per call. `[R-20]`
 
 Writes and exec always go through the full path on every OS.
@@ -1538,7 +1790,7 @@ set and any random tool call, `Broker` performs an effect **iff** `Policy` allow
 
 **Open questions.** `[OQ-16]` Landlock requires kernel ≥ 5.13, absent on some distros
 and in some containers. Fallback: bubblewrap if present, else refuse to run outside
-`paranoid`? *(Position: yes, refuse — and say why clearly.)* Note this is the same
+`paranoid`? _(Position: yes, refuse — and say why clearly.)_ Note this is the same
 question as "what do we do on Windows, where the OS sandbox is weak"; §9.2.1 answers
 both with the same rule: **degrade the sandbox tier loudly, never the policy.**
 
@@ -1549,14 +1801,15 @@ both with the same rule: **degrade the sandbox tier loudly, never the policy.**
 **Purpose.** Know whether it is getting better or worse. Four distinct jobs that are
 often conflated:
 
-| Job | Question | Mechanism |
-|---|---|---|
-| **Observability** | what happened? | OTel-compatible traces, every event, `travis trace <turn>` |
-| **Regression** | did we break it? | cassette replay, deterministic, runs per-PR |
-| **Capability** | is it good? | scenario suites with rubric grading (LLM-as-judge + assertions) |
-| **Safety** | can it be made to misbehave? | red-team suite (§9.4), zero-tolerance gate |
+| Job               | Question                     | Mechanism                                                       |
+| ----------------- | ---------------------------- | --------------------------------------------------------------- |
+| **Observability** | what happened?               | OTel-compatible traces, every event, `travis trace <turn>`      |
+| **Regression**    | did we break it?             | cassette replay, deterministic, runs per-PR                     |
+| **Capability**    | is it good?                  | scenario suites with rubric grading (LLM-as-judge + assertions) |
+| **Safety**        | can it be made to misbehave? | red-team suite (§9.4), zero-tolerance gate                      |
 
 **Public interface.**
+
 ```go
 type Recorder interface{ Record(core.Event) }               // → trace file
 type Cassette interface{ Replay(ctx) (core.Bus, error) }     // deterministic re-run
@@ -1588,6 +1841,7 @@ whether D-09 was right; without them "is it too chatty / too reckless?" is an
 argument instead of a measurement. All of it runs on all three OSes (G8).
 
 **Configuration.**
+
 ```toml
 [eval]
 traces      = true
@@ -1603,9 +1857,9 @@ channel, drops with a counter under pressure, and fsyncs on turn boundaries only
 passing everything is the worst outcome — include known-bad fixtures that MUST fail.
 
 **Open questions.** `[OQ-17]` Do we adopt an external benchmark (SWE-bench-lite,
-τ-bench) or only home-grown scenarios? *(Position: home-grown for v1 — external
+τ-bench) or only home-grown scenarios? _(Position: home-grown for v1 — external
 benchmarks measure a coding agent, and this is a personal assistant. Add τ-bench-style
-tool-use scenarios in v1.1.)*
+tool-use scenarios in v1.1.)_
 
 ---
 
@@ -1614,6 +1868,7 @@ tool-use scenarios in v1.1.)*
 **Purpose.** Orchestrate subagents, without becoming a distributed systems project.
 
 **Public interface.**
+
 ```go
 type Swarm interface {
     Spawn(ctx context.Context, spec AgentSpec) (core.Tool, error) // subagent IS a tool
@@ -1642,6 +1897,7 @@ not. This must be enforced in the broker at token-derivation time, not checked i
 `Spawn`. Get this wrong and multi-agent becomes a privilege-escalation feature. `[R-13]`
 
 **Configuration.**
+
 ```toml
 [swarm]
 enabled       = false          # exp_swarm
@@ -1662,18 +1918,19 @@ Orphaned children on parent cancellation: context propagation, plus a reaper.
 subagent execution is serialised in eval mode via a `deterministic = true` flag.
 
 **Open questions.** `[OQ-18]` Do subagents get their own TUI panes, or only a
-collapsed progress card in the parent's stream? *(Position: collapsed card, expandable;
-panes are a v2 layout problem.)*
+collapsed progress card in the parent's stream? _(Position: collapsed card, expandable;
+panes are a v2 layout problem.)_
 
 ---
 
-### 5.15 `session` *(added — not in the original brief)*
+### 5.15 `session` _(added — not in the original brief)_
 
 **Purpose.** Persist, resume, branch, and export conversations. Called out because
 without it, a crash 40 minutes into a task loses everything, and the eval module has
 nothing to replay.
 
 **Public interface.**
+
 ```go
 type Store interface {
     Create(meta Meta) (ID, error)
@@ -1727,6 +1984,7 @@ onboarding ──grants──► session capability set (held by broker)
                                 │        └──► tool token (TTL = call, scope ∩ tool.Requires)
                                 └──► subagent token (⊆ parent)
 ```
+
 Tokens are opaque, unforgeable (HMAC over broker-held key), short-lived, and never
 serialised into the model context or the trace.
 
@@ -1749,23 +2007,23 @@ model marked `interrupted: true` so the next turn has honest state.
 This section exists because "the user is central" and "an assistant must get on with
 things" read as a contradiction, and resolving it badly produces either a toy that
 asks permission to read a file or a robot that force-pushes at 3am. They are not
-actually in tension. They only *look* like it if permission-prompting is your **only**
+actually in tension. They only _look_ like it if permission-prompting is your **only**
 safety mechanism — then every unit of autonomy is bought with a unit of risk, and the
 only dial is "how often do I nag".
 
 **The reframe.** Two different things get conflated under "ask the user":
 
-| | **Permission** | **Information** |
-|---|---|---|
-| Question | *may I do this?* | *what did you mean?* |
-| Caused by | risk — irreversible, out of scope, expensive | ambiguity — two reasonable readings |
-| Cost of guessing wrong | possibly unrecoverable | one wasted step |
-| Correct default | **ask, and never learn to stop** | **pick the sane reading, state the assumption, continue** |
+|                        | **Permission**                               | **Information**                                           |
+| ---------------------- | -------------------------------------------- | --------------------------------------------------------- |
+| Question               | _may I do this?_                             | _what did you mean?_                                      |
+| Caused by              | risk — irreversible, out of scope, expensive | ambiguity — two reasonable readings                       |
+| Cost of guessing wrong | possibly unrecoverable                       | one wasted step                                           |
+| Correct default        | **ask, and never learn to stop**             | **pick the sane reading, state the assumption, continue** |
 
 Most "the agent should check with me" instincts are really about the first column.
 Most interruptions in practice come from the second. Treating them the same is what
 makes agents feel either reckless or exhausting. So travis handles them differently,
-and buys back autonomy with four mechanisms that are *not* prompts.
+and buys back autonomy with four mechanisms that are _not_ prompts.
 
 **1. Reversibility is the currency, not permission.** An action that can be undone
 does not need approval; it needs an undo. Every write goes through a **change
@@ -1779,8 +2037,8 @@ reversible  && in-scope  && in-budget  →  act now, report after      (no promp
 irreversible || out-of-scope || over-budget → ask, always            (never learned away)
 ```
 
-This is the compromise, and it is not a fudge: it moves the human from *gatekeeper*
-(blocking, before, on everything) to *reviewer* (non-blocking, after, on a diff). You
+This is the compromise, and it is not a fudge: it moves the human from _gatekeeper_
+(blocking, before, on everything) to _reviewer_ (non-blocking, after, on a diff). You
 lose nothing that matters, because the things you actually cannot undo — `rm`, force
 push, `DELETE /repos`, payments, sending mail, `mcp.*.delete_*` — are exactly the
 things still gated.
@@ -1855,7 +2113,7 @@ must not apply to a step that just ingested a web page.
 **Ambiguity handling, concretely.** The brain resolves ambiguity by assumption, not by
 question, except when the cost of a wrong guess is unrecoverable. It asks when (a) a
 tool returns `Invalid` twice on the same goal, (b) an irreversible action is proposed,
-(c) the step or cost budget is 80% consumed — as a *non-blocking* checkpoint with
+(c) the step or cost budget is 80% consumed — as a _non-blocking_ checkpoint with
 `Assume = continue` in `autonomous`, blocking otherwise — or (d) two candidate
 interpretations both imply irreversible work. Model self-reported confidence is
 **not** used as a trigger: it is uncalibrated, and it was the weakest part of the
@@ -1893,9 +2151,9 @@ and editable in the input box before you press enter.
    would be the one place we violated our own principle.
 
 **So what happens when an approval fires and you are across the room?** The design is
-to make it *noticeable*, not answerable by voice:
+to make it _noticeable_, not answerable by voice:
 
-- TTS says a short, distinctive line — *"waiting for approval: write to token.go"* —
+- TTS says a short, distinctive line — _"waiting for approval: write to token.go"_ —
   at the `Priority: alert` level, ducking anything else (§5.11).
 - The mic is **muted for the duration of the modal** and the indicator shows
   `🎙 muted · approval pending`. This prevents the interaction where you say "yes"
@@ -1911,6 +2169,7 @@ reversible work continues unprompted. A voice session that piles up three pendin
 approvals is telling you it should be a keyboard session; the UI says so.
 
 **Config.**
+
 ```toml
 [voice]
 approvals      = "keyboard"   # the ONLY permitted value; present so the intent is explicit
@@ -2100,7 +2359,7 @@ Rules: **(a)** an elapsed timer appears after 800 ms on any state; **(b)** any s
 lasting > 5 s must show what it is waiting on; **(c)** `esc` cancels whatever is
 current and the UI says what it cancelled; **(d)** denials are never collapsed or
 soft-pedalled — a blocked action is information the user needs; **(e)** anything the
-agent did *without* asking is visible after the fact with an undo affordance —
+agent did _without_ asking is visible after the fact with an undo affordance —
 autonomy is paid for with legibility (§6.4).
 
 ### 7.4 Slash command palette
@@ -2152,7 +2411,7 @@ journalled changes; `/decisions` lists and revokes learned approval rules (§6.4
 - **Tools inspector** (`^t`) — tree by source, per-tool schema, capability, approval
   mode, invocation count this session, toggle enable.
 - **Ask-user modal** — the blocking question, with free-text, choice, and
-  file-picker variants; shows *which tool* is asking and *why*. Keyboard-only (D-10).
+  file-picker variants; shows _which tool_ is asking and _why_. Keyboard-only (D-10).
 - **Question tray** — non-blocking questions the agent is proceeding past on a stated
   assumption; answering one later corrects course (§6.4).
 - **Decisions inspector** (`/decisions`) — every learned "always allow" rule, its
@@ -2244,7 +2503,7 @@ handful of rules are followed from M0 rather than retrofitted in M4.
   behaviours on any machine. A capability check that is case-sensitive on a
   case-insensitive filesystem is a bypass (`C:\Users\me\.SSH`). `[R-22]`
 - **`exec` on Windows:** `.exe`/`.cmd`/`.bat` resolution is explicit; the allowlist
-  matches the *resolved* executable basename without extension; `shell = true` maps to
+  matches the _resolved_ executable basename without extension; `shell = true` maps to
   `cmd /c`, and `.bat`/`.cmd` are treated as shell even when `shell = false` because
   Windows re-parses their arguments. MCP servers launched via `npx` are `npx.cmd`, so
   this is not an edge case, it is the default path.
@@ -2252,20 +2511,20 @@ handful of rules are followed from M0 rather than retrofitted in M4.
   a **job object** with kill-on-close so a killed MCP server cannot leave orphans.
   `§6.3`'s 200 ms cancellation budget applies on all three.
 - **CI is a matrix, not a cross-compile check.** Unit tests, `-race`, and `teatest`
-  golden frames run *natively* on `ubuntu-latest`, `macos-latest`, and
+  golden frames run _natively_ on `ubuntu-latest`, `macos-latest`, and
   `windows-latest`. Cross-compilation alone catches nothing about path handling.
 
 **Support matrix (v1).**
 
-| | linux/amd64 · arm64 | darwin/arm64 · amd64 | windows/amd64 · arm64 |
-|---|---|---|---|
-| TUI, brain, tools, MCP, skills, session, eval | full | full | full |
-| Broker + policy enforcement | full | full | full |
-| OS sandbox tier | landlock + seccomp + userns | `sandbox-exec` | restricted token + job object (**weaker**, §9.2.1) |
-| Read fast path | `SCM_RIGHTS` fd passing | `SCM_RIGHTS` fd passing | handle duplication / batched IPC |
-| Voice in/out | full (PipeWire/Pulse/ALSA) | full (CoreAudio) | full (WASAPI) |
-| Hold-to-talk PTT | Tier-1 terminals | Tier-1 terminals | Windows Terminal |
-| Single static binary | yes | yes | yes |
+|                                               | linux/amd64 · arm64         | darwin/arm64 · amd64    | windows/amd64 · arm64                              |
+| --------------------------------------------- | --------------------------- | ----------------------- | -------------------------------------------------- |
+| TUI, brain, tools, MCP, skills, session, eval | full                        | full                    | full                                               |
+| Broker + policy enforcement                   | full                        | full                    | full                                               |
+| OS sandbox tier                               | landlock + seccomp + userns | `sandbox-exec`          | restricted token + job object (**weaker**, §9.2.1) |
+| Read fast path                                | `SCM_RIGHTS` fd passing     | `SCM_RIGHTS` fd passing | handle duplication / batched IPC                   |
+| Voice in/out                                  | full (PipeWire/Pulse/ALSA)  | full (CoreAudio)        | full (WASAPI)                                      |
+| Hold-to-talk PTT                              | Tier-1 terminals            | Tier-1 terminals        | Windows Terminal                                   |
+| Single static binary                          | yes                         | yes                     | yes                                                |
 
 **Build gates additions:** the matrix above; `gofmt`-checked build tags; and a
 `make lint-portability` step that fails on `runtime.GOOS` outside the allowed
@@ -2275,7 +2534,7 @@ packages, on path separator literals, and on `os.Getenv("HOME")`.
 would otherwise have done):
 
 - `deps.yaml` declares, per package, exactly which packages it may import. `make
-  lint-deps` walks the import graph and fails the build on any edge not listed. Layer
+lint-deps` walks the import graph and fails the build on any edge not listed. Layer
   violations are caught in CI, not in review.
 - Cross-package types **MUST** live in `pkg/core`. A type defined in `internal/mcp`
   and used by `internal/brain` is a review blocker — that is the smell D-01 was
@@ -2296,23 +2555,23 @@ linux/{amd64,arm64}, darwin/{amd64,arm64}, windows/{amd64,arm64} with
 
 ### 9.1 Threat model
 
-| Actor | Capability | We defend? |
-|---|---|---|
-| Confused/hallucinating model | emits any tool call | **Yes** — primary design goal |
-| Prompt injection via web page / repo file / MCP result | steers the model | **Yes** — §5.12.4, partial |
-| Malicious MCP server | arbitrary code as user | **Partial** — sandbox + pinning + provenance |
-| Malicious skill | prompt text only, no code | **Yes** — untrusted tier |
-| Compromised provider endpoint | sees all context, steers model | **Partial** — local models, redaction |
-| Local malware already on the box | everything | **No** — out of scope |
-| Physical/kernel attacker | everything | **No** |
+| Actor                                                  | Capability                     | We defend?                                   |
+| ------------------------------------------------------ | ------------------------------ | -------------------------------------------- |
+| Confused/hallucinating model                           | emits any tool call            | **Yes** — primary design goal                |
+| Prompt injection via web page / repo file / MCP result | steers the model               | **Yes** — §5.12.4, partial                   |
+| Malicious MCP server                                   | arbitrary code as user         | **Partial** — sandbox + pinning + provenance |
+| Malicious skill                                        | prompt text only, no code      | **Yes** — untrusted tier                     |
+| Compromised provider endpoint                          | sees all context, steers model | **Partial** — local models, redaction        |
+| Local malware already on the box                       | everything                     | **No** — out of scope                        |
+| Physical/kernel attacker                               | everything                     | **No**                                       |
 
 ### 9.2 Sandbox tiers
 
-| Tier | Linux | macOS | Windows | Applies to |
-|---|---|---|---|---|
-| `strict` | user ns + landlock (ro scratch) + seccomp + no net | `sandbox-exec` deny-all + allowlist | restricted token (deny-only SIDs, low integrity) + job object + per-process firewall rule | MCP default |
-| `workspace` | landlock rw on workspace, net allowlist | sandbox-exec profile | restricted token with ACL'd scratch dir, job object limits | `exec` default |
-| `host` | none | none | none | `yolo` only |
+| Tier        | Linux                                              | macOS                               | Windows                                                                                   | Applies to     |
+| ----------- | -------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------- | -------------- |
+| `strict`    | user ns + landlock (ro scratch) + seccomp + no net | `sandbox-exec` deny-all + allowlist | restricted token (deny-only SIDs, low integrity) + job object + per-process firewall rule | MCP default    |
+| `workspace` | landlock rw on workspace, net allowlist            | sandbox-exec profile                | restricted token with ACL'd scratch dir, job object limits                                | `exec` default |
+| `host`      | none                                               | none                                | none                                                                                      | `yolo` only    |
 
 #### 9.2.1 Windows is weaker here, and we say so rather than pretend
 
@@ -2327,7 +2586,7 @@ So the position is explicit:
    lives in the broker in portable Go and behaves identically. The primary guarantee
    ("the model cannot cause an effect that was not granted") holds on all three OSes.
 2. **The sandbox is defence-in-depth, and on Windows it is thinner.** It contains a
-   *broker bug or a malicious MCP server*, not the model. On Windows v1 we get: a
+   _broker bug or a malicious MCP server_, not the model. On Windows v1 we get: a
    restricted token that drops the user's group SIDs, low integrity level (which
    blocks writes to most of the user profile via mandatory integrity control), a job
    object capping memory/CPU/child processes and killing the tree on close, and an
@@ -2344,7 +2603,7 @@ So the position is explicit:
    `[OQ-16]`. Users may set `require_sandbox = false`, which is sticky-visible in the
    status bar like `⚠ SHELL`.
 5. **Escape hatch for Windows users who want parity:** run inside a container or WSL2.
-   That is a *user choice for stronger isolation*, not a prerequisite for using travis —
+   That is a _user choice for stronger isolation_, not a prerequisite for using travis —
    which is the difference from the v0.2 draft, and the reason "WSL2 only" is gone.
 
 The red-team suite (§9.4) runs on all three OSes. Cases that depend on OS sandboxing
@@ -2378,15 +2637,15 @@ release.**
 
 ## 10. Milestones
 
-| # | Name | Contains | Exit criterion |
-|---|---|---|---|
-| M0 | Skeleton | `pkg/core`, `config` (incl. per-OS paths), `log`, single-module layout, CI matrix, `deps.yaml` | `travis version` builds **and its tests pass natively** on linux/amd64, darwin/arm64, windows/amd64; `lint-deps` + `lint-portability` blocking and green |
-| M1 | Text loop | `ai` (api-key + OAuth credentials), `brain`, `tools`, `coretools` (8 tools), minimal `cli` on **Bubble Tea v2** | fixes a failing test in a fixture repo, end to end, demonstrated on all three OSes |
-| M2 | Enforcement | `security` broker (UDS + named pipe), sandbox tiers, approval UX, change journal + `/undo` | red-team suite green on all three OSes; `paranoid` provably blocks writes; Windows tier reported honestly in the UI |
-| M3 | Ecosystem | `mcp`, `skills`, palette, tools inspector, **`Registry.Prune`** | 10 public MCP servers install and work from a pin, **with zero lines of per-server Go code**, on Linux/macOS/Windows (`npx.cmd` path included), and tool-schema tokens stay under 6k with all 10 loaded |
-| M4 | Voice | `voicein`, `voiceout`, audio helper, selective speech, keyboard-only approvals + spoken alerts | full voice turn ≤ 900 ms to first syllable; hold-to-talk works on a Tier-1 terminal on each OS |
-| M5 | Rigour | `eval`, `session`, traces, cassettes, scorecard | replay-based regression suite runs per-PR; `prompts_per_task` and `undo_rate` tracked (§6.4) |
-| M6 | Swarm | `swarm`, subagent tool, budgets | a 3-subagent research task completes within budget |
+| #   | Name        | Contains                                                                                                        | Exit criterion                                                                                                                                                                                          |
+| --- | ----------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M0  | Skeleton    | `pkg/core`, `config` (incl. per-OS paths), `log`, single-module layout, CI matrix, `deps.yaml`                  | `travis version` builds **and its tests pass natively** on linux/amd64, darwin/arm64, windows/amd64; `lint-deps` + `lint-portability` blocking and green                                                |
+| M1  | Text loop   | `ai` (api-key + OAuth credentials), `brain`, `tools`, `coretools` (8 tools), minimal `cli` on **Bubble Tea v2** | fixes a failing test in a fixture repo, end to end, demonstrated on all three OSes                                                                                                                      |
+| M2  | Enforcement | `security` broker (UDS + named pipe), sandbox tiers, approval UX, change journal + `/undo`                      | red-team suite green on all three OSes; `paranoid` provably blocks writes; Windows tier reported honestly in the UI                                                                                     |
+| M3  | Ecosystem   | `mcp`, `skills`, palette, tools inspector, **`Registry.Prune`**                                                 | 10 public MCP servers install and work from a pin, **with zero lines of per-server Go code**, on Linux/macOS/Windows (`npx.cmd` path included), and tool-schema tokens stay under 6k with all 10 loaded |
+| M4  | Voice       | `voicein`, `voiceout`, audio helper, selective speech, keyboard-only approvals + spoken alerts                  | full voice turn ≤ 900 ms to first syllable; hold-to-talk works on a Tier-1 terminal on each OS                                                                                                          |
+| M5  | Rigour      | `eval`, `session`, traces, cassettes, scorecard                                                                 | replay-based regression suite runs per-PR; `prompts_per_task` and `undo_rate` tracked (§6.4)                                                                                                            |
+| M6  | Swarm       | `swarm`, subagent tool, budgets                                                                                 | a 3-subagent research task completes within budget                                                                                                                                                      |
 
 M1→M2 ordering is deliberate: enforcement arrives before the ecosystem that makes it
 necessary. Do not reorder. **Every exit criterion is a three-OS criterion** (G8): "it
@@ -2412,7 +2671,7 @@ not by review discipline. **If that lint is ever made non-blocking, C1 is back.*
 (`plugin.so`) are effectively unusable: same-compiler, same-flags, Linux-only, no
 unloading. If third parties should add backends without recompiling, the extension
 point must be **out-of-process** (a small gRPC/stdio adapter protocol, or just "it's an
-MCP server"). Config-time swapping among *compiled-in* backends is easy and probably
+MCP server"). Config-time swapping among _compiled-in_ backends is easy and probably
 sufficient — but say which one you mean, because they have wildly different costs.
 **Recommendation:** compiled-in registry for v1; document an out-of-process adapter
 protocol for v2; never promise Go plugins.
@@ -2438,7 +2697,7 @@ will forget the tags. Tier 3 (fallback summariser) is load-bearing, not optional
 **C5 — Tool-count explosion. `RESOLVED → D-03.`** 12 MCP servers ≈ 300 tools ≈ 40k
 tokens of schemas before the user types anything; on a 32k local model the app is
 unusable the day MCP lands. `Registry.Prune` (§5.5) is therefore an M3 exit criterion,
-shipping *with* MCP rather than after it. Two mechanisms, both in M3: static tool
+shipping _with_ MCP rather than after it. Two mechanisms, both in M3: static tool
 groups for deterministic pruning, and lazy disclosure for MCP specifically — expose
 one `mcp.<server>.list_tools` per server and expand on demand, mirroring how skills
 already work (§5.8). Measure with `tokens_of_tool_schemas` in the eval scorecard so
@@ -2455,14 +2714,14 @@ a change journal + `/undo` so reversible work needs no gate, durable decision ru
 the same question is never asked twice, and time-boxed autonomy grants so "go" has an
 end condition. Residual risk: the change journal is real work (snapshot storage, undo
 semantics across interleaved tool calls) and it is now on the M2 critical path. If it
-slips, the fallback is *more prompting*, not less safety — and the scorecard's
+slips, the fallback is _more prompting_, not less safety — and the scorecard's
 `prompts_per_task` will make that visible immediately.
 
 **C6b — the honest counter-argument, recorded.** Reversibility is not binary. `fs.edit`
 in a dirty git tree is less reversible than in a clean one; `exec go build` writes
 caches we do not journal; an `fetch` that POSTs cannot be undone at all. The rule
-therefore uses a **conservative classifier**: reversible means *we hold a snapshot we
-can restore*, not *it feels undoable*. Anything we cannot journal is irreversible by
+therefore uses a **conservative classifier**: reversible means _we hold a snapshot we
+can restore_, not _it feels undoable_. Anything we cannot journal is irreversible by
 default and asks. `fetch` with a method other than GET is irreversible. This is
 stricter than it sounds and is the right side to err on.
 
@@ -2488,7 +2747,7 @@ anything that needs approval. That is the correct trade for a tool whose entire 
 is enforcement below the model.
 
 **C10 — Eval conflates four things.** Split as in §5.13. In particular, LLM-as-judge
-scoring is *not* a regression test — it is noisy and expensive. Deterministic cassette
+scoring is _not_ a regression test — it is noisy and expensive. Deterministic cassette
 replay is what belongs in CI; judged scenarios run nightly.
 
 **C11 — Multi-agent is the lowest value-per-unit-risk item on the list.** It is the
@@ -2504,7 +2763,7 @@ or the first runaway loop is a bad surprise.
 an obvious future feature, and personas are prompt text with implied authority. §5.4.1
 scopes them explicitly; keep that boundary bright.
 
-**C14 — Observability of the *provider*. `CLOSED — minimal scope, not a workstream.`**
+**C14 — Observability of the _provider_. `CLOSED — minimal scope, not a workstream.`**
 The review position is accepted: anyone running a local model already understands that
 quantisation and context length cost speed, and does not need us to explain it. So
 this reduces to three numbers we already have on hand — **tok/s, TTFT, and a
@@ -2538,33 +2797,33 @@ first as skipped Windows CI jobs. Treat a red Windows job exactly like a red Lin
 
 ## 12. Open questions register
 
-| ID | Question | Owner | Needed by |
-|---|---|---|---|
-| ~~OQ-01~~ | ~~Native Windows support?~~ | — | **CLOSED → D-07: yes, first-class, MVP** |
-| OQ-02 | Bus ordering guarantees | | M0 |
-| OQ-03 | Which config subtrees hot-reload | | M1 |
-| OQ-04 | Normalise reasoning tokens across providers | | M1 |
-| OQ-05 | Cold-context retrieval: grep or embeddings | | M2 |
-| OQ-06 | Cross-session memory: built-in or skill | | M3 |
-| OQ-07 | Surface tool pruning in the UI | | M3 |
-| ~~OQ-08~~ | ~~Ship `fs.patch` alongside `fs.edit`~~ | — | **CLOSED → D-08: no; 8 core tools, no `glob`** |
-| OQ-09 | Support MCP sampling requests | | M3 |
-| OQ-10 | MCP roots and resource subscriptions | | M3 |
-| OQ-11 | Skill capability grants | | M3 |
-| OQ-12 | Inline (non-altscreen) render mode | | M1 |
-| OQ-13 | Audio helper process vs build tags | | M4 |
-| OQ-14 | Wake-word engine | | post-v1 |
-| OQ-15 | May tool results speak | | M4 |
-| OQ-16 | Behaviour when Landlock is unavailable | | M2 |
-| OQ-17 | Adopt an external benchmark | | M5 |
-| OQ-18 | Subagent UI presentation | | M6 |
-| OQ-19 | Session encryption at rest | | M5 |
-| ~~OQ-20~~ | ~~Confidence signal for ambiguity detection~~ | — | **CLOSED → D-09: self-reported confidence is uncalibrated; not used** |
-| ~~OQ-21~~ | ~~One Go module or sixteen~~ | — | **CLOSED → D-01: one module, feature packages** |
-| OQ-22 | Change-journal storage: content-addressed blobs vs `git stash`-style refs, and retention | | M2 |
-| OQ-23 | Which vendors' OAuth subscription flows we support at launch, and how we react if one blocks third-party clients | | M1 |
-| OQ-24 | Windows sandbox: restricted token vs AppContainer for MCP `strict` | | M3 |
-| OQ-25 | Exact module path (i.e. which account owns the repo) — decide before the first commit | | M0 |
+| ID        | Question                                                                                                         | Owner | Needed by                                                             |
+| --------- | ---------------------------------------------------------------------------------------------------------------- | ----- | --------------------------------------------------------------------- |
+| ~~OQ-01~~ | ~~Native Windows support?~~                                                                                      | —     | **CLOSED → D-07: yes, first-class, MVP**                              |
+| OQ-02     | Bus ordering guarantees                                                                                          |       | M0                                                                    |
+| OQ-03     | Which config subtrees hot-reload                                                                                 |       | M1                                                                    |
+| OQ-04     | Normalise reasoning tokens across providers                                                                      |       | M1                                                                    |
+| OQ-05     | Cold-context retrieval: grep or embeddings                                                                       |       | M2                                                                    |
+| OQ-06     | Cross-session memory: built-in or skill                                                                          |       | M3                                                                    |
+| OQ-07     | Surface tool pruning in the UI                                                                                   |       | M3                                                                    |
+| ~~OQ-08~~ | ~~Ship `fs.patch` alongside `fs.edit`~~                                                                          | —     | **CLOSED → D-08: no; 8 core tools, no `glob`**                        |
+| OQ-09     | Support MCP sampling requests                                                                                    |       | M3                                                                    |
+| OQ-10     | MCP roots and resource subscriptions                                                                             |       | M3                                                                    |
+| OQ-11     | Skill capability grants                                                                                          |       | M3                                                                    |
+| OQ-12     | Inline (non-altscreen) render mode                                                                               |       | M1                                                                    |
+| OQ-13     | Audio helper process vs build tags                                                                               |       | M4                                                                    |
+| OQ-14     | Wake-word engine                                                                                                 |       | post-v1                                                               |
+| OQ-15     | May tool results speak                                                                                           |       | M4                                                                    |
+| OQ-16     | Behaviour when Landlock is unavailable                                                                           |       | M2                                                                    |
+| OQ-17     | Adopt an external benchmark                                                                                      |       | M5                                                                    |
+| OQ-18     | Subagent UI presentation                                                                                         |       | M6                                                                    |
+| OQ-19     | Session encryption at rest                                                                                       |       | M5                                                                    |
+| ~~OQ-20~~ | ~~Confidence signal for ambiguity detection~~                                                                    | —     | **CLOSED → D-09: self-reported confidence is uncalibrated; not used** |
+| ~~OQ-21~~ | ~~One Go module or sixteen~~                                                                                     | —     | **CLOSED → D-01: one module, feature packages**                       |
+| OQ-22     | Change-journal storage: content-addressed blobs vs `git stash`-style refs, and retention                         |       | M2                                                                    |
+| OQ-23     | Which vendors' OAuth subscription flows we support at launch, and how we react if one blocks third-party clients |       | M1                                                                    |
+| OQ-24     | Windows sandbox: restricted token vs AppContainer for MCP `strict`                                               |       | M3                                                                    |
+| OQ-25     | Exact module path (i.e. which account owns the repo) — decide before the first commit                            |       | M0                                                                    |
 
 ## 13. Risk register
 
