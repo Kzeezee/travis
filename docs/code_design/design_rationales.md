@@ -179,17 +179,32 @@ new adapters can be added without rewriting PreparedWrite
 The same pattern applies to AI providers:
 
 ```text
-internal/brain
-  depends on Provider port
+internal/core
+  defines the Provider port and provider-neutral request/stream/error DTOs
 
-internal/ai
-  contains OpenAI-compatible provider adapter
+internal/agent/loop
+  depends on the Provider port while running the assistant turn
+
+internal/providers/openai
+  contains the OpenAI-compatible HTTP/SSE adapter
+
+internal/providers/ollama or internal/providers/cassette
+  can be added as other Provider adapters
 ```
 
-If OpenAI-compatible HTTP changes, `internal/ai` changes. The brain should not.
+If OpenAI-compatible HTTP changes, `internal/providers/openai` changes. If the
+local model adapter changes, `internal/providers/ollama` changes. The agent loop
+should not change unless the `Provider` port itself was wrong.
+
+The same rule applies to Linux, macOS, and Windows details. OS-specific
+implementations should live in outward modules such as `internal/security/sandbox`,
+`internal/security/broker`, `internal/frontends/voicein`,
+`internal/frontends/voiceout`, or `internal/config`. Inner modules should depend
+on interfaces and DTOs, so an OS implementation change does not force agent or
+policy code to change.
 
 For the full teaching example, see
-[ports_and_adapters.md](implementation/ports_and_adapters.md).
+[ports_and_adapters.md](implementation_example/ports_and_adapters.md).
 
 ## 3. Why Write Event-Based Code This Way
 
@@ -225,7 +240,6 @@ func (r ToolRunner) RunWrite(ctx context.Context, prepared PreparedWrite) error 
     // Tool execution now knows too many concrete reactions.
     r.terminal.ShowToolFinished("fs.write", result.BytesWritten)
     r.session.AppendToolResult("fs.write", result.BytesWritten)
-    r.voice.Say("file written")
     r.eval.RecordToolResult("fs.write", result.BytesWritten)
 
     return nil
@@ -252,8 +266,7 @@ The same coupling shows up in other ways:
 | Problem                                                         | Simple Example                                                                                            |
 | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | Adding a new observer changes `ToolRunner`.                     | Adding telemetry means adding `r.telemetry.RecordToolResult(...)` inside `RunWrite`.                      |
-| A voice failure might accidentally make `fs.write` look failed. | The file write succeeded, but `r.voice.Say(...)` returns an error and `RunWrite` returns that error.      |
-| Tests need many unrelated dependencies.                         | A unit test for `fs.write` now needs fake terminal, fake session, fake voice, and fake eval dependencies. |
+| Tests need many unrelated dependencies.                         | A unit test for `fs.write` now needs fake terminal, fake session, and fake eval dependencies.             |
 
 With event observation, the required work happens first. Then business logic
 publishes one fact:
@@ -291,16 +304,16 @@ func (r ToolRunner) RunWrite(ctx context.Context, prepared PreparedWrite) error 
 Observers live with the module that owns the reaction:
 
 ```text
-internal/cli
+internal/frontends/terminal
   observes ToolCallFinished to update the terminal UI
 
-internal/session
+internal/state/session
   observes ToolCallFinished to record session history
 
-internal/voiceout
+internal/frontends/voiceout
   observes ToolCallFinished to speak important updates
 
-internal/eval
+internal/eval/traces or internal/eval/scorecard
   observes ToolCallFinished to record evaluation traces
 ```
 

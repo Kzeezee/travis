@@ -13,7 +13,7 @@ The active code-design docs are grouped by purpose:
 | --- | --- |
 | Map | [codebase_tour.md](codebase_tour.md) |
 | Rationale | [design_rationales.md](design_rationales.md) |
-| Implementation | [ports_and_adapters.md](implementation/ports_and_adapters.md), [error_handling.md](implementation/error_handling.md) |
+| Implementation Example | [ports_and_adapters.md](implementation_example/ports_and_adapters.md), [error_handling.md](implementation_example/error_handling.md) |
 | Presentation layer | [presentation_layer.md](presentation_layer.md) |
 
 Some packages below describe the intended architecture and may not exist yet. The
@@ -69,8 +69,8 @@ For the user-facing flow this architecture supports, see
 
 ```text
 User input
-  -> cli input
-  -> brain
+  -> terminal input
+  -> agent loop
   -> provider port
   -> provider adapter
   -> model text or tool call
@@ -78,7 +78,7 @@ User input
   -> tool preparation
   -> policy decision
   -> brokered effect
-  -> result back to brain
+  -> result back to agent loop
   -> UI, session, voice, and eval observe progress
 ```
 
@@ -99,23 +99,61 @@ cmd/
   travis-audio/     audio helper process
 
 internal/
-  core/             shared seams: Provider, messages, ToolSpec, events, IDs, errors
-  config/           TOML/env config, validation, OS paths
-  log/              logging facade
-  ai/               provider adapters and credentials
-  brain/            turn loop, prompt/context/budget, tool loop
-  tools/registry/   tool lookup, pruning, schemas, catalog
-  tools/skills/     SKILL.md loader
-  tools/subagent/   nested agents exposed as tools
-  coretools/        built-in tools such as fs.write, grep, exec, fetch
-  mcp/              generic MCP client/supervisor; no per-server Go code
-  security/         policy, capabilities, approvals, broker, sandbox, redaction
-  cli/              Bubble Tea terminal UI
-  voicein/          mic capture, PTT/VAD, STT
-  voiceout/         speech selection, TTS, playback
-  session/          conversation persistence, resume, journal, migrations
-  eval/             cassettes, traces, red-team cases, scorecards
-  testkit/          reusable fakes and contract suites
+  core/               shared seams: Provider, messages, ToolSpec, events, IDs, errors
+  config/             TOML/env config, validation; owns per-OS paths
+  log/                logging facade
+
+  agent/
+    loop/             assistant turn loop: ask model, run tools, continue or stop
+    budget/           token, cost, and step decisions
+    context/          context building and compaction planning
+    prompt/           system prompt, persona, skills, and memory assembly
+    repair/           malformed tool-call repair and provider quirks
+
+  providers/
+    openai/           OpenAI-compatible provider adapter
+    ollama/           local model provider adapter
+    cassette/         replay/test provider adapter
+    auth/             provider login and token refresh flows
+
+  tools/
+    registry/         tool lookup, pruning, schemas, catalog
+    builtin/          fs.write, grep, exec, fetch, ask_user, memory
+    mcp/              generic MCP client and MCP tool adapter
+    skills/           SKILL.md loader
+    subagent/         nested agents exposed as tools
+
+  security/
+    policy/           pure allow, ask, deny decisions
+    capabilities/     capability strings, glob matching, deny-list
+    approvals/        approval decisions and durable rules
+    broker/           broker client/server protocol
+    sandbox/          OS sandbox implementations
+    redaction/        secret and PII masking before logs, traces, export
+    credentials/      secret storage helpers, if not provider-specific
+
+  frontends/
+    terminal/         Bubble Tea terminal UI
+    voicein/          mic capture, PTT/VAD, STT; owns OS mic/device adapters
+    voiceout/         speech selection, TTS, playback; owns OS TTS adapters
+
+  state/
+    session/          conversation persistence and resume
+    journal/          undo snapshots
+    memory/           storage support for memory if it outgrows the tool
+    migrations/       state/schema migrations if needed
+
+  eval/
+    cassettes/        recorded provider responses
+    traces/           event traces
+    redteam/          attack cases
+    scorecard/        cost, tokens, undo rate, other eval metrics
+
+  testkit/
+    tooltest/         tool contract tests
+    providertest/     provider contract tests
+    brokertest/       broker contract tests
+    policytest/       policy fixtures and helpers
 
 tests/
   integration/      cross-module/process tests
@@ -141,11 +179,45 @@ shared only to remove a small duplication
 
 Examples:
 
-- Voice transcript types belong in `voicein` or `voiceout`.
+- Voice transcript types belong in `frontends/voicein` or `frontends/voiceout`.
 - Tool registry types belong in `tools/registry`.
-- Provider-neutral request/stream types belong in `core` because both `brain` and
-  `ai` cross that seam.
+- Provider-neutral request/stream types belong in `core` because both
+  `agent/loop` and `providers/*` cross that seam.
 - Capability matching belongs in `security/capabilities`, not `core`.
+
+Three-OS rule:
+
+```text
+Linux, macOS, and Windows are all MVP targets.
+
+portable code
+  should use shared interfaces, config.Paths(), filepath, and typed capabilities
+
+OS-specific code
+  should live only in the module that owns the OS detail
+  examples: config paths, security transport/sandbox, voice input, voice output
+
+build-tagged files
+  add the interface first
+  add same-shaped linux/darwin/windows files or stubs together
+  document any degraded behavior instead of silently skipping an OS
+```
+
+Code shape:
+
+```text
+good
+  business logic calls config.Paths(), security broker ports, or voice ports
+  the owning adapter handles Linux, macOS, and Windows differences
+
+bad
+  business logic checks runtime.GOOS
+  business logic hard-codes /tmp, ~, $HOME, or C:\ paths
+```
+
+Do not spread `runtime.GOOS`, hard-coded `/tmp`, `~`, `$HOME`, or `C:\` paths
+through business logic. If OS behavior changes, the owning adapter should change,
+not the modules that call it.
 
 ## 4. Pattern: Runtime Validation
 
@@ -176,10 +248,10 @@ Business context:
 
 ```text
 model asks to call fs.write with raw JSON
-  -> coretools parses JSON into WriteArgs
-  -> coretools validates required fields and size limits
-  -> coretools resolves the path into a policy resource
-  -> coretools returns PreparedWrite
+  -> tools/builtin parses JSON into WriteArgs
+  -> tools/builtin validates required fields and size limits
+  -> tools/builtin resolves the path into a policy resource
+  -> tools/builtin returns PreparedWrite
   -> policy and FileWriter receive PreparedWrite facts, not raw JSON
 ```
 
@@ -187,10 +259,10 @@ Validate wherever data first crosses from outside Travis into Travis:
 
 ```text
 process entrypoint: CLI flags, env, TOML config -> internal/config
-tool boundary: model tool-call JSON             -> internal/coretools
-provider boundary: HTTP/SSE chunks              -> internal/ai
-MCP boundary: tool specs and tool-call results  -> internal/mcp
-storage boundary: session files and cassettes   -> internal/session or internal/eval
+tool boundary: model tool-call JSON             -> internal/tools/builtin
+provider boundary: raw provider chunks         -> internal/providers/*
+MCP boundary: tool specs and tool-call results  -> internal/tools/mcp
+storage boundary: session files and cassettes   -> internal/state/session or internal/eval/cassettes
 security boundary: paths and capabilities       -> internal/security/capabilities
 ```
 
@@ -198,12 +270,12 @@ Do not push raw external data deeper into the system:
 
 ```text
 avoid:
-  brain passes json.RawMessage around
+  agent/loop passes json.RawMessage around
   policy reparses raw tool args
   broker receives unchecked paths
 
 better:
-  coretools validates json.RawMessage once
+  tools/builtin validates json.RawMessage once
   policy receives policy.Request
   broker receives WriteFileRequest with a resolved path
 ```
@@ -261,9 +333,9 @@ func PrepareWrite(raw json.RawMessage, env PrepareEnv) (PreparedWrite, error) {
 }
 ```
 
-After this point, `policy`, `brain`, and `FileWriter` should use `PreparedWrite` or
-smaller typed values derived from it. They should not reparse `json.RawMessage` or
-guess whether `Path` was already checked.
+After this point, `policy`, `agent/loop`, and `FileWriter` should use
+`PreparedWrite` or smaller typed values derived from it. They should not reparse
+`json.RawMessage` or guess whether `Path` was already checked.
 
 If a later module needs another guarantee, encode that guarantee in the value it
 receives. For example, if policy requires a resolved path, pass a `policy.Resource`,
@@ -285,18 +357,18 @@ The simplest Travis example is a file-writing tool. The business flow is:
 
 ```text
 model asks to call fs.write
-  -> brain asks the tool registry for fs.write
-  -> coretools parses the raw JSON args
-  -> coretools prepares typed facts: path, content, policy resource
+  -> agent/loop asks the tool registry for fs.write
+  -> tools/builtin parses the raw JSON args
+  -> tools/builtin prepares typed facts: path, content, policy resource
   -> security/policy decides allow, ask, or deny
   -> approved write goes through a FileWriter port
   -> broker adapter performs the real filesystem write
-  -> result goes back to the brain
+  -> result goes back to the agent loop
 ```
 
 Read the code in three roles:
 
-- Business logic: `coretools` owns `fs.write`; it prepares the write and calls an
+- Business logic: `tools/builtin` owns `fs.write`; it prepares the write and calls an
   adapter through a port.
 - Port: `FileWriter` is the small interface the business logic needs.
 - Adapter: the broker-backed writer performs the real filesystem effect.
@@ -383,11 +455,12 @@ type Provider interface {
 }
 ```
 
-`Provider` is the role the brain needs. `OpenAICompatibleProvider` is one adapter.
-More OpenAI-compatible models usually mean more config profiles, not more packages.
+`Provider` is the role the agent loop needs. `OpenAICompatibleProvider` is one
+adapter. More OpenAI-compatible models usually mean more config profiles, not more
+packages.
 
 For the full compact example, read
-[ports_and_adapters.md](implementation/ports_and_adapters.md).
+[ports_and_adapters.md](implementation_example/ports_and_adapters.md).
 
 ## 6. Coupling Guardrails
 
@@ -404,27 +477,30 @@ while Travis runs; they do not mean every package imports every package it point
 ```text
 cmd/travis/main.go
   wires concrete adapters and starts the process:
-    internal/ai
+    internal/providers/openai
+    internal/providers/ollama
     internal/tools/registry
-    internal/coretools
-    internal/mcp
+    internal/tools/builtin
+    internal/tools/mcp
     internal/security/broker
-    internal/cli
-    internal/voicein
-    internal/voiceout
-    internal/session
-    internal/eval
+    internal/security/sandbox
+    internal/frontends/terminal
+    internal/frontends/voicein
+    internal/frontends/voiceout
+    internal/state/session
+    internal/eval/traces
+    internal/eval/scorecard
     |
     v
-internal/cli, internal/voicein, internal/voiceout
+internal/frontends/terminal, internal/frontends/voicein, internal/frontends/voiceout
   collect user input and display observed progress
     |
     v
-internal/brain
+internal/agent/loop
   owns one assistant turn
     |
     +-> internal/core.Provider
-    |     provider port implemented by internal/ai
+    |     provider port implemented by internal/providers/*
     |
     +-> internal/tools/registry
     |     finds built-in, MCP, skill, and subagent tools
@@ -435,7 +511,7 @@ internal/brain
     +-> tool-owned effect ports
     |     implemented by internal/security/broker adapters
     |
-    +-> internal/session
+    +-> internal/state/session
     |     records conversation state and undo snapshots
     |
     +-> internal/core events
@@ -445,14 +521,14 @@ internal/brain
 In Go terms:
 
 ```go
-// internal/brain: owns one assistant turn and depends on the Provider port.
+// internal/agent/loop: owns one assistant turn and depends on the Provider port.
 type TurnRunner struct {
     provider core.Provider
 }
 ```
 
-The brain (`internal/brain`) should hold the provider port. It should not hold an
-OpenAI HTTP client from `internal/ai`.
+The agent loop (`internal/agent/loop`) should hold the provider port. It should
+not hold an OpenAI HTTP client from `internal/providers/openai`.
 
 One-way imports mean outward modules depend on inward modules:
 
@@ -468,24 +544,25 @@ Do it this way so changes in outward modules do not force inward modules to chan
 Examples:
 
 ```text
-internal/ai
+internal/providers/openai
   may import internal/core.Provider and adapt an OpenAI-compatible HTTP client to it
 
-internal/brain
-  should depend on internal/core.Provider, not internal/ai or the OpenAI HTTP client
+internal/agent/loop
+  should depend on internal/core.Provider,
+  not internal/providers/openai or the OpenAI HTTP client
 
 If provider HTTP changes:
-  update internal/ai
-  do not change internal/brain unless the provider port itself was wrong
+  update internal/providers/openai
+  do not change internal/agent/loop unless the provider port itself was wrong
 -------------------------------------------------------------------------
-internal/cli
+internal/frontends/terminal
   may observe internal/core events
 
 internal/security/policy
-  should not import internal/cli
+  should not import internal/frontends/terminal
 
 If the terminal UI changes:
-  update internal/cli
+  update internal/frontends/terminal
   do not change internal/security/policy
 ```
 
@@ -495,29 +572,30 @@ Apply the same rule across the codebase:
 cmd/travis
   may import concrete adapters because it wires the program
 
-internal/brain
-  should not import ai, Bubble Tea, MCP clients, or broker internals
+internal/agent/loop
+  should not import providers, Bubble Tea, MCP clients, or broker internals
 
-internal/coretools
+internal/tools/builtin
   should not perform privileged filesystem, network, or command effects directly
 
 internal/security/policy
   should not import provider, UI, MCP, broker, or filesystem implementations
 
-internal/mcp
+internal/tools/mcp
   should adapt MCP servers into normal Travis tools
 
-internal/cli, internal/session, internal/voicein, internal/voiceout, internal/eval
+internal/frontends/terminal, internal/state/session, internal/frontends/voicein,
+internal/frontends/voiceout, internal/eval/traces, internal/eval/scorecard
   may observe events; should not trigger privileged effects through events
 ```
 
 This keeps change local:
 
 ```text
-OpenAI-compatible stream format changes -> internal/ai
+OpenAI-compatible stream format changes -> internal/providers/openai
 Policy rules change                     -> internal/security/policy
 Broker IPC changes                      -> internal/security/broker
-Terminal UI changes                     -> internal/cli
+Terminal UI changes                     -> internal/frontends/terminal
 ```
 
 Folder names help readers, but they do not enforce architecture. `deps.yaml` is the
@@ -575,7 +653,7 @@ components render and manage local UI behavior
 presentation mappers translate app data into display data
 frontend validation is for feedback; backend entrypoints still validate
 UI sends commands inward and observes events outward
-UI must not import brain, provider, tool, broker, or MCP internals
+UI must not import agent loop, provider, tool, broker, or MCP internals
 ```
 
 For the fuller explanation and code example, read
@@ -599,7 +677,7 @@ Stakeholders in this pattern:
 
 ```text
 Publisher / business logic
-  internal/brain or internal/coretools publishes a fact after required work finishes
+  internal/agent/loop or internal/tools/builtin publishes a fact after required work finishes
 
 Event DTO
   plain typed data such as ToolCallFinished
@@ -608,7 +686,8 @@ Event sink / pub-sub adapter
   receives published events and delivers or queues them
 
 Observer / subscriber / consumer
-  internal/cli, internal/session, internal/voiceout, and internal/eval react to events
+  internal/frontends/terminal, internal/state/session, internal/frontends/voiceout,
+  internal/eval/traces, and internal/eval/scorecard react to events
 
 Background worker
   only for async delivery; drains the event queue and calls observers
@@ -797,7 +876,7 @@ observation and follow-up work that should not change the meaning of the main fl
 For why this pattern exists, read
 [design_rationales.md section 3](design_rationales.md#3-why-write-event-based-code-this-way).
 For event failure rules, read
-[error_handling.md](implementation/error_handling.md#event-observer-failure).
+[error_handling.md](implementation_example/error_handling.md#event-observer-failure).
 
 ## 9. Testing Architecture
 
@@ -826,22 +905,22 @@ func (f fakeProvider) Chat(context.Context, core.ChatRequest) (core.Stream, erro
 }
 ```
 
-The fake crosses the same port as the real provider adapter, so the brain can be
-tested without HTTP, API keys, or a live model.
+The fake crosses the same port as the real provider adapter, so the agent loop can
+be tested without HTTP, API keys, or a live model.
 
 Test the branch where the logic lives:
 
 ```text
-internal/brain             fake providers, fake registries, fake clocks
-internal/ai                request conversion, stream parsing, error translation
-internal/tools/registry    lookup, pruning, schema/catalog behavior
-internal/coretools         JSON parsing, preparation, policy facts, fake broker ports
-internal/security/policy   pure allow, ask, deny tests
-internal/security/broker   focused IPC, filesystem, sandbox integration tests
-internal/mcp               mock protocol tests; pinned real-server tests only when needed
-internal/cli               synthetic messages and event snapshots
-tests/e2e                  compiled CLI user flows
-tests/architecture         import graph and portability checks
+internal/agent/loop          fake providers, fake registries, fake clocks
+internal/providers/openai    request conversion, stream parsing, error translation
+internal/tools/registry      lookup, pruning, schema/catalog behavior
+internal/tools/builtin       JSON parsing, preparation, policy facts, fake broker ports
+internal/security/policy     pure allow, ask, deny tests
+internal/security/broker     focused IPC, filesystem, sandbox integration tests
+internal/tools/mcp           mock protocol tests; pinned real-server tests only when needed
+internal/frontends/terminal  synthetic messages and event snapshots
+tests/e2e                    compiled CLI user flows
+tests/architecture           import graph and portability checks
 ```
 
 This does not mean every line is a unit test. Infrastructure adapters still need
@@ -857,8 +936,8 @@ Read in this order:
 2. [codebase_tour.md](codebase_tour.md) for this short code map.
 3. [Section 4](#4-pattern-runtime-validation) of this tour for runtime validation at system edges.
 4. [Section 8](#8-pattern-events-and-operations) of this tour for events versus operations.
-5. [ports_and_adapters.md](implementation/ports_and_adapters.md) for the compact pattern example.
+5. [ports_and_adapters.md](implementation_example/ports_and_adapters.md) for the compact pattern example.
 6. [presentation_layer.md](presentation_layer.md) for presentation-layer rules.
 7. [design_rationales.md](design_rationales.md) for the main separation principle.
-8. [error_handling.md](implementation/error_handling.md) for cross-cutting error rules.
+8. [error_handling.md](implementation_example/error_handling.md) for cross-cutting error rules.
 9. [DESIGN.md](../DESIGN.md) for the normative architecture record.
