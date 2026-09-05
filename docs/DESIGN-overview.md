@@ -64,13 +64,13 @@ rest.
 ```
  L5  cmd/travis            composition root — wiring and flags only, no logic
                                      │
- L4  cli · voicein · voiceout · eval · session      (UX; talk to brain via the Bus)
+ L4  frontends · state · eval                       (observe events; send user intent)
                                      │
- L3  brain ◄──► swarm                                (agent loop, state machine)
+ L3  agent/loop                                      (assistant turn state machine)
                                      │
- L2  ai (providers)   ·   tools (one registry)
+ L2  providers · tools/registry
                                      │
-        coretools · mcp · skills · swarm  ─ all implement ONE `Tool` interface
+        tools/builtin · tools/mcp · skills · subagent all implement ONE `Tool` interface
                                      │
  L1  security  (policy + broker)     ← every privileged effect funnels through here
                                      │
@@ -81,15 +81,15 @@ rest.
 
 - Never import a higher layer. Never create a cycle. `deps.yaml` lists every legal
   import edge and `make lint-deps` fails the build on anything else.
-- Interfaces live in the **consumer** package. `brain` compiles with zero knowledge of
-  OpenAI, and `cli` with zero knowledge of `brain`.
-- Cross-package types live in `pkg/core`. A type defined in `internal/mcp` and used by
-  `internal/brain` is a review blocker.
+- Interfaces live in the **consumer** package. `agent/loop` compiles with zero knowledge of
+  OpenAI, and `frontends/terminal` with zero knowledge of `agent/loop`.
+- Cross-module shared types live in `internal/core`. A type defined in
+  `internal/tools/mcp` and used by `internal/agent/loop` is a review blocker.
 - `security` imports no tool package. Tools depend on security, never the reverse.
 
 ### The one interface to understand first
 
-Core tools, MCP tools, skills, and subagents are **the same thing** to the brain:
+Built-in tools, MCP tools, skills, and subagents are **the same thing** to the agent loop:
 
 ```go
 type Tool interface {
@@ -101,12 +101,12 @@ type Tool interface {
 }
 ```
 
-Adding MCP is "register N more `Tool`s". The brain does not change. Ever.
+Adding MCP is "register N more `Tool`s". The agent loop does not change. Ever.
 
 ### Everything is events
 
 Modules publish to a typed `Bus` in `core`; the TUI *subscribes*. **If the UI needs to
-show a state, an event must exist for entering and leaving it.** No polling of brain
+show a state, an event must exist for entering and leaving it.** No polling of agent-loop
 internals. This is what makes the UI honest.
 
 ---
@@ -121,15 +121,12 @@ travis/
 ├─ cmd/travis-broker/       privileged effect broker
 ├─ cmd/travis-audio/        CGO audio helper (keeps CGO out of the main binary)
 ├─ internal/
-│  ├─ brain/       agent loop            ├─ mcp/       generic MCP client
-│  ├─ cli/         bubbletea v2 TUI      ├─ skills/    SKILL.md loader
-│  ├─ ai/          providers + auth      ├─ security/  policy, caps, sandbox
-│  ├─ tools/       registry              ├─ voicein/   capture + STT
-│  ├─ coretools/   the 8 tools           ├─ voiceout/  synth + player
-│  ├─ session/     persistence + undo    ├─ eval/      traces, cassettes
-│  └─ swarm/       subagents
-├─ pkg/core/                ← the ONLY public surface (v0, unstable)
-├─ pkg/config/ pkg/log/
+│  ├─ core/        shared seams          ├─ config/    config + OS paths
+│  ├─ log/         logging facade        ├─ agent/     loop, budget, prompt
+│  ├─ providers/   model adapters        ├─ tools/     registry, built-ins, MCP
+│  ├─ security/    policy, broker        ├─ frontends/ terminal, voice
+│  ├─ state/       session + undo        ├─ eval/      traces, cassettes
+│  └─ testkit/     reusable fakes
 ├─ profiles/                personas · mcp · security   (data, not code)
 └─ testdata/                cassettes · fixtures · scenarios · redteam
 ```
@@ -245,7 +242,7 @@ mistakes become security bugs, so:
 
 | | Linux | macOS | Windows |
 |---|---|---|---|
-| TUI, brain, tools, MCP, voice | full | full | full |
+| TUI, agent loop, tools, MCP, voice | full | full | full |
 | Policy enforcement | full | full | **full** (portable Go) |
 | OS sandbox | landlock+seccomp | `sandbox-exec` | restricted token + job object (**weaker**, stated in the UI) |
 | Read fast path | fd passing | fd passing | handle dup / batched IPC |
@@ -327,11 +324,12 @@ exists to prevent.
 
 ### "Tools" means three different things
 
-**`internal/tools`** is the *registry* — namespacing, schema validation, description
-budgeting, the approval table. **`internal/coretools`** is the eight *implementations*.
-**"A tool"** is *anything the model can invoke*, behind one `Tool` interface — core tools,
-MCP tools, skill entry points, subagents. That last one is the design's central
-simplification: adding MCP is "register N more `Tool`s", and `brain` never changes.
+**`internal/tools/registry`** is the registry: namespacing, schema validation,
+description budgeting, and the approval table. **`internal/tools/builtin`** is the
+built-in tool implementation package. **"A tool"** is anything the model can invoke,
+behind one `Tool` interface: built-in tools, MCP tools, skill entry points, and
+subagents. That last one is the design's central simplification: adding MCP is
+"register N more `Tool`s", and `agent/loop` never changes.
 
 ### Enforcement is two jobs, not one (D-17)
 
@@ -356,9 +354,9 @@ as merely **Partial**.
 "Changing outer code doesn't force inner changes" is a true consequence but the least
 important reason. The load-bearing ones: `security` may import **no** tool package, which
 keeps the enforcement layer free of what it enforces against; interfaces live in the
-*consumer* package, so `brain` compiles with zero knowledge of OpenAI. And it is enforced
-**mechanically** by `deps.yaml` + `make lint-deps` — C1 is blunt: *"if that lint is ever
-made non-blocking, C1 is back."*
+*consumer* package, so `agent/loop` compiles with zero knowledge of OpenAI. And it is
+enforced **mechanically** by `deps.yaml` + `make lint-deps` — C1 is blunt: *"if that
+lint is ever made non-blocking, C1 is back."*
 
 ### Cassettes are not "AI evaluation"
 

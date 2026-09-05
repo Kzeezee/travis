@@ -87,10 +87,10 @@ trigger privileged effects.
 
 ## 3. Folder Placement
 
-The repository is one Go module with private internal modules. There is no `pkg/`
-directory yet because no external Go code imports Travis types. MCP servers talk to
-Travis over stdio/HTTP, not Go imports. _Note that this structure is not set in stone
-and should be changed whenever necessary_
+The repository is one Go module with private internal modules. Shared app types
+live under `internal/core`; MCP servers talk to Travis over stdio/HTTP, not Go
+imports. _Note that this structure is not set in stone and should be changed
+whenever necessary_
 
 ```text
 cmd/
