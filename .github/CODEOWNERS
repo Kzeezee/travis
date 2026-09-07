@@ -1,0 +1,11 @@
+# Scoped to the enforcement layer only: the files whose weakening would not be visible
+# in a diff of the code they guard. Inert until branch protection turns on "require
+# review from Code Owners" (docs/plans/ci-testing-pipeline.md §1, R6).
+
+/.github/            @Kzeezee
+/Makefile            @Kzeezee
+/.golangci.yml       @Kzeezee
+/.golangci-lint-version @Kzeezee
+/deps.yaml           @Kzeezee
+/docs/DESIGN.md      @Kzeezee
+/docs/Code-Conventions.md @Kzeezee

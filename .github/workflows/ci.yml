@@ -1,0 +1,198 @@
+# Stage 1 of the §8 build gates. Each remaining gate ships in the same PR as the thing
+# it checks — a job that passes vacuously is worse than an absent one (DESIGN.md §9.4).
+# Third-party actions are pinned to full commit SHAs; Dependabot moves them.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    # `labeled` is load-bearing: without it, applying ci:macos does nothing until the
+    # next push (docs/plans/ci-testing-pipeline.md §4).
+    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Supersede in-flight PR runs; never cancel a run on main, it is the only detector for
+# two green PRs that break together (no merge queue, R4).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Never silently download a different toolchain than the one go.mod asks for.
+  GOTOOLCHAIN: local
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # windows-latest ships gcc, so -race works natively. It has no GNU make, which
+        # is why this calls go directly.
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Test
+        if: matrix.os != 'ubuntu-latest'
+        run: go test -race -timeout 5m -shuffle=on ./...
+
+      - name: Test with coverage
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -race -timeout 5m -shuffle=on -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          {
+            echo '### Coverage'
+            echo ''
+            echo '```'
+            go tool cover -func=coverage.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # macOS minutes cost ~10x Linux, so it is opt-in: the ci:macos label, main, or a manual
+  # run. Apply the label for build tags, config paths, security, voice, or goldens.
+  test-macos:
+    name: test (macos-latest)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:macos')
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Test
+        run: go test -race -timeout 5m -shuffle=on ./...
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # Bundles staticcheck and the formatters, so there is no separate gofmt job.
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version-file: .golangci-lint-version
+
+      # Ubuntu-only analysis never compiles sandbox_windows.go. One minute on the cheap
+      # runner beats eight inside the Windows job (DESIGN.md §8.1).
+      - name: Vet for the other supported OSes
+        run: |
+          GOOS=windows go vet ./...
+          GOOS=darwin go vet ./...
+
+  build-tags-tools:
+    name: build (tags=tools)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # Plain `go build ./...` skips internal/cli/deps.go, so a broken Charm pin (D-06)
+      # is invisible. Delete this job with that file in Phase 1.
+      - name: Build with the tools tag
+        run: go build -tags tools ./...
+
+  tidy-and-verify:
+    name: tidy and verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Verify module checksums
+        run: go mod verify
+      - name: Check go.mod and go.sum are tidy
+        run: go mod tidy -diff
+
+  vulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+      - name: Scan
+        run: govulncheck ./...
+
+  # The single required check. Branch protection names this job and nothing else, so
+  # editing the matrix above cannot silently rename a required check away.
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs: [test, test-macos, lint, build-tags-tools, tidy-and-verify, vulncheck]
+    steps:
+      - name: Assert every job succeeded
+        env:
+          TEST: ${{ needs.test.result }}
+          TEST_MACOS: ${{ needs.test-macos.result }}
+          LINT: ${{ needs.lint.result }}
+          BUILD_TAGS_TOOLS: ${{ needs.build-tags-tools.result }}
+          TIDY_AND_VERIFY: ${{ needs.tidy-and-verify.result }}
+          VULNCHECK: ${{ needs.vulncheck.result }}
+        run: |
+          set -uo pipefail
+          status=0
+
+          # Explicit, because skipped is not failed and would otherwise pass a `!= failure` test.
+          for job in TEST LINT BUILD_TAGS_TOOLS TIDY_AND_VERIFY VULNCHECK; do
+            result="${!job}"
+            echo "$job: $result"
+            if [ "$result" != "success" ]; then
+              echo "::error::required job $job did not succeed (result: $result)"
+              status=1
+            fi
+          done
+
+          # macOS alone may be skipped, because it is opt-in per PR.
+          echo "TEST_MACOS: $TEST_MACOS"
+          case "$TEST_MACOS" in
+            success | skipped) ;;
+            *)
+              echo "::error::macOS tests did not succeed (result: $TEST_MACOS)"
+              status=1
+              ;;
+          esac
+
+          exit "$status"
