@@ -5,6 +5,9 @@ A Bubbletea v2 (Go) CLI personal assistant app with modular feature sets, suppor
 ## Code standards
 - Focus on self-documenting code
 - Comments are max a single line describing complex large sections or files
+- `docs/Code-Conventions.md` is the dense checklist of patterns to follow (ports and
+  adapters, events vs operations, error handling, testing, frontend layering); read
+  it before writing non-trivial code
 
 ## Where the design lives
 - `docs/DESIGN.md` is normative. §0.5 is the decision register (D-01..D-34), §0.6 explains
@@ -14,6 +17,8 @@ A Bubbletea v2 (Go) CLI personal assistant app with modular feature sets, suppor
 - `docs/PLAN.md` is build order and parallelism only — it holds no decisions
 - `docs/DEV-SETUP.md` is clone-to-working-editor
 - Do not relitigate a `D-nn` decision in a PR; reversing one needs an RFC
+- Do not read or reference anything under `docs/code_design/` unless explicitly
+  asked to; it is verbose background material, not day-to-day guidance
 
 ## Git
 - Never mix a formatter pass over a whole file with content edits in the same commit.
