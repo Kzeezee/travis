@@ -68,7 +68,8 @@ If `code` is not on your PATH, open VS Code and run *Shell Command: Install 'cod
 in PATH* from the command palette.
 
 Why these four: `golang.go` drives gopls and the test runner · travis's config is TOML
-throughout · `deps.yaml` and the CI workflows are YAML · Phase 0 adds a `Makefile`.
+throughout · `deps.yaml`, `.golangci.yml` and the CI workflows are YAML · the repo has a
+`Makefile` (§7).
 
 **Suggested workspace settings.** `.vscode/` is gitignored, so this is per-person. Create
 `.vscode/settings.json`:
@@ -140,7 +141,43 @@ Then point `provider.profiles.local.base_url` at `http://127.0.0.1:11434/v1`.
 Use local models for day-to-day development; save a paid provider for quality
 benchmarking near the end.
 
-## 7. Common problems
+## 7. The Makefile, and what CI will run
+
+`make help` lists the targets. `make check` is everything CI runs, on your machine, in
+CI's order: `build vet lint test-race tidy vuln`. Run it before pushing.
+
+| Target | What it is |
+| --- | --- |
+| `make build` | `go build ./...` **and** `-tags tools ./...` (§5) |
+| `make test` / `make test-race` | unit tests; `-race` is what CI runs |
+| `make lint` | `golangci-lint run` at the version pinned in `.golangci-lint-version` |
+| `make fmt` | `gofmt` + `goimports` — the same formatters gopls applies on save |
+| `make vet` | `go vet` for this OS **and** `GOOS=windows` / `GOOS=darwin` |
+| `make tidy` | `go mod verify` and `go mod tidy -diff` |
+| `make vuln` | `govulncheck ./...` |
+
+`lint` and `vuln` install their pinned tool into `$(go env GOPATH)/bin` on first use.
+Bump a pin by editing `.golangci-lint-version` or `GOVULNCHECK_VERSION`, never by
+reaching for `@latest`.
+
+**There is no `make` on `windows-latest`,** so CI calls `go` directly and the targets
+above are a convenience, not the definition of the gates. If you add a gate, add it to
+`.github/workflows/ci.yml` as a `go` command first, then wrap it here.
+
+**Tests run with `-shuffle=on`.** Order-dependent tests fail intermittently instead of
+never. On failure Go prints `-test.shuffle <seed>`; replay it exactly with
+`go test -shuffle=<seed> ./...` — the seed is in the CI log too.
+
+**One required check, named `ci`.** It is an aggregator over the real jobs, so a matrix
+edit cannot silently rename the required check away.
+
+**`ci:macos` label.** macOS runner minutes cost ~10x Linux, so `test (macos-latest)`
+only runs on `main`, on a manual dispatch, or when a PR carries the `ci:macos` label —
+otherwise it shows as *skipped* and `ci` is still green. Apply the label when reviewing
+or opening a PR that touches build tags, `config` paths, `security`, voice, or golden
+files. Applying it re-triggers the workflow; no push is needed.
+
+## 8. Common problems
 
 | Symptom | Cause |
 | --- | --- |

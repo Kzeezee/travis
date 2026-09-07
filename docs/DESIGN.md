@@ -2693,6 +2693,12 @@ graph, not from `go.mod` boundaries. To restate the confirmation asked for in re
 **"modular" here means package-per-function with enforced seams, and there is exactly
 one `go.mod`.**
 
+> **Naming supersession.** `docs/Code-Conventions.md` wins on *package layout*: there is
+> no `pkg/`, and the packages are `agent/loop`, `tools/builtin`, `providers/*`,
+> `frontends/terminal`. The tree below and the names used elsewhere in this document are
+> the older spelling. Nothing else in §8 changes — the dependency rules, the gate list,
+> and every `D-nn` stand as written.
+
 ```
 travis/
 ├─ go.mod                          ← exactly one, at the root
