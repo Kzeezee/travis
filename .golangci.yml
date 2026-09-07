@@ -1,0 +1,131 @@
+# Mechanical enforcement of rules that otherwise live only in prose (DESIGN.md §8/§8.1,
+# Code-Conventions.md). depguard is not deps.yaml and forbidigo is not lint-portability:
+# both of those still ship with their own Makefile targets.
+version: "2"
+
+run:
+  # internal/cli/deps.go is behind //go:build tools; without this it is never analysed.
+  build-tags:
+    - tools
+  timeout: 5m
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - depguard
+    - errorlint
+    - exhaustive
+    - forbidigo
+    - gosec
+    - noctx
+    - nolintlint
+
+  settings:
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^time\.Now$
+          msg: >-
+            Clocks are injected. Business logic takes a clock port from internal/core so
+            tests are deterministic (Code-Conventions.md, ports and adapters).
+        - pattern: ^runtime\.GOOS$
+          msg: >-
+            OS specifics belong in build-tagged files inside the owning adapter (config,
+            security, voice). Everywhere else this is a review blocker (DESIGN.md §8.1).
+        - pattern: ^os\.Getenv$
+          msg: >-
+            Environment is external input: read it at the config boundary and pass typed
+            values inward. HOME in particular is config.Paths()'s job (DESIGN.md §8.1).
+        - pattern: ^fmt\.Print(|f|ln)$
+          msg: >-
+            Stdout belongs to the TUI. Use the writer you were given, or the logger
+            (DESIGN.md §5.1).
+
+    depguard:
+      rules:
+        # Charm is the terminal frontend's dependency, not the application's (D-06).
+        charm-stays-in-the-frontend:
+          files:
+            - $all
+            - "!**/internal/frontends/terminal/**"
+            # internal/cli/deps.go is the temporary D-06 pin; it goes away in Phase 1.
+            - "!**/internal/cli/**"
+          deny:
+            - pkg: charm.land
+              desc: Bubble Tea, Bubbles and Lip Gloss may only be imported by the terminal frontend.
+            - pkg: github.com/charmbracelet
+              desc: Bubble Tea, Bubbles and Lip Gloss may only be imported by the terminal frontend.
+
+        # Decision code takes ports, never effects (Code-Conventions.md, dependency direction).
+        decision-code-performs-no-effects:
+          files:
+            - "**/internal/agent/loop/**"
+            - "**/internal/security/policy/**"
+          deny:
+            - pkg: net/http
+              desc: The agent loop and the policy engine decide; adapters perform. Depend on a port.
+            - pkg: os/exec
+              desc: Process execution is the broker's job and is re-validated there (DESIGN.md §4.4).
+
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+
+    exhaustive:
+      # allow/ask/deny and StopReason are "exactly one of N" only if the switch says so.
+      check:
+        - switch
+      default-signifies-exhaustive: false
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
+  exclusions:
+    generated: lax
+    warn-unused: true
+    presets:
+      - comments
+      - common-false-positives
+      - std-error-handling
+    rules:
+      # The clock port itself has to call the clock.
+      - path: (^|/)internal/core/
+        linters:
+          - forbidigo
+        text: time\.Now
+
+      # The adapters that own OS and environment specifics (DESIGN.md §8.1).
+      - path: (^|/)internal/(config|security|voicein|voiceout)/
+        linters:
+          - forbidigo
+        text: runtime\.GOOS|os\.Getenv
+
+      # The version banner reports the platform it was built for; that is its whole job.
+      - path: (^|/)cmd/travis/main\.go$
+        linters:
+          - forbidigo
+        text: runtime\.GOOS
+
+      - path: _test\.go$
+        linters:
+          - forbidigo
+          - gosec
+
+issues:
+  max-issues-per-linter: 0 # never truncate: a hidden violation is an unenforced rule
+  max-same-issues: 0
+  uniq-by-line: false # two linters can be right about the same line for different reasons
+
+formatters:
+  # gofmt + goimports only. gofumpt would fight DEV-SETUP.md's format-on-save via gopls.
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/Kzeezee/travis
