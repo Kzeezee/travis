@@ -233,7 +233,7 @@ mistakes become security bugs, so:
 - **`runtime.GOOS` outside `config`, `security`, `voicein`, `voiceout` is a review
   blocker.** OS-specific code goes in tagged files (`sandbox_windows.go`), always with
   siblings for the other two plus a fail-closed stub.
-- **No path literals.** `filepath.Join`, never `"a/b"`. `config.Paths()`, never `~` or
+- **No path literals.** `filepath.Join`, never `"a/b"`. `config.BuildCurrentPathSet()`, never `~` or
   `$XDG_CONFIG_HOME` or `%AppData%`.
 - **Case sensitivity matters.** Capability globs match case-insensitively on Windows
   and macOS. A case-sensitive check on a case-insensitive filesystem is a bypass.

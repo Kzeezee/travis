@@ -191,7 +191,7 @@ Three-OS rule:
 Linux, macOS, and Windows are all MVP targets.
 
 portable code
-  should use shared interfaces, config.Paths(), filepath, and typed capabilities
+  should use shared interfaces, config.BuildCurrentPathSet(), filepath, and typed capabilities
 
 OS-specific code
   should live only in the module that owns the OS detail
@@ -207,7 +207,7 @@ Code shape:
 
 ```text
 good
-  business logic calls config.Paths(), security broker ports, or voice ports
+  business logic calls config.BuildCurrentPathSet(), security broker ports, or voice ports
   the owning adapter handles Linux, macOS, and Windows differences
 
 bad

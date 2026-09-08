@@ -783,7 +783,7 @@ func (c *Config) Validate() Diagnostics   // warnings + errors, never panics
 #### 5.2.1 Paths are resolved per-OS, and nothing else in the codebase knows this
 
 Hard-coding `~/.travis` or `$XDG_CONFIG_HOME` would be a Windows bug in the first
-week. `config` exposes `Paths()` and **every other package MUST use it**; a literal
+week. `config` exposes `BuildCurrentPathSet()` and **every other package MUST use it**; a literal
 `~/.travis`, `/etc/`, or `os.Getenv("HOME")` outside this package is a lint error.
 
 | Role                                 | Linux                                            | macOS                                         | Windows                            |
@@ -1475,7 +1475,7 @@ type Skill struct {
 
 ```toml
 [skills]
-# "user:" and "system:" expand via config.Paths() (§5.2.1), so one config works on
+# "user:" and "system:" expand via config.BuildCurrentPathSet() (§5.2.1), so one config works on
 # Linux, macOS, and Windows. Literal ~ or C:\ here is a portability bug.
 roots = ["user:skills", "./.travis/skills", "system:skills"]
 autoload = true
@@ -1945,7 +1945,7 @@ re-fetch. Bounded, not solved, by §5.4's loop detection.
 #### 5.12.5 Performance, and the IPC transport per OS
 
 The broker link is a **length-prefixed msgpack request/response protocol** over a
-local transport chosen by `config.Paths()`: a Unix domain socket on Linux and macOS,
+local transport chosen by `config.BuildCurrentPathSet()`: a Unix domain socket on Linux and macOS,
 a named pipe (`\\.\pipe\travis-<sid>`) on Windows. Both are `net.Conn` in Go
 (`npipe`/`winio` on Windows), so the protocol code is OS-independent and only the
 listener differs — about 40 lines behind a build tag. Peer identity is checked:
@@ -2030,7 +2030,7 @@ argument instead of a measurement. All of it runs on all three OSes (G8).
 ```toml
 [eval]
 traces      = true
-trace_dir   = "state:traces"   # resolved per-OS by config.Paths()
+trace_dir   = "state:traces"   # resolved per-OS by config.BuildCurrentPathSet()
 otel        = { enabled = false, endpoint = "" }
 judge       = "cloud"           # provider profile used for rubric grading
 ```
@@ -2740,7 +2740,7 @@ handful of rules are followed from M0 rather than retrofitted in M4.
   plus `sandbox_stub.go` so an unknown GOOS still compiles and fails closed.
 - **Every OS-specific file has a same-signature sibling for the other two.** No
   feature may exist on one OS only without a documented degradation on the others.
-- **No path literals.** `filepath.Join`, never `"a/b"`; `config.Paths()`, never `~`.
+- **No path literals.** `filepath.Join`, never `"a/b"`; `config.BuildCurrentPathSet()`, never `~`.
   A grep for `"/"` in a path context is part of the review checklist.
 - **Line endings:** `.gitattributes` normalises to LF in the repo; `fs.write`
   preserves the file's existing convention and defaults to the OS convention for new

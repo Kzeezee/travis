@@ -25,28 +25,30 @@ material, not active guidance.
 
 Already landed:
 
-| Done | Detail |
-| --- | --- |
-| Module path | `github.com/Kzeezee/travis` |
-| Go toolchain | `go 1.25.0` directive |
-| Dependency pins | Bubble Tea v2 dependencies are pinned through a temporary `tools` build-tag file |
-| `travis version` | Command and test exist |
-| Repo hygiene | `.editorconfig`, `.gitattributes`, `.gitignore`, `AGENTS.md`, `CLAUDE.md` |
+| Done             | Detail                                                                           |
+| ---------------- | -------------------------------------------------------------------------------- |
+| Module path      | `github.com/Kzeezee/travis`                                                      |
+| Go toolchain     | `go 1.25.0` directive                                                            |
+| Dependency pins  | Bubble Tea v2 dependencies are pinned through a temporary `tools` build-tag file |
+| `travis version` | Command and test exist                                                           |
+| Repo hygiene     | `.editorconfig`, `.gitattributes`, `.gitignore`, `AGENTS.md`, `CLAUDE.md`        |
 
-Current planning changes:
+Current Phase 0 work:
 
-- Use one Go module.
-- Keep shared app types under `internal/core`.
-- Do not create the whole future folder tree upfront.
-- Create a package when the next PR needs it.
-- Keep PRs small enough that one person can review them properly.
+| PR                                  | Status                        | Notes                                                                                                        |
+| ----------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **0A - Docs and plan alignment**    | Covered by this branch        | Simplifies the plan, aligns code-design docs, and records the smaller foundation strategy                    |
+| **0B - Minimal core/config/log**    | Covered for Phase 0 scope     | Adds only the shared DTOs, path/platform seam, and logging facade needed before Phase 1                      |
+| **0C - CI and architecture checks** | Not done                      | Adds Linux/macOS/Windows CI plus `go test`, `go vet`, `go mod verify`, import checks, and portability checks |
+| **0D - Team rules and setup check** | Partly covered by this branch | Updates team rules; another dev with non mac-OS still needs to verify `docs/DEV-SETUP.md`                    |
 
-Before feature work forks, we still need:
+Before feature work forks, finish 0C and the other-OS setup check from 0D.
 
-- a small code foundation: `internal/core`, `internal/config`, `internal/log`;
-- basic import and portability checks;
-- CI on Linux, macOS, and Windows;
-- the first real seams for providers, tools, and event observation.
+Deferred `0B` work is assigned to the later PR that first needs it. In
+particular, provider adapters stay in 1A, tool execution stays in 1B, terminal
+event rendering stays in 1C, agent-loop event publication stays in 1D, config
+file loading stays in 1E, security policy stays in 2A, broker execution stays in
+2B, and session/journal storage stays in 2C.
 
 ---
 
@@ -83,15 +85,15 @@ multiple modules changing for one small behavior
 
 ## 3. Plan At A Glance
 
-| Phase | Goal | End state |
-| --- | --- | --- |
-| 0 | Align docs and build the smallest foundation | The team can work from the same package map and CI catches obvious architecture mistakes |
-| 1 | Text assistant MVP | Travis can ask a model, run built-in tools, and show progress in the terminal |
-| 2 | Security enforcement | File/process/network effects go through policy and brokered execution |
-| 3 | MCP and skills | Travis can load skills and talk to trusted/local MCP servers |
-| 4 | Sandbox for third-party code | Public MCP servers can run under OS sandboxing |
-| 5 | Voice | Travis can speak first; voice input comes after |
-| 6 | Evaluation | Scenario suites and scorecards measure whether the assistant is useful |
+| Phase | Goal                                         | End state                                                                                |
+| ----- | -------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| 0     | Align docs and build the smallest foundation | The team can work from the same package map and CI catches obvious architecture mistakes |
+| 1     | Text assistant MVP                           | Travis can ask a model, run built-in tools, and show progress in the terminal            |
+| 2     | Security enforcement                         | File/process/network effects go through policy and brokered execution                    |
+| 3     | MCP and skills                               | Travis can load skills and talk to trusted/local MCP servers                             |
+| 4     | Sandbox for third-party code                 | Public MCP servers can run under OS sandboxing                                           |
+| 5     | Voice                                        | Travis can speak first; voice input comes after                                          |
+| 6     | Evaluation                                   | Scenario suites and scorecards measure whether the assistant is useful                   |
 
 ---
 
@@ -102,12 +104,12 @@ multiple modules changing for one small behavior
 Goal: agree on the working structure and create only the interfaces needed for
 the next phase. This is not a full skeleton phase.
 
-| PR | Owner | Work | Depends on |
-| --- | --- | --- | --- |
-| **0A - Docs and plan alignment** | You | Finish the simplified code-design docs, update this plan, and make the folder names consistent | none |
-| **0B - Minimal core/config/log** | 1 person | Add `internal/core`, `internal/config`, `internal/log`; include only types needed by Phase 1 | 0A |
-| **0C - CI and architecture checks** | 1 person | Add Linux/macOS/Windows CI, `go test`, `go vet`, `go mod verify`, import checks, portability checks | 0A |
-| **0D - Team rules and setup check** | 1 person | Update `AGENTS.md` with hard rules; verify `DEV-SETUP.md` on another OS | 0A |
+| PR                                  | Owner    | Work                                                                                                | Depends on |
+| ----------------------------------- | -------- | --------------------------------------------------------------------------------------------------- | ---------- |
+| **0A - Docs and plan alignment**    | You      | Finish the simplified code-design docs, update this plan, and make the folder names consistent      | none       |
+| **0B - Minimal core/config/log**    | 1 person | Add `internal/core`, `internal/config`, `internal/log`; include only types needed by Phase 1        | 0A         |
+| **0C - CI and architecture checks** | 1 person | Add Linux/macOS/Windows CI, `go test`, `go vet`, `go mod verify`, import checks, portability checks | 0A         |
+| **0D - Team rules and setup check** | 1 person | Update `AGENTS.md` with hard rules; verify `DEV-SETUP.md` on another OS                             | 0A         |
 
 Phase 0 parallelism:
 
@@ -129,13 +131,14 @@ Goal: ship the first real assistant loop without security enforcement. Effects
 can still use simple local implementations, but the code must already call them
 through ports.
 
-| PR | Work | Depends on |
-| --- | --- | --- |
-| **1A - Provider adapter** | `internal/providers/openai` plus cassette/replay support for tests | 0B |
-| **1B - Built-in tools** | `internal/tools/registry` and `internal/tools/builtin` for `fs.read`, `grep`, `fs.write`, `fs.edit`, `fetch`, `ask_user`, `memory` | 0B |
-| **1C - Terminal frontend** | `internal/frontends/terminal` root Bubble Tea model, status bar, prompt box, tool cards, event-driven rendering | 0B |
-| **1D - Agent loop wiring** | `internal/agent/loop` plus `cmd/travis` wiring: prompt, provider call, tool call, result, continue/stop | 1A, 1B, 1C |
-| **1E - First end-to-end task** | Fixture notes/files task, cassette-backed tests, basic trace output | 1D |
+| PR                             | Work                                                                                                                               | Depends on |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| **1A - Provider adapter**      | `internal/providers/openai` plus cassette/replay support for tests                                                                 | 0B         |
+| **1B - Built-in tools**        | `internal/tools/registry` and `internal/tools/builtin` for `fs.read`, `grep`, `fs.write`, `fs.edit`, `fetch`, `ask_user`, `memory` | 0B         |
+| **1C - Terminal frontend**     | `internal/frontends/terminal` root Bubble Tea model, status bar, prompt box, tool cards, event-driven rendering                    | 0B         |
+| **1D - Agent loop wiring**     | `internal/agent/loop` plus `cmd/travis` wiring: prompt, provider call, tool call, result, continue/stop                            | 1A, 1B, 1C |
+| **1E - Config file loading**   | TOML config loading, precedence, validation, and any MVP hot-reload decision                                                       | 0B         |
+| **1F - First end-to-end task** | Fixture notes/files task, cassette-backed tests, basic trace output                                                                | 1D, 1E     |
 
 Phase 1 parallelism:
 
@@ -145,7 +148,7 @@ After Phase 0, assign at most three parallel PRs:
   1B tools
   1C terminal
 
-Then merge them through 1D.
+Then merge them through 1D. Do 1E before 1F.
 ```
 
 Phase 1 exit:
@@ -161,13 +164,13 @@ Goal: move required effects behind policy and brokered execution. The assistant
 should not directly touch files, commands, or network effects when enforcement is
 on.
 
-| PR | Work | Depends on |
-| --- | --- | --- |
-| **2A - Capabilities and policy** | `internal/security/capabilities`, `internal/security/policy`; pure allow/ask/deny decisions | 1D |
-| **2B - Broker process** | `cmd/travis-broker`, broker protocol, local broker adapter, remote broker adapter | 2A |
-| **2C - Journal and undo** | `internal/state/session`, `internal/state/journal`, snapshot-before-write, `/undo` | 2A |
-| **2D - Approvals, deny-list, redaction** | Approval modal, durable approval rules, deny-list, secret/PII redaction | 2A |
-| **2E - Red-team gate** | Attack cases and assertions that policy denies the right thing for the right reason | 2B, 2C, 2D |
+| PR                                       | Work                                                                                        | Depends on |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------- | ---------- |
+| **2A - Capabilities and policy**         | `internal/security/capabilities`, `internal/security/policy`; pure allow/ask/deny decisions | 1D         |
+| **2B - Broker process**                  | `cmd/travis-broker`, broker protocol, local broker adapter, remote broker adapter           | 2A         |
+| **2C - Journal and undo**                | `internal/state/session`, `internal/state/journal`, snapshot-before-write, `/undo`          | 2A         |
+| **2D - Approvals, deny-list, redaction** | Approval modal, durable approval rules, deny-list, secret/PII redaction                     | 2A         |
+| **2E - Red-team gate**                   | Attack cases and assertions that policy denies the right thing for the right reason         | 2B, 2C, 2D |
 
 Phase 2 parallelism:
 
@@ -190,11 +193,11 @@ Goal: make Travis useful outside local files while still treating third-party
 code carefully. Public MCP should not be considered safe until Phase 4 sandboxing
 exists.
 
-| PR | Work | Depends on |
-| --- | --- | --- |
-| **3A - MCP client** | `internal/tools/mcp`; stdio client, tool adapter, supervision for trusted/local servers | 2A |
-| **3B - Skills loader** | `internal/tools/skills`; load `SKILL.md`, select relevant skills, treat user/project instructions as untrusted text | 1D |
-| **3C - Tool pruning and inspectors** | Registry pruning, `/` palette, active tools/context inspector | 3A, 3B |
+| PR                                   | Work                                                                                                                | Depends on |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- | ---------- |
+| **3A - MCP client**                  | `internal/tools/mcp`; stdio client, tool adapter, supervision for trusted/local servers                             | 2A         |
+| **3B - Skills loader**               | `internal/tools/skills`; load `SKILL.md`, select relevant skills, treat user/project instructions as untrusted text | 1D         |
+| **3C - Tool pruning and inspectors** | Registry pruning, `/` palette, active tools/context inspector                                                       | 3A, 3B     |
 
 Phase 3 exit:
 
@@ -206,13 +209,13 @@ Phase 3 exit:
 
 Goal: make third-party MCP servers safe enough to run by default.
 
-| PR | Work | Depends on |
-| --- | --- | --- |
-| **4A - Sandbox interface and stubs** | Shared `Sandbox` interface plus Linux/macOS/Windows stubs | 3A |
-| **4B - Linux sandbox** | Landlock/seccomp/user namespace implementation and tests | 4A |
-| **4C - macOS sandbox** | macOS sandbox implementation and tests | 4A |
-| **4D - Windows sandbox** | Restricted token/job object/firewall approach and tests | 4A |
-| **4E - Public MCP enablement** | Run public MCP servers through sandbox by default; report sandbox tier in UI | 4B, 4C, 4D |
+| PR                                   | Work                                                                         | Depends on |
+| ------------------------------------ | ---------------------------------------------------------------------------- | ---------- |
+| **4A - Sandbox interface and stubs** | Shared `Sandbox` interface plus Linux/macOS/Windows stubs                    | 3A         |
+| **4B - Linux sandbox**               | Landlock/seccomp/user namespace implementation and tests                     | 4A         |
+| **4C - macOS sandbox**               | macOS sandbox implementation and tests                                       | 4A         |
+| **4D - Windows sandbox**             | Restricted token/job object/firewall approach and tests                      | 4A         |
+| **4E - Public MCP enablement**       | Run public MCP servers through sandbox by default; report sandbox tier in UI | 4B, 4C, 4D |
 
 Phase 4 parallelism:
 
@@ -231,11 +234,11 @@ Phase 4 exit:
 
 Goal: add voice without blocking the text assistant path.
 
-| PR | Work | Depends on |
-| --- | --- | --- |
-| **5A - Voice output** | `internal/frontends/voiceout`; speech selection and system TTS adapter | 1D |
-| **5B - Audio helper shape** | `cmd/travis-audio` plus voice input interfaces and OS stubs | 5A |
-| **5C - Voice input** | `internal/frontends/voicein`; mic capture, VAD, local transcription, per-OS permissions | 5B |
+| PR                          | Work                                                                                    | Depends on |
+| --------------------------- | --------------------------------------------------------------------------------------- | ---------- |
+| **5A - Voice output**       | `internal/frontends/voiceout`; speech selection and system TTS adapter                  | 1D         |
+| **5B - Audio helper shape** | `cmd/travis-audio` plus voice input interfaces and OS stubs                             | 5A         |
+| **5C - Voice input**        | `internal/frontends/voicein`; mic capture, VAD, local transcription, per-OS permissions | 5B         |
 
 Phase 5 exit:
 
@@ -246,11 +249,11 @@ Phase 5 exit:
 
 Goal: measure whether Travis is useful, not just whether it works.
 
-| PR | Work | Depends on |
-| --- | --- | --- |
-| **6A - Scenario harness** | Fixture workspaces, scripted tasks, pass/fail assertions | 1E |
-| **6B - Scorecard** | prompts per task, undo rate, unattended completion rate, tool-schema tokens | 6A |
-| **6C - Trace redaction checks** | Ensure traces attached to failures do not leak secrets | 2D, 6A |
+| PR                              | Work                                                                        | Depends on |
+| ------------------------------- | --------------------------------------------------------------------------- | ---------- |
+| **6A - Scenario harness**       | Fixture workspaces, scripted tasks, pass/fail assertions                    | 1F         |
+| **6B - Scorecard**              | prompts per task, undo rate, unattended completion rate, tool-schema tokens | 6A         |
+| **6C - Trace redaction checks** | Ensure traces attached to failures do not leak secrets                      | 2D, 6A     |
 
 Phase 6 exit:
 
@@ -272,7 +275,7 @@ internal/frontends/voicein       mic/device permissions
 internal/frontends/voiceout      OS TTS adapters
 ```
 
-Portable code should use shared interfaces, `filepath`, `config.Paths()`, and
+Portable code should use shared interfaces, `filepath`, `config.BuildCurrentPathSet()`, and
 typed capabilities. It should not branch on `runtime.GOOS` or hard-code `/tmp`,
 `~`, `$HOME`, or `C:\`.
 
@@ -324,12 +327,12 @@ Keep out of v1 unless explicitly re-planned:
 
 Track these before starting the affected phase:
 
-| Needed by | Question |
-| --- | --- |
-| Phase 0 | Decide the first minimal event sink: synchronous only, async queue, or both |
-| Phase 1 | Decide which provider is the first real adapter: OpenAI-compatible remote, Ollama, or both |
-| Phase 1 | Decide how much config hot-reload is needed for MVP |
-| Phase 2 | Define the first deny-list for Linux, macOS, and Windows |
-| Phase 2 | Confirm session storage format when implementing journal/session code |
-| Phase 4 | Decide Windows sandbox approach before assigning implementation |
-| Phase 5 | Confirm voice dependency licensing before adding audio/transcription dependencies |
+| Needed by | Question                                                                                   |
+| --------- | ------------------------------------------------------------------------------------------ |
+| Phase 0   | Decide the first minimal event sink: synchronous only, async queue, or both                |
+| Phase 1   | Decide which provider is the first real adapter: OpenAI-compatible remote, Ollama, or both |
+| Phase 1   | Decide how much config hot-reload is needed for MVP                                        |
+| Phase 2   | Define the first deny-list for Linux, macOS, and Windows                                   |
+| Phase 2   | Confirm session storage format when implementing journal/session code                      |
+| Phase 4   | Decide Windows sandbox approach before assigning implementation                            |
+| Phase 5   | Confirm voice dependency licensing before adding audio/transcription dependencies          |
