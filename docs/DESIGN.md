@@ -107,7 +107,7 @@ Rules that follow, and that reviewers should enforce:
 | Thing | Convention | Example |
 |---|---|---|
 | Go module path | `github.com/Kzeezee/travis` (one, at root) | `github.com/Kzeezee/travis` |
-| Package import path | `<module>/internal/<pkg>` or `<module>/pkg/<pkg>` | `.../travis/internal/mcp` |
+| Package import path | `<module>/internal/<package>` | `.../travis/internal/tools/mcp` |
 | Package name | single lowercase word, no underscores, no prefix | `package mcp` |
 | Binary | `travis` | `travis chat` |
 | Helper binaries | `travis-<role>` | `travis-broker`, `travis-audio` |
@@ -191,7 +191,7 @@ The last column names what a decision supersedes, or the sections it affects.
 | **D-16** | **Cassette record/replay ships in Phase 1, not M5.** | Cassettes are *test infrastructure* and belong before the code they test. Without them, `ai` and `brain` tests are slow (seconds per call), non-deterministic (a live model answers differently every run), and cannot regression-test provider quirks (R-05 requires a *recording* of malformed tool-call JSON to test the repair shim against). A free local model fixes the cost problem only — it makes speed worse, not better. | §5.13, M1, M5 |
 | **D-17** | **`security` is two separate jobs, needing different skills and belonging in different phases** — see §3.7 for the plain-language version. **Job 1 (early, critical path, ordinary portable Go):** capabilities, policy, glob matching, the broker process, IPC, token derivation. **Job 2 (late, platform expertise):** the OS sandbox. | `DESIGN.md` treats these as one package, which makes security look like one hard job. It is one *learnable* job that carries the entire guarantee, and one *hard* job that is only a backstop. Keeping them together would put the project's hardest code on the critical path for no reason. | §5.12, §9.2 |
 | **D-18** | **`coretools` calls a `Broker` *interface*. Phase 1 ships `LocalBroker` (direct IO, no IPC, no policy); Phase 2 swaps in `RemoteBroker`.** | This is the seam that lets tools and security be built in parallel. It is the single most important parallelisation device in the plan and is not named in `DESIGN.md`. The swap to `RemoteBroker` is the moment enforcement becomes real. | §4.3, §5.6, §5.12 |
-| **D-19** | **The broker wire protocol (msgpack request/response shapes) is a Phase-0 artifact**, frozen alongside `pkg/core`. | Both `coretools` and `security` compile against it. Unfrozen, two tracks churn against each other. `DESIGN.md` treats it as part of `security`'s work (§5.12.5), which is too late. | §5.12.5, M0 |
+| **D-19** | **The broker wire protocol (msgpack request/response shapes) is a Phase-0 artifact**, frozen alongside `internal/core`. | Both `coretools` and `security` compile against it. Unfrozen, two tracks churn against each other. `DESIGN.md` treats it as part of `security`'s work (§5.12.5), which is too late. | §5.12.5, M0 |
 | **D-20** | **User-supplied hooks are rejected for v1** — with a written rationale rather than silence. **This rejects user *scripts*, not internal lifecycle *interception points*, which we require** (see G-3). | A hook that can block a tool call is a security decision, and both places it could live are bad. **In the brain** it is purely advisory — that process holds no capabilities and can simply ignore it, which is the "ask nicely" pattern travis exists to replace. **In the broker** it works, but puts unreviewed, possibly model-written scripts inside the one small process the whole design's trustworthiness rests on. Two further problems: hook config in the repo means **the model can write its own hook** (prompt injection → arbitrary execution, same reasoning as §5.4.1 and §5.8); and a hook in the broker sits *above* token narrowing, so it would run with **more authority than the model ever had**. The benign 90% is already reachable via `exec`, skills, the broker audit log, and `Priority: alert` announcements. | New §12 entry |
 | **D-21** | **No tree-sitter repo map / code-intelligence layer.** | Follows from D-11. It is a coding-agent feature. | — |
 | **D-22** | **PII handling splits: Level 2 in Phase 2, Level 3 promoted to high good-to-have.** Level 2 = a deny-list that beats allow-globs, `.travisignore`, and a concrete definition of "home minus secrets". Level 3 = outbound PII scanning before context leaves for a provider. | Level 2 is not a feature, it is a **policy primitive** — roughly a day inside the evaluator we are already building, and it is what makes the onboarding screen's `~/.ssh` promise true instead of decorative. Level 3 matters more under D-11 than it would for a coding agent, because the data is *personal*, not merely proprietary. | §5.12.2, §5.12.3, §9.1 |
@@ -707,7 +707,7 @@ Failure modes · Testing · Open questions**
 **Purpose.** Types, IDs, errors, the event bus, clock, and every interface that
 crosses a module boundary. Contains no logic beyond the bus.
 
-**Public interface.**
+**Shared interface.**
 
 ```go
 type ID string                     // ULID; sortable, timestamped
@@ -722,8 +722,8 @@ Plus `Tool`, `Provider`, `Policy`, `Broker`, `Capability`, `Message`, `Part`, `C
 
 **Depends on:** Go's standard library only. No third-party packages, ever.
 
-→ **Why:** `core` is the project's only public API (§8), and every other package imports
-it. So anything `core` depends on becomes part of our published API *and* part of the
+→ **Why:** `core` is the project's shared internal seam (§8), and many packages import
+it. So anything `core` depends on spreads across the app and can become part of the
 broker's attack surface. It must also build on all three OSes, which rules out anything
 needing C code.
 
@@ -783,7 +783,7 @@ func (c *Config) Validate() Diagnostics   // warnings + errors, never panics
 #### 5.2.1 Paths are resolved per-OS, and nothing else in the codebase knows this
 
 Hard-coding `~/.travis` or `$XDG_CONFIG_HOME` would be a Windows bug in the first
-week. `config` exposes `Paths()` and **every other package MUST use it**; a literal
+week. `config` exposes `BuildCurrentPathSet()` and **every other package MUST use it**; a literal
 `~/.travis`, `/etc/`, or `os.Getenv("HOME")` outside this package is a lint error.
 
 | Role                                 | Linux                                            | macOS                                         | Windows                            |
@@ -1475,7 +1475,7 @@ type Skill struct {
 
 ```toml
 [skills]
-# "user:" and "system:" expand via config.Paths() (§5.2.1), so one config works on
+# "user:" and "system:" expand via config.BuildCurrentPathSet() (§5.2.1), so one config works on
 # Linux, macOS, and Windows. Literal ~ or C:\ here is a portability bug.
 roots = ["user:skills", "./.travis/skills", "system:skills"]
 autoload = true
@@ -1945,7 +1945,7 @@ re-fetch. Bounded, not solved, by §5.4's loop detection.
 #### 5.12.5 Performance, and the IPC transport per OS
 
 The broker link is a **length-prefixed msgpack request/response protocol** over a
-local transport chosen by `config.Paths()`: a Unix domain socket on Linux and macOS,
+local transport chosen by `config.BuildCurrentPathSet()`: a Unix domain socket on Linux and macOS,
 a named pipe (`\\.\pipe\travis-<sid>`) on Windows. Both are `net.Conn` in Go
 (`npipe`/`winio` on Windows), so the protocol code is OS-independent and only the
 listener differs — about 40 lines behind a build tag. Peer identity is checked:
@@ -2030,7 +2030,7 @@ argument instead of a measurement. All of it runs on all three OSes (G8).
 ```toml
 [eval]
 traces      = true
-trace_dir   = "state:traces"   # resolved per-OS by config.Paths()
+trace_dir   = "state:traces"   # resolved per-OS by config.BuildCurrentPathSet()
 otel        = { enabled = false, endpoint = "" }
 judge       = "cloud"           # provider profile used for rubric grading
 ```
@@ -2490,7 +2490,7 @@ Six steps, resumable, each skippable with a sane default. Runs on first launch o
 │   ┌ what this means ───────────────────────────────────────────────────┐ │
 │   │  The agent CAN     read and write under ~/code/current-project     │ │
 │   │                    run: git, go, rg, ls, cat, npm, python3         │ │
-│   │                    reach: api.github.com, pkg.go.dev               │ │
+│   │                    reach: api.github.com, go.dev                   │ │
 │   │  The agent CANNOT  touch ~/.ssh, ~/.aws, or anything outside the   │ │
 │   │                    workspace — enforced by the broker in code, not │ │
 │   │                    by asking the model politely.                   │ │
@@ -2701,37 +2701,27 @@ travis/
 │  ├─ travis/                    composition root ONLY — wiring, flags, no logic
 │  ├─ travis-broker/             privileged effect broker (§4.4)
 │  └─ travis-audio/              CGO audio helper (§5.10)
-├─ internal/                       ← everything not part of the extension contract
-│  ├─ brain/            agent loop
-│  ├─ cli/              bubbletea v2 TUI
-│  │   ├─ components/   statusbar, toolcard, palette, modal, meter
-│  │   ├─ screens/      onboarding, main, inspector, trace
-│  │   └─ theme/
-│  ├─ ai/               provider transport + credentials (api key, oauth)
-│  ├─ tools/            registry
-│  ├─ coretools/        fs.read fs.write fs.edit grep exec fetch ask_user memory (D-08)
-│  ├─ mcp/              generic client + supervisor (no per-server code, D-02)
-│  ├─ skills/           SKILL.md loader
-│  ├─ security/         policy, capabilities, sandbox, broker client
-│  ├─ voicein/          capture, vad, stt backends
-│  ├─ voiceout/         synth backends, player, speech extraction
-│  ├─ session/          persistence
+├─ internal/                       ← private app code
+│  ├─ core/             shared seams: Tool, Provider, Bus, Capability, events
+│  ├─ config/           config loading, validation, OS paths
+│  ├─ log/              logging facade
+│  ├─ agent/            loop, budget, context, prompt, repair
+│  ├─ providers/        OpenAI-compatible, local, cassette, auth adapters
+│  ├─ tools/            registry, built-ins, MCP adapter, skills, subagents
+│  ├─ security/         policy, capabilities, approvals, broker, sandbox
+│  ├─ frontends/        terminal, voice input, voice output
+│  ├─ state/            session, journal, memory, migrations
 │  ├─ eval/             traces, cassettes, scenarios, scorecard
-│  └─ swarm/            subagents
-├─ pkg/
-│  ├─ core/             ← PUBLIC API. types, Tool, Provider, Bus, Capability, events
-│  ├─ config/
-│  └─ log/
+│  └─ testkit/          reusable fakes and contract suites
 ├─ profiles/            personas/ · mcp/ · security/     (data, not code)
 ├─ docs/                DESIGN.md (this) · adr/ · packages/<name>/DECISIONS.md
 └─ testdata/            cassettes/ · fixtures/ · scenarios/ · redteam/
 ```
 
-**Why `pkg/core` is the only public surface.** If backends are swappable, `core`'s
-interfaces are an API contract with a compatibility policy (C15). Everything else
-sits under `internal/` so the compiler prevents accidental external coupling and we
-stay free to refactor. Promoting a package out of `internal/` is a deliberate,
-reviewed act.
+**Why shared code still stays under `internal/`.** Travis is an app, not a Go
+library. `core` contains shared seams used inside the app, but external programs
+should not import them. Keeping shared code under `internal/` lets the compiler
+prevent accidental external coupling while we stay free to refactor.
 
 **Per-package required files:** `README.md` (30 lines max — what it does, what it
 depends on, how to swap its backend), `DECISIONS.md` (dated ADR entries), `doc.go`,
@@ -2750,7 +2740,7 @@ handful of rules are followed from M0 rather than retrofitted in M4.
   plus `sandbox_stub.go` so an unknown GOOS still compiles and fails closed.
 - **Every OS-specific file has a same-signature sibling for the other two.** No
   feature may exist on one OS only without a documented degradation on the others.
-- **No path literals.** `filepath.Join`, never `"a/b"`; `config.Paths()`, never `~`.
+- **No path literals.** `filepath.Join`, never `"a/b"`; `config.BuildCurrentPathSet()`, never `~`.
   A grep for `"/"` in a path context is part of the review checklist.
 - **Line endings:** `.gitattributes` normalises to LF in the repo; `fs.write`
   preserves the file's existing convention and defaults to the OS convention for new
@@ -2795,9 +2785,9 @@ would otherwise have done):
 - `deps.yaml` declares, per package, exactly which packages it may import. `make
 lint-deps` walks the import graph and fails the build on any edge not listed. Layer
   violations are caught in CI, not in review.
-- Cross-package types **MUST** live in `pkg/core`. A type defined in `internal/mcp`
-  and used by `internal/brain` is a review blocker — that is the smell D-01 was
-  meant to prevent, and the lint catches it directly.
+- Cross-module shared types **MUST** live in `internal/core`. A type defined in
+  `internal/tools/mcp` and used by `internal/agent/loop` is a review blocker. That
+  is the coupling D-01 was meant to prevent, and the lint catches it directly.
 - Every package exposes its behaviour through an interface consumed elsewhere; no
   package reaches into another's concrete types.
 
@@ -2938,7 +2928,7 @@ release.**
 
 | #   | Name        | Contains                                                                                                        | Exit criterion                                                                                                                                                                                          |
 | --- | ----------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M0  | Skeleton    | `pkg/core`, `config` (incl. per-OS paths), `log`, single-module layout, CI matrix, `deps.yaml`                  | `travis version` builds **and its tests pass natively** on linux/amd64, darwin/arm64, windows/amd64; `lint-deps` + `lint-portability` blocking and green                                                |
+| M0  | Skeleton    | `internal/core`, `internal/config` (incl. per-OS paths), `internal/log`, single-module layout, CI matrix, `deps.yaml` | `travis version` builds **and its tests pass natively** on linux/amd64, darwin/arm64, windows/amd64; `lint-deps` + `lint-portability` blocking and green                                                |
 | M1  | Text loop   | `ai` (api-key + OAuth credentials), `brain`, `tools`, `coretools` (8 tools), minimal `cli` on **Bubble Tea v2** | fixes a failing test in a fixture repo, end to end, demonstrated on all three OSes                                                                                                                      |
 | M2  | Enforcement | `security` broker (UDS + named pipe), sandbox tiers, approval UX, change journal + `/undo`                      | red-team suite green on all three OSes; `paranoid` provably blocks writes; Windows tier reported honestly in the UI                                                                                     |
 | M3  | Ecosystem   | `mcp`, `skills`, palette, tools inspector, **`Registry.Prune`**                                                 | 10 public MCP servers install and work from a pin, **with zero lines of per-server Go code**, on Linux/macOS/Windows (`npx.cmd` path included), and tool-schema tokens stay under 6k with all 10 loaded |
@@ -3086,16 +3076,16 @@ context-limit warning at 90%** — rendered in the status bar from existing bus 
 No provider dashboard, no benchmarking mode, no quantisation advisory, no telemetry.
 Half a day of work in M1, then done.
 
-**C15 — `core` API stability policy. `DEFERRED — not a priority.`** The concern is
+**C15 — `core` compatibility policy. `DEFERRED — not a priority.`** The concern is
 correct in principle and premature in practice: there are no third-party backends and
 no external importers, so a compatibility policy would be governance for an empty set,
 and it would slow exactly the refactors we expect during M0–M3. Position for v1:
-**`pkg/core` is explicitly unstable and versioned `v0`**, stated in `doc.go` and the
-README; breaking changes are allowed with a `DECISIONS.md` entry; `internal/` keeps
-everything else uncoupled anyway (§8). The trigger to revisit is concrete rather than
-calendar-based: **the first external implementation of `core.Provider`, `core.Tool`,
-or `core.Policy` that we did not write.** At that point we tag `v1` and adopt a
-deprecation policy. Until then this is deliberately not on the roadmap.
+**`internal/core` is private app code**, so breaking changes are allowed with a
+`DECISIONS.md` entry. The trigger to revisit is concrete rather than calendar-based:
+**the first external Go implementation of `core.Provider`, `core.Tool`, or
+`core.Policy` that we did not write.** At that point we decide whether to publish a
+separate external interface and adopt a deprecation policy. Until then this is
+deliberately not on the roadmap.
 
 **C16 — Three OSes is a real cost, and the cheap way to pay it is up front.** D-07
 commits to native Linux/macOS/Windows. Go and Bubble Tea v2 make ~90% of this free,
@@ -3164,7 +3154,7 @@ first as skipped Windows CI jobs. Treat a red Windows job exactly like a red Lin
 | R-13 | Subagent privilege escalation | High | intersection-only token derivation | 5.14 |
 | R-14 | Approval fatigue → blind `y` | Med | irreversibility tiering, durable decision rules, non-blocking asks, red-team case | 6.4 |
 | R-15 | Voice mode hides blocking prompts | Med | **resolved by D-10**: spoken alert + mic mute + keyboard-only resolution + persisted `AwaitingHuman` | 6.5 |
-| R-16 | Feature-package boundaries erode without `go.mod` walls | Med | `deps.yaml` + blocking `lint-deps`, shared types confined to `pkg/core` | 8, C1 |
+| R-16 | Feature-package boundaries erode without `go.mod` walls | Med | `deps.yaml` + blocking `lint-deps`, shared types confined to `internal/core` | 8, C1 |
 | R-17 | Pressure to relax MCP sandbox defaults per broken server | Med | sticky status-bar indicator for relaxed sandboxes, curated verified profiles | C3 |
 | R-18 | Vendor blocks or bans third-party use of an OAuth subscription plan | Med | never the default; explicit ToS warning at auth; honest `User-Agent`; no credential scraping; API-key path always available | 5.3.1 |
 | R-19 | Audio device permission/enumeration differs per OS and blocks M4 | Med | helper process abstracts three backends; permission denial is a normal error; voice degrades off, never blocks startup | 5.10 |
