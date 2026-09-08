@@ -39,10 +39,11 @@ Current Phase 0 work:
 | ----------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | **0A - Docs and plan alignment**    | Covered by this branch        | Simplifies the plan, aligns code-design docs, and records the smaller foundation strategy                    |
 | **0B - Minimal core/config/log**    | Covered for Phase 0 scope     | Adds only the shared DTOs, path/platform seam, and logging facade needed before Phase 1                      |
-| **0C - CI and architecture checks** | Not done                      | Adds Linux/macOS/Windows CI plus `go test`, `go vet`, `go mod verify`, import checks, and portability checks |
+| **0C - CI and architecture checks** | Covered by friend's branch    | Adds Linux/macOS/Windows CI plus `go test`, `go vet`, `go mod verify`, import checks, and portability checks |
 | **0D - Team rules and setup check** | Partly covered by this branch | Updates team rules; another dev with non mac-OS still needs to verify `docs/DEV-SETUP.md`                    |
 
-Before feature work forks, finish 0C and the other-OS setup check from 0D.
+Before feature work forks, finish the other-OS setup check from 0D and make sure
+the 0C CI branch has landed.
 
 Deferred `0B` work is assigned to the later PR that first needs it. In
 particular, provider adapters stay in 1A, tool execution stays in 1B, terminal
@@ -108,7 +109,7 @@ the next phase. This is not a full skeleton phase.
 | ----------------------------------- | -------- | --------------------------------------------------------------------------------------------------- | ---------- |
 | **0A - Docs and plan alignment**    | You      | Finish the simplified code-design docs, update this plan, and make the folder names consistent      | none       |
 | **0B - Minimal core/config/log**    | 1 person | Add `internal/core`, `internal/config`, `internal/log`; include only types needed by Phase 1        | 0A         |
-| **0C - CI and architecture checks** | 1 person | Add Linux/macOS/Windows CI, `go test`, `go vet`, `go mod verify`, import checks, portability checks | 0A         |
+| **0C - CI and architecture checks** | Friend   | Add Linux/macOS/Windows CI, `go test`, `go vet`, `go mod verify`, import checks, portability checks | 0A         |
 | **0D - Team rules and setup check** | 1 person | Update `AGENTS.md` with hard rules; verify `DEV-SETUP.md` on another OS                             | 0A         |
 
 Phase 0 parallelism:
