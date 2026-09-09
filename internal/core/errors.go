@@ -13,9 +13,9 @@ type ProviderError struct {
 	// Provider names the adapter that reported the error.
 	Provider string
 	// Kind is the stable Travis error category used with errors.Is.
-	Kind     error
+	Kind error
 	// Cause is the original lower-level error exposed through Unwrap.
-	Cause    error
+	Cause error
 }
 
 func (e *ProviderError) Error() string {
