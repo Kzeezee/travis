@@ -104,12 +104,6 @@ linters:
           - forbidigo
         text: runtime\.GOOS|os\.Getenv
 
-      # The version banner reports the platform it was built for; that is its whole job.
-      - path: (^|/)cmd/travis/main\.go$
-        linters:
-          - forbidigo
-        text: runtime\.GOOS
-
       - path: _test\.go$
         linters:
           - forbidigo
