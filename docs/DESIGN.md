@@ -2695,10 +2695,17 @@ graph, not from `go.mod` boundaries. To restate the confirmation asked for in re
 **"modular" here means package-per-function with enforced seams, and there is exactly
 one `go.mod`.**
 
+> **Naming supersession.** `docs/Code-Conventions.md` wins on *package layout*: there is
+> no `pkg/`, and the packages are `agent/loop`, `tools/builtin`, `providers/*`,
+> `frontends/terminal`. **The tree below has been updated to that layout.** Prose
+> elsewhere in this document may still use the older spelling (`brain`, `coretools`,
+> `ai`, `internal/cli`, `pkg/core`); read those as the new names. Nothing else in §8
+> changes — the dependency rules, the gate list, and every `D-nn` stand as written.
+
 ```
 travis/
 ├─ go.mod                          ← exactly one, at the root
-├─ deps.yaml                       ← the import allowlist; CI fails on violation
+├─ deps.yaml                       ← the import allowlist (not yet present; depguard covers the interim)
 ├─ cmd/
 │  ├─ travis/                    composition root ONLY — wiring, flags, no logic
 │  ├─ travis-broker/             privileged effect broker (§4.4)

@@ -39,11 +39,11 @@ Current Phase 0 work:
 | ----------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | **0A - Docs and plan alignment**    | Covered by this branch        | Simplifies the plan, aligns code-design docs, and records the smaller foundation strategy                    |
 | **0B - Minimal core/config/log**    | Covered for Phase 0 scope     | Adds only the shared DTOs, path/platform seam, and logging facade needed before Phase 1                      |
-| **0C - CI and architecture checks** | Covered by friend's branch    | Adds Linux/macOS/Windows CI plus `go test`, `go vet`, `go mod verify`, import checks, and portability checks |
+| **0C - CI and architecture checks** | Landed                        | Native Linux/macOS/Windows CI, `Makefile`, pinned `golangci-lint`, `go vet` for all three `GOOS`, `go mod verify`/`tidy -diff`, `govulncheck`; see `docs/plans/ci-testing-pipeline.md` |
 | **0D - Team rules and setup check** | Partly covered by this branch | Updates team rules; another dev with non mac-OS still needs to verify `docs/DEV-SETUP.md`                    |
 
-Before feature work forks, finish the other-OS setup check from 0D and make sure
-the 0C CI branch has landed.
+Before feature work forks, finish the other-OS setup check from 0D. 0C has landed;
+`make check` runs the full gate set locally.
 
 Deferred `0B` work is assigned to the later PR that first needs it. Phase 1
 starts with one vertical assistant slice before splitting provider, tool,
