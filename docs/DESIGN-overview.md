@@ -83,6 +83,8 @@ rest.
   import edge and `make lint-deps` fails the build on anything else.
 - Interfaces live in the **consumer** package. `agent/loop` compiles with zero knowledge of
   OpenAI, and `frontends/terminal` with zero knowledge of `agent/loop`.
+- Inject ports and runtime choices, not internals: inject what varies by runtime,
+  config, or test scenario; keep stable library setup and deterministic details private.
 - Cross-module shared types live in `internal/core`. A type defined in
   `internal/tools/mcp` and used by `internal/agent/loop` is a review blocker.
 - `security` imports no tool package. Tools depend on security, never the reverse.

@@ -45,7 +45,7 @@ func buildPathSetFromInputs(lookup envLookup, home, cwd string) (PathSet, error)
 		return PathSet{}, err
 	}
 
-	travisHome := trimmedEnvValue(lookup, "TRAVIS_HOME")
+	travisHome := readTrimmedEnvValue(lookup, "TRAVIS_HOME")
 	if travisHome != "" {
 		travisHome, err = cleanAbsolutePath("TRAVIS_HOME", travisHome)
 		if err != nil {
@@ -128,7 +128,7 @@ func (p PathSet) Resolve(value string) (string, error) {
 	return filepath.Join(p.WorkspaceDir, normalizedPath), nil
 }
 
-func trimmedEnvValue(lookup envLookup, envKey string) string {
+func readTrimmedEnvValue(lookup envLookup, envKey string) string {
 	value, ok := lookup(envKey)
 	if !ok {
 		return ""
@@ -136,8 +136,8 @@ func trimmedEnvValue(lookup envLookup, envKey string) string {
 	return strings.TrimSpace(value)
 }
 
-func pathFromEnvOrFallback(lookup envLookup, envKey, fallbackPath string) string {
-	if value := trimmedEnvValue(lookup, envKey); value != "" {
+func selectPathFromEnvOrFallback(lookup envLookup, envKey, fallbackPath string) string {
+	if value := readTrimmedEnvValue(lookup, envKey); value != "" {
 		return filepath.Clean(normalizeConfigPath(value))
 	}
 	return fallbackPath

@@ -15,17 +15,27 @@ A Bubbletea v2 (Go) CLI personal assistant app with modular feature sets, suppor
 ### Naming
 - Prefer names that explain role and intent at both the call site and the definition or
   initialization site, with signatures and types carrying the precise details
-- Prefer noun/result names for pure value-producing helpers, such as `configFromFile` or
-  `commandFromArgs`, when the returned value is the main idea
-- Use a light verb for value-producing helpers when it makes the definition easier to understand or
-  when construction, normalization, or aggregation is part of the stable intent, such as
-  `buildPathSetFromInputs`
+- Functions and methods should normally use verb phrases that describe what they do
+  or what answer they report, even when they only return a value
+- Avoid function or method names that are only the returned type, receiver type, field
+  name, or bare noun; prefer `ReportEventType()` over `EventType()` and
+  `ReportPartKind()` over `partKind()`
+- Use a light verb for value-producing helpers when construction, normalization,
+  aggregation, selection, conversion, or reporting is part of the stable intent, such
+  as `buildPathSetFromInputs`, `normalizeConfigPath`, `selectProvider`, or
+  `reportEventType`
 - For exported functions that compute values from process state, OS state, environment variables,
   multiple inputs, validation, normalization, or aggregation, prefer an explicit verb such as
   `Build`, `Normalize`, `Validate`, or `Resolve`; for example, prefer
   `config.BuildCurrentPathSet()` over `config.CurrentPathSet()`
 - Use verb names for operations, side effects, validation, or required work, such as `ensureDir`,
   `startServer`, or `writeFile`
+- Noun/result names are fine for types, constants, variables, fields, and packages,
+  but avoid them for functions and methods unless they are standard Go convention
+  methods; when naming a function or method, choose the verb phrase
+- Keep standard Go convention method names when they are required or strongly
+  expected by standard interfaces, such as `String()`, `Error()`, `Unwrap()`,
+  `MarshalJSON()`, and `UnmarshalJSON()`
 - Avoid names tied to replaceable implementation details, such as a storage mechanism, OS source,
   transport, or parsing technology, unless that detail is the stable domain concept; prefer
   `buildPathSetFromInputs` over `pathsFromEnv` when the helper constructs and validates paths
@@ -36,6 +46,14 @@ A Bubbletea v2 (Go) CLI personal assistant app with modular feature sets, suppor
 ### Architecture
 - Separate decisions from effects: decision code depends on ports, while adapters own real
   provider, filesystem, broker, MCP, terminal, or audio effects
+- Dependency-inject ports and runtime choices, not implementation mechanics; inject
+  dependencies when they vary by runtime environment, user/config choice, or test
+  scenario, especially external effects and nondeterministic behavior that need fakes
+  in tests
+- Keep stable library setup, pure helpers, and deterministic implementation details
+  inside their owning module; callers may choose output, level, provider, clock, or
+  sink, but owning modules keep concrete setup such as `slog`, provider HTTP clients,
+  OS path logic, or sandbox calls private
 - Validate raw external data at entrypoints and adapter boundaries before passing typed values inward
 - Keep dependency direction inward; inner decision modules must not import outward infrastructure
   modules
@@ -46,6 +64,27 @@ A Bubbletea v2 (Go) CLI personal assistant app with modular feature sets, suppor
 - Test behavior where it is owned, using fakes across ports instead of real providers, filesystems,
   broker processes, terminals, or MCP servers
 - See `docs/code_design/codebase_tour.md` for the full codebase map and examples
+
+### Design Quality
+- Evaluate design changes by whether they reduce cognitive load, change amplification, and
+  unknown unknowns
+- Prefer deep modules: small interfaces with useful behavior hidden behind them. Avoid
+  shallow pass-through wrappers that only rename or delegate
+- Keep design decisions in one owning module. If callers must know implementation details
+  to use a module correctly, the interface is leaking
+- Pull complexity downward when one module has the context to handle it. Do not push edge
+  cases, ordering rules, or implementation choices onto every caller
+- Split code only when it reduces real dependency or separates concepts that vary
+  independently. Keep code together when pieces share knowledge or must always be used
+  together
+- Abstract conceptual duplication, not coincidental similarity
+- For non-trivial seams or module interfaces, compare at least two designs before
+  implementing and document the tradeoff briefly
+- Comments should explain intent, invariants, contracts, or non-obvious design choices;
+  do not comment mechanics already clear from code
+- Before adding an error path, ask whether the operation can be redefined so the case is
+  not an error
+- Exposed behavior should be obvious from names, types, and comments
 
 ### Presentation Layer
 - UI is an outer adapter: it renders app state, collects user intent, and sends commands inward
@@ -85,6 +124,7 @@ A Bubbletea v2 (Go) CLI personal assistant app with modular feature sets, suppor
 - Use `filepath` and `config.BuildCurrentPathSet()` instead of hard-coded OS paths, `~`, `$HOME`, or path separators
 - Inner modules must not import outward modules
 - Keep external effects behind ports and adapters
+- Inject choices and ports, not internals; implementation details stay inside their owning module
 - Validate data at entrypoints and trusted boundaries
 - Events are facts that already happened; required work should be represented as operations
 

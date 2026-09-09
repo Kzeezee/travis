@@ -3,12 +3,12 @@ package core
 import "time"
 
 type Clock interface {
-	Now() time.Time
+	ReportCurrentTime() time.Time
 }
 
 type SystemClock struct{}
 
-func (SystemClock) Now() time.Time {
+func (SystemClock) ReportCurrentTime() time.Time {
 	return time.Now()
 }
 
@@ -16,6 +16,6 @@ type FixedClock struct {
 	Time time.Time
 }
 
-func (c FixedClock) Now() time.Time {
+func (c FixedClock) ReportCurrentTime() time.Time {
 	return c.Time
 }

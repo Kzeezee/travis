@@ -43,6 +43,8 @@ The important rule changes captured in `AGENTS.md` are:
 - use `filepath` and `config.BuildCurrentPathSet()` rather than hard-coded OS paths;
 - inner modules must not import outward modules;
 - use ports/adapters for external effects;
+- inject ports and runtime choices when they vary by runtime, config, or test
+  scenario rather than injecting concrete implementation mechanics;
 - validate data at entrypoints and trusted boundaries;
 - events describe facts that already happened;
 - do not mix broad formatting with content edits;
@@ -140,7 +142,7 @@ Review questions:
 
 #### Clocks
 
-`clock.go` adds a minimal `Clock` interface with `Now()`, plus:
+`clock.go` adds a minimal `Clock` interface with `ReportCurrentTime()`, plus:
 
 - `SystemClock` for production;
 - `FixedClock` for deterministic tests.
@@ -150,7 +152,7 @@ wall-clock calls through later modules.
 
 Review questions:
 
-- Is `Now()` enough for the current foundation?
+- Is `ReportCurrentTime()` enough for the current foundation?
 - Is timer/scheduler behavior correctly deferred until a caller needs it?
 - Does the fixed-clock test cover real behavior?
 
@@ -161,10 +163,13 @@ Review questions:
 - roles: system, user, assistant, tool;
 - part kinds: text, tool call, tool result;
 - `Message`;
-- `Part`.
+- `Part`;
+- `TextPart`, `ToolCallPart`, and `ToolResultPart`.
 
 This gives future provider, agent-loop, tool, session, and trace modules one shared
-shape for conversation data without binding the app to a vendor wire format.
+shape for conversation data without binding the app to a vendor wire format. Part
+payloads are separate concrete types so a text part cannot also carry a tool call
+or tool result.
 
 Review questions:
 
@@ -282,7 +287,7 @@ Files added:
 
 #### Platform Reporting
 
-`platform.go` exposes `Platform()`, which returns the Go OS/architecture string.
+`platform.go` exposes `ReportRuntimePlatform()`, which returns the Go OS/architecture string.
 This keeps direct runtime platform access in `internal/config`.
 
 The existing `travis version` command now calls this helper instead of constructing
@@ -385,21 +390,22 @@ Files added:
 
 The facade exposes:
 
-- `Debug`;
-- `Info`;
-- `Warn`;
-- `Error`.
+- `LogDebugMsg`;
+- `LogInfoMsg`;
+- `LogWarnMsg`;
+- `LogErrorMsg`.
 
-The implementation wraps Go's structured logger. `New(nil)` falls back to the
-default structured logger. `Nop()` returns a logger backed by a discard handler, so
-tests can satisfy logging dependencies without producing output.
+The implementation wraps Go's structured logger behind Travis-owned constructors.
+`BuildDefaultLogger()` uses the default structured logger, `BuildTextLogger()` writes
+text logs to a provided writer, and `BuildNopLogger()` returns a logger backed by a
+discard handler so tests can satisfy logging dependencies without producing output.
 
 Review questions:
 
 - Is the facade small enough?
 - Do modules get the logging seam they need without taking a direct dependency on a
   concrete logging setup?
-- Is `Nop()` useful for tests without becoming a global logger pattern?
+- Is `BuildNopLogger()` useful for tests without becoming a global logger pattern?
 
 ### `cmd/travis`: Version Command Change
 
@@ -411,7 +417,7 @@ the config package. The command still imports `runtime` for the Go runtime versi
 and `runtime/debug` for build information, but no longer owns OS/architecture
 formatting.
 
-The test was updated to compare against `config.Platform()`.
+The test was updated to compare against `config.ReportRuntimePlatform()`.
 
 Review questions:
 

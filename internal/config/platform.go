@@ -2,6 +2,6 @@ package config
 
 import "runtime"
 
-func Platform() string {
+func ReportRuntimePlatform() string {
 	return runtime.GOOS + "/" + runtime.GOARCH
 }

@@ -9,12 +9,12 @@ import (
 )
 
 func TestVersionStringReportsPlatform(t *testing.T) {
-	got := versionString()
+	got := buildVersionString()
 
 	if !strings.HasPrefix(got, "travis ") {
 		t.Errorf("version string should start with %q, got %q", "travis ", got)
 	}
-	if want := config.Platform(); !strings.Contains(got, want) {
+	if want := config.ReportRuntimePlatform(); !strings.Contains(got, want) {
 		t.Errorf("version string should contain %q, got %q", want, got)
 	}
 }

@@ -142,7 +142,9 @@ rules point contributors away from stale `pkg/` and broad skeleton work.
   Counting, budgeting, embeddings, and capability reporting are deferred until a
   concrete caller needs them.
 - Messages and parts are provider-neutral. They express roles, text, tool calls, and
-  tool results without committing to one vendor's wire protocol.
+  tool results without committing to one vendor's wire protocol. Text, tool-call,
+  and tool-result payloads are separate concrete part types so mismatched optional
+  fields are not representable in normal code.
 - Tool DTOs are shared because the provider, agent loop, tool registry, built-in
   tools, MCP adapter, frontend, trace, and session modules will all need to talk
   about tool specs, tool calls, and tool results.
@@ -183,6 +185,10 @@ rules point contributors away from stale `pkg/` and broad skeleton work.
   attributes.
 - The logging implementation wraps the standard structured logger, but callers depend
   on the project facade.
+- Dependency injection is for ports and runtime choices, not implementation mechanics:
+  inject dependencies when they vary by runtime environment, user/config choice, or
+  test scenario. Keep stable library setup, pure helpers, and deterministic details
+  inside their owning module.
 - `AGENTS.md` now lists the read-first documents, including the build plan, codebase
   tour, design rationales, ports/adapters example, error-handling example, and
   `AGENTS.md` itself.

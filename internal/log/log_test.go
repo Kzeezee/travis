@@ -2,16 +2,15 @@ package log
 
 import (
 	"bytes"
-	"log/slog"
 	"strings"
 	"testing"
 )
 
 func TestLoggerWritesThroughSlog(t *testing.T) {
 	var out bytes.Buffer
-	logger := New(slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	logger := BuildTextLogger(&out, LevelDebug)
 
-	logger.Info("provider connected", "provider", "local")
+	logger.LogInfoMsg("provider connected", "provider", "local")
 
 	got := out.String()
 	if !strings.Contains(got, "provider connected") {

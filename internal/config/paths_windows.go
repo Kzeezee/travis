@@ -5,9 +5,9 @@ package config
 import "path/filepath"
 
 func buildPlatformPathDefaultsForOS(lookup envLookup, home string) (platformPathDefaults, error) {
-	appData := pathFromEnvOrFallback(lookup, "AppData", filepath.Join(home, "AppData", "Roaming"))
-	localAppData := pathFromEnvOrFallback(lookup, "LocalAppData", filepath.Join(home, "AppData", "Local"))
-	programData := pathFromEnvOrFallback(lookup, "ProgramData", filepath.Join(filepath.VolumeName(home)+string(filepath.Separator), "ProgramData"))
+	appData := selectPathFromEnvOrFallback(lookup, "AppData", filepath.Join(home, "AppData", "Roaming"))
+	localAppData := selectPathFromEnvOrFallback(lookup, "LocalAppData", filepath.Join(home, "AppData", "Local"))
+	programData := selectPathFromEnvOrFallback(lookup, "ProgramData", filepath.Join(filepath.VolumeName(home)+string(filepath.Separator), "ProgramData"))
 
 	return platformPathDefaults{
 		configDir:        filepath.Join(appData, "travis"),

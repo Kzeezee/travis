@@ -473,7 +473,9 @@ the model can't reach or reason its way around, not in the model's own judgment.
    TUI — each behind an interface, each swappable from TOML. Nothing is "the app";
    the app is a composition root that wires packages together (§4.2). One `go.mod`
    (D-01); boundaries are enforced by a blocking import-graph lint, not by
-   `go.mod` walls.
+   `go.mod` walls. Dependency injection passes ports and runtime choices across
+   module seams when they vary by runtime environment, config, or test scenario;
+   stable implementation mechanics stay inside their owning module.
 2. **Core tools — eight of them (D-08).** `fs.read`, `fs.write`, `fs.edit`, `grep`,
    `exec`, `fetch`, `ask_user`, `memory`. Names are namespaced (D-31); the bare forms
    are not used anywhere, because these strings are model-facing *and* config keys. Small, auditable, no cleverness. There is no `glob`
@@ -715,7 +717,7 @@ type Bus interface {
     Publish(Event)
     Subscribe(filter func(Event) bool) (<-chan Event, func())
 }
-type Clock interface{ Now() time.Time; After(time.Duration) <-chan time.Time }
+type Clock interface{ ReportCurrentTime() time.Time; After(time.Duration) <-chan time.Time }
 ```
 
 Plus `Tool`, `Provider`, `Policy`, `Broker`, `Capability`, `Message`, `Part`, `Cost`.

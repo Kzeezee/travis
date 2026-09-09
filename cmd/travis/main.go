@@ -30,15 +30,15 @@ func run(args []string, out io.Writer) error {
 
 	switch args[0] {
 	case "version", "--version", "-v":
-		fmt.Fprintln(out, versionString())
+		fmt.Fprintln(out, buildVersionString())
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q (try: travis version)", args[0])
 	}
 }
 
-func versionString() string {
-	revision, dirty := vcsStamp()
+func buildVersionString() string {
+	revision, dirty := readVCSStamp()
 
 	build := "travis " + version
 	switch {
@@ -48,11 +48,11 @@ func versionString() string {
 		build += " (" + revision + ")"
 	}
 
-	return build + "\n" + runtime.Version() + " " + config.Platform()
+	return build + "\n" + runtime.Version() + " " + config.ReportRuntimePlatform()
 }
 
 // Stamps are absent for `go run` and for builds from an archive rather than a checkout.
-func vcsStamp() (revision string, dirty bool) {
+func readVCSStamp() (revision string, dirty bool) {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "", false

@@ -30,7 +30,13 @@ and `frontends/terminal` as the actual package names.
 - **Ports and adapters**: business logic depends only on a small interface (port) it
   defines; adapters (broker, provider HTTP, fakes) implement it. Inner code never
   imports concrete adapters (no `os.WriteFile` in business logic, no OpenAI client in
-  agent loop).
+  agent loop). Dependency-inject ports and runtime choices, not implementation
+  mechanics: inject dependencies when they vary by runtime environment, user/config
+  choice, or test scenario, especially external effects and nondeterministic behavior
+  that need fakes in tests. Pass `core.Provider`, `core.Clock`, `log.Logger`, output
+  writers, levels, or event sinks where they vary, but keep stable library setup,
+  pure helpers, and deterministic details such as `slog`, provider HTTP clients, OS
+  path logic, and sandbox calls inside their owning modules.
 - **Dependency direction**: outer/detail code may import inward; inward
   decision/policy code must never import outer detail (providers, UI, broker, MCP).
   `cmd/travis` is the only place allowed to wire concrete adapters.

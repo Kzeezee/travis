@@ -8,9 +8,9 @@ import (
 )
 
 func buildPlatformPathDefaultsForOS(lookup envLookup, home string) (platformPathDefaults, error) {
-	configRoot := pathFromEnvOrFallback(lookup, "XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	stateRoot := pathFromEnvOrFallback(lookup, "XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
-	cacheRoot := pathFromEnvOrFallback(lookup, "XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	configRoot := selectPathFromEnvOrFallback(lookup, "XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	stateRoot := selectPathFromEnvOrFallback(lookup, "XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
+	cacheRoot := selectPathFromEnvOrFallback(lookup, "XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	systemRoot := string(os.PathSeparator)
 
 	return platformPathDefaults{
