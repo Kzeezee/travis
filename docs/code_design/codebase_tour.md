@@ -87,10 +87,10 @@ trigger privileged effects.
 
 ## 3. Folder Placement
 
-The repository is one Go module with private internal modules. There is no `pkg/`
-directory yet because no external Go code imports Travis types. MCP servers talk to
-Travis over stdio/HTTP, not Go imports. _Note that this structure is not set in stone
-and should be changed whenever necessary_
+The repository is one Go module with private internal modules. Shared app types
+live under `internal/core`; MCP servers talk to Travis over stdio/HTTP, not Go
+imports. _Note that this structure is not set in stone and should be changed
+whenever necessary_
 
 ```text
 cmd/
@@ -191,7 +191,7 @@ Three-OS rule:
 Linux, macOS, and Windows are all MVP targets.
 
 portable code
-  should use shared interfaces, config.Paths(), filepath, and typed capabilities
+  should use shared interfaces, config.BuildCurrentPathSet(), filepath, and typed capabilities
 
 OS-specific code
   should live only in the module that owns the OS detail
@@ -207,7 +207,7 @@ Code shape:
 
 ```text
 good
-  business logic calls config.Paths(), security broker ports, or voice ports
+  business logic calls config.BuildCurrentPathSet(), security broker ports, or voice ports
   the owning adapter handles Linux, macOS, and Windows differences
 
 bad

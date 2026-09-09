@@ -7,6 +7,8 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
+
+	"github.com/Kzeezee/travis/internal/config"
 )
 
 const shortRevLen = 12
@@ -46,7 +48,7 @@ func versionString() string {
 		build += " (" + revision + ")"
 	}
 
-	return build + "\n" + runtime.Version() + " " + runtime.GOOS + "/" + runtime.GOARCH
+	return build + "\n" + runtime.Version() + " " + config.Platform()
 }
 
 // Stamps are absent for `go run` and for builds from an archive rather than a checkout.
