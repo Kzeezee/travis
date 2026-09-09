@@ -119,7 +119,7 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
-      # Plain `go build ./...` skips internal/cli/deps.go, so a broken Charm pin (D-06)
+      # Plain `go build ./...` skips frontends/terminal/deps.go, so a broken Charm pin (D-06)
       # is invisible. Delete this job with that file in Phase 1.
       - name: Build with the tools tag
         run: go build -tags tools ./...

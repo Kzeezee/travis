@@ -116,7 +116,7 @@ internals. This is what makes the UI honest.
 ```
 travis/
 ├─ go.mod                   ← exactly one
-├─ deps.yaml                ← the import allowlist; CI fails on violation
+├─ deps.yaml                ← the import allowlist (not yet present; depguard covers the interim)
 ├─ cmd/travis/              composition root
 ├─ cmd/travis-broker/       privileged effect broker
 ├─ cmd/travis-audio/        CGO audio helper (keeps CGO out of the main binary)

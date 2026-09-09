@@ -2703,7 +2703,7 @@ one `go.mod`.**
 ```
 travis/
 ├─ go.mod                          ← exactly one, at the root
-├─ deps.yaml                       ← the import allowlist; CI fails on violation
+├─ deps.yaml                       ← the import allowlist (not yet present; depguard covers the interim)
 ├─ cmd/
 │  ├─ travis/                    composition root ONLY — wiring, flags, no logic
 │  ├─ travis-broker/             privileged effect broker (§4.4)

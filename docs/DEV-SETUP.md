@@ -116,7 +116,7 @@ dependency pins are broken — say so before doing anything else.
 
 ## 5. The `tools` build tag, and why it trips people up
 
-`internal/cli/deps.go` carries `//go:build tools`. It exists only to pin the Charm v2
+`internal/frontends/terminal/deps.go` carries `//go:build tools`. It exists only to pin the Charm v2
 dependencies (D-06) until the real TUI imports them in Phase 1.
 
 **Consequence:** `go build ./...` **skips that file**, so it never compiles the Charm

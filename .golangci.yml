@@ -4,7 +4,7 @@
 version: "2"
 
 run:
-  # internal/cli/deps.go is behind //go:build tools; without this it is never analysed.
+  # frontends/terminal/deps.go is behind //go:build tools; without this it is never analysed.
   build-tags:
     - tools
   timeout: 5m
@@ -49,8 +49,6 @@ linters:
           files:
             - $all
             - "!**/internal/frontends/terminal/**"
-            # internal/cli/deps.go is the temporary D-06 pin; it goes away in Phase 1.
-            - "!**/internal/cli/**"
           deny:
             - pkg: charm.land
               desc: Bubble Tea, Bubbles and Lip Gloss may only be imported by the terminal frontend.
