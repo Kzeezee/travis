@@ -136,13 +136,6 @@ func readTrimmedEnvValue(lookup envLookup, envKey string) string {
 	return strings.TrimSpace(value)
 }
 
-func selectPathFromEnvOrFallback(lookup envLookup, envKey, fallbackPath string) string {
-	if value := readTrimmedEnvValue(lookup, envKey); value != "" {
-		return filepath.Clean(normalizeConfigPath(value))
-	}
-	return fallbackPath
-}
-
 func cleanAbsolutePath(name, value string) (string, error) {
 	value = filepath.Clean(normalizeConfigPath(strings.TrimSpace(value)))
 	if value == "." || value == "" {

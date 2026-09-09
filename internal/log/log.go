@@ -56,6 +56,8 @@ func selectSlogLevel(level Level) slog.Level {
 	switch level {
 	case LevelDebug:
 		return slog.LevelDebug
+	case LevelInfo:
+		return slog.LevelInfo
 	case LevelWarn:
 		return slog.LevelWarn
 	case LevelError:
