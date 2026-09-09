@@ -1,21 +1,23 @@
-# 01: Land Phase 0 Minimal Foundation And Rules
+# Phase 0 / 01: Land Minimal Foundation And Rules
 
 **What to build:** Review and land the Phase 0 foundation slice that gives Travis its first shared app seams, config-owned path behavior, logging facade, and agent-facing project rules. The landed branch should leave Travis with the same user-visible version command, but with enough internal vocabulary for provider, tool, agent-loop, terminal, state, and eval work to begin without inventing conflicting local DTOs.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The active docs are in sync with the agreed Phase 0 baseline, except for the intentional agent-rule additions.
-- [ ] Agent instructions list the read-first docs and hard rules for one module, no public package tree, internal shared seams, OS ownership, path handling, import direction, ports/adapters, validation, events, formatting, and commit prefixes.
-- [ ] Shared app seams include provider-neutral messages, provider streaming DTOs, tool DTOs, event facts, capability DTOs, clocks, and generic error behavior without freezing large future interfaces.
-- [ ] Config owns platform reporting and per-OS path defaults, including override-root behavior and portable logical path resolution.
-- [ ] The version command continues to report the platform through the config-owned seam.
-- [ ] Logging dependencies can cross module seams through a small project facade.
-- [ ] Focused tests cover behavior in errors, clocks, path resolution, logging, and the version command.
-- [ ] The local Go test suite passes.
-- [ ] The config package compile-checks for Linux and Windows build tags.
-- [ ] No CI/lint track work, broad future package skeleton, commit, or push is included in this ticket.
+**Landed in:** PR #2, after PR #1 merged first.
+
+- [x] The active docs are in sync with the agreed Phase 0 baseline, except for the intentional agent-rule additions.
+- [x] Agent instructions list the read-first docs and hard rules for one module, no public package tree, internal shared seams, OS ownership, path handling, import direction, ports/adapters, validation, events, formatting, and commit prefixes.
+- [x] Shared app seams include provider-neutral messages, provider streaming DTOs, tool DTOs, event facts, capability DTOs, clocks, and generic error behavior without freezing large future interfaces.
+- [x] Config owns platform reporting and per-OS path defaults, including override-root behavior and portable logical path resolution.
+- [x] The version command continues to report the platform through the config-owned seam.
+- [x] Logging dependencies can cross module seams through a small project facade.
+- [x] Focused tests cover behavior in errors, clocks, path resolution, logging, and the version command.
+- [x] The local Go test suite passes.
+- [x] The config package compile-checks for Linux and Windows build tags.
+- [x] No CI/lint track work or broad future package skeleton is included in this ticket.
 
 ## Implementation Notes
 
@@ -465,18 +467,17 @@ is the negative rule in `AGENTS.md` that says not to create or use `pkg/`.
 
 ## Reviewer Checklist
 
-- [ ] Confirm this ticket does not create the future package tree.
-- [ ] Confirm every new package exists because this PR currently needs it.
-- [ ] Confirm `internal/core` contains shared DTOs/seams, not provider, tool,
+- [x] Confirm this ticket does not create the future package tree.
+- [x] Confirm every new package exists because this PR currently needs it.
+- [x] Confirm `internal/core` contains shared DTOs/seams, not provider, tool,
   security, or terminal implementation logic.
-- [ ] Confirm `internal/config` owns the only OS/architecture formatting currently
+- [x] Confirm `internal/config` owns the only OS/architecture formatting currently
   used by code.
-- [ ] Confirm config path behavior uses `filepath` and validates absolute roots.
-- [ ] Confirm `internal/log` is a facade, not a global logging policy.
-- [ ] Confirm tests cover behavior and do not test interface declarations for their
+- [x] Confirm config path behavior uses `filepath` and validates absolute roots.
+- [x] Confirm `internal/log` is a facade, not a global logging policy.
+- [x] Confirm tests cover behavior and do not test interface declarations for their
   own sake.
-- [ ] Confirm no CI/lint/Phase 0C work is included.
-- [ ] Confirm no commit or push was made as part of the ticket.
+- [x] Confirm no CI/lint/Phase 0C work is included.
 
 ## Known Follow-Ups
 

@@ -45,11 +45,10 @@ Current Phase 0 work:
 Before feature work forks, finish the other-OS setup check from 0D and make sure
 the 0C CI branch has landed.
 
-Deferred `0B` work is assigned to the later PR that first needs it. In
-particular, provider adapters stay in 1A, tool execution stays in 1B, terminal
-event rendering stays in 1C, agent-loop event publication stays in 1D, config
-file loading stays in 1E, security policy stays in 2A, broker execution stays in
-2B, and session/journal storage stays in 2C.
+Deferred `0B` work is assigned to the later PR that first needs it. Phase 1
+starts with one vertical assistant slice before splitting provider, tool,
+terminal, and config work into deeper follow-up PRs. Security policy stays in
+2A, broker execution stays in 2B, and session/journal storage stays in 2C.
 
 ---
 
@@ -132,31 +131,37 @@ Goal: ship the first real assistant loop without security enforcement. Effects
 can still use simple local implementations, but the code must already call them
 through ports.
 
-| PR                             | Work                                                                                                                               | Depends on |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| **1A - Provider adapter**      | `internal/providers/openai` plus cassette/replay support for tests                                                                 | 0B         |
-| **1B - Built-in tools**        | `internal/tools/registry` and `internal/tools/builtin` for `fs.read`, `grep`, `fs.write`, `fs.edit`, `fetch`, `ask_user`, `memory` | 0B         |
-| **1C - Terminal frontend**     | `internal/frontends/terminal` root Bubble Tea model, status bar, prompt box, tool cards, event-driven rendering                    | 0B         |
-| **1D - Agent loop wiring**     | `internal/agent/loop` plus `cmd/travis` wiring: prompt, provider call, tool call, result, continue/stop                            | 1A, 1B, 1C |
-| **1E - Config file loading**   | TOML config loading, precedence, validation, and any MVP hot-reload decision                                                       | 0B         |
-| **1F - First end-to-end task** | Fixture notes/files task, cassette-backed tests, basic trace output                                                                | 1D, 1E     |
+Spec: [phase-1-text-assistant-mvp-spec.md](spec/phase-1-text-assistant-mvp-spec.md).
+First ticket:
+[phase-1-1a-build-minimal-text-assistant-slice.md](ticket/phase-1-1a-build-minimal-text-assistant-slice.md).
+
+| PR                                      | Work                                                                                                                               | Depends on |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| **1A - Minimal text assistant slice**   | Smallest runnable prompt-to-response path through terminal, agent loop, a `core.Provider` implementation, and `cmd/travis` wiring  | 0B, 0C     |
+| **1B - Provider adapter hardening**     | Deepen the provider path: OpenAI-compatible streaming, tool-call fragments, error translation, and replay/cassette decision        | 1A         |
+| **1C - Built-in tool slice**            | `internal/tools/registry` and first built-in tools needed for a real file task, starting with the smallest useful read/search path | 1A         |
+| **1D - Terminal interaction polish**    | Bubble Tea prompt, status, streaming display, tool-call rendering, event-driven rendering, and focused terminal tests              | 1A         |
+| **1E - Config file loading**            | TOML config loading, precedence, validation, and any MVP hot-reload decision                                                       | 1A         |
+| **1F - First end-to-end tool task**     | Fixture notes/files task using provider, tools, terminal path, config, and basic trace output                                      | 1B, 1C, 1D, 1E |
 
 Phase 1 parallelism:
 
 ```text
-After Phase 0, assign at most three parallel PRs:
-  1A provider
-  1B tools
-  1C terminal
+Do 1A first as one vertical slice so the program works before layer-specific
+branches diverge. The implementation may choose the smallest provider path that
+proves the slice, but the PR must document that choice and keep the agent loop
+depending on core.Provider.
 
-Then merge them through 1D. Do 1E before 1F.
+After 1A merges, assign at most three parallel PRs from 1B, 1C, 1D, and 1E.
+Then merge them through 1F.
 ```
 
 Phase 1 exit:
 
 - Travis completes a 3+ tool-call task over a fixture notes/files tree.
 - Unit tests for the agent loop use fake providers and fake tools.
-- Provider tests do not require a live model by default.
+- Provider tests do not require a live model by default once the provider
+  hardening/replay path exists.
 - Terminal tests can run from synthetic events.
 
 ### Phase 2 - Security Enforcement
@@ -167,7 +172,7 @@ on.
 
 | PR                                       | Work                                                                                        | Depends on |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------- | ---------- |
-| **2A - Capabilities and policy**         | `internal/security/capabilities`, `internal/security/policy`; pure allow/ask/deny decisions | 1D         |
+| **2A - Capabilities and policy**         | `internal/security/capabilities`, `internal/security/policy`; pure allow/ask/deny decisions | 1F         |
 | **2B - Broker process**                  | `cmd/travis-broker`, broker protocol, local broker adapter, remote broker adapter           | 2A         |
 | **2C - Journal and undo**                | `internal/state/session`, `internal/state/journal`, snapshot-before-write, `/undo`          | 2A         |
 | **2D - Approvals, deny-list, redaction** | Approval modal, durable approval rules, deny-list, secret/PII redaction                     | 2A         |
@@ -197,7 +202,7 @@ exists.
 | PR                                   | Work                                                                                                                | Depends on |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- | ---------- |
 | **3A - MCP client**                  | `internal/tools/mcp`; stdio client, tool adapter, supervision for trusted/local servers                             | 2A         |
-| **3B - Skills loader**               | `internal/tools/skills`; load `SKILL.md`, select relevant skills, treat user/project instructions as untrusted text | 1D         |
+| **3B - Skills loader**               | `internal/tools/skills`; load `SKILL.md`, select relevant skills, treat user/project instructions as untrusted text | 1F         |
 | **3C - Tool pruning and inspectors** | Registry pruning, `/` palette, active tools/context inspector                                                       | 3A, 3B     |
 
 Phase 3 exit:
@@ -237,7 +242,7 @@ Goal: add voice without blocking the text assistant path.
 
 | PR                          | Work                                                                                    | Depends on |
 | --------------------------- | --------------------------------------------------------------------------------------- | ---------- |
-| **5A - Voice output**       | `internal/frontends/voiceout`; speech selection and system TTS adapter                  | 1D         |
+| **5A - Voice output**       | `internal/frontends/voiceout`; speech selection and system TTS adapter                  | 1F         |
 | **5B - Audio helper shape** | `cmd/travis-audio` plus voice input interfaces and OS stubs                             | 5A         |
 | **5C - Voice input**        | `internal/frontends/voicein`; mic capture, VAD, local transcription, per-OS permissions | 5B         |
 
@@ -330,8 +335,8 @@ Track these before starting the affected phase:
 
 | Needed by | Question                                                                                   |
 | --------- | ------------------------------------------------------------------------------------------ |
-| Phase 0   | Decide the first minimal event sink: synchronous only, async queue, or both                |
-| Phase 1   | Decide which provider is the first real adapter: OpenAI-compatible remote, Ollama, or both |
+| Phase 1   | Decide the first minimal event sink: synchronous only, async queue, or both                |
+| Phase 1   | Decide the first provider path: OpenAI-compatible remote, local/static, Ollama, or another |
 | Phase 1   | Decide how much config hot-reload is needed for MVP                                        |
 | Phase 2   | Define the first deny-list for Linux, macOS, and Windows                                   |
 | Phase 2   | Confirm session storage format when implementing journal/session code                      |

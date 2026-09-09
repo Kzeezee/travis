@@ -122,8 +122,6 @@ rules point contributors away from stale `pkg/` and broad skeleton work.
    Phase 1 work is not trapped by a large speculative contract.
 29. As a maintainer, I want tests only where there is behavior, so that the foundation
    tests catch real mistakes without asserting empty interfaces.
-30. As a maintainer, I want no commit or push from this work, so that I can inspect,
-   reshape, and commit the branch myself.
 
 ## Implementation Decisions
 
@@ -194,7 +192,6 @@ rules point contributors away from stale `pkg/` and broad skeleton work.
   effects, validation at entrypoints and trusted boundaries, event facts versus
   required operations, no broad formatting mixed with content edits, and conventional
   commits.
-- No commit or push is part of this change set.
 
 ## Testing Decisions
 
@@ -233,8 +230,6 @@ rules point contributors away from stale `pkg/` and broad skeleton work.
 - No capability matcher, policy engine, broker process, sandbox, approval flow, or
   undo journal.
 - No public Go API or compatibility policy.
-- No commit or push.
-
 ## Further Notes
 
 The most important design move is that `internal/core` is private shared app
