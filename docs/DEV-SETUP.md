@@ -128,8 +128,8 @@ shows the imports as unresolved.
 
 ## 6. Model provider, for Phase 1 onward
 
-Not needed to build or test — `brain` and `ai` unit tests must never touch the network
-(cassettes, D-16). You will want a local model for manual work:
+Not needed to build or test — agent loop and provider unit tests must never touch the
+network (cassettes, D-16). You will want a local model for manual work:
 
 ```
 brew install ollama          # or https://ollama.com/download

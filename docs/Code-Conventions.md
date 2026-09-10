@@ -79,8 +79,8 @@ and `frontends/terminal` as the actual package names.
 - Layers: screen/app orchestration → components (render + local UI state only) →
   presentation mappers (event/domain → view model) → command sink (intent inward) /
   event subscription (facts outward).
-- Hard rule: brain/provider/tool/broker/MCP packages must never import the terminal
-  UI package.
+- Hard rule: agent loop, provider, tool, broker, and MCP packages must never import
+  the terminal UI package.
 - Don't pre-create `screens/`, `components/`, `presentation/` folders — start flat,
   split only when a single file/folder is demonstrably noisy or shared by multiple
   tests.

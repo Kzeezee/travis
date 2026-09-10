@@ -27,18 +27,16 @@ type Logger interface {
 	LogErrorMsg(msg string, attrs ...any)
 }
 
-// slogLogger adapts Go's structured logger to the Travis Logger interface.
 type slogLogger struct {
-	// inner is the wrapped standard-library structured logger.
 	inner *slog.Logger
 }
 
-// BuildDefaultLogger wraps Go's default structured logger.
+// BuildDefaultLogger returns the process default logger behind the Travis facade.
 func BuildDefaultLogger() Logger {
 	return slogLogger{inner: slog.Default()}
 }
 
-// BuildTextLogger builds a structured text logger that writes to the provided writer.
+// BuildTextLogger returns a logger for CLI-visible text output at the requested level.
 func BuildTextLogger(out io.Writer, level Level) Logger {
 	if out == nil {
 		out = io.Discard
@@ -47,7 +45,7 @@ func BuildTextLogger(out io.Writer, level Level) Logger {
 	return slogLogger{inner: logger}
 }
 
-// BuildNopLogger builds a logger that discards all log output.
+// BuildNopLogger returns a logger for tests or call sites that intentionally suppress logs.
 func BuildNopLogger() Logger {
 	return BuildTextLogger(io.Discard, LevelError)
 }
@@ -67,22 +65,18 @@ func selectSlogLevel(level Level) slog.Level {
 	}
 }
 
-// LogDebugMsg forwards a debug message and structured attributes to slog.
 func (l slogLogger) LogDebugMsg(msg string, attrs ...any) {
 	l.inner.Debug(msg, attrs...)
 }
 
-// LogInfoMsg forwards an info message and structured attributes to slog.
 func (l slogLogger) LogInfoMsg(msg string, attrs ...any) {
 	l.inner.Info(msg, attrs...)
 }
 
-// LogWarnMsg forwards a warning message and structured attributes to slog.
 func (l slogLogger) LogWarnMsg(msg string, attrs ...any) {
 	l.inner.Warn(msg, attrs...)
 }
 
-// LogErrorMsg forwards an error message and structured attributes to slog.
 func (l slogLogger) LogErrorMsg(msg string, attrs ...any) {
 	l.inner.Error(msg, attrs...)
 }

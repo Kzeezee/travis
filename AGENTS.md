@@ -63,7 +63,6 @@ A Bubbletea v2 (Go) CLI personal assistant app with modular feature sets, suppor
   errors, approval, or return values
 - Test behavior where it is owned, using fakes across ports instead of real providers, filesystems,
   broker processes, terminals, or MCP servers
-- See `docs/code_design/codebase_tour.md` for the full codebase map and examples
 
 ### Design Quality
 - Evaluate design changes by whether they reduce cognitive load, change amplification, and
@@ -93,7 +92,7 @@ A Bubbletea v2 (Go) CLI personal assistant app with modular feature sets, suppor
 - Presentation mappers translate core/domain values into UI-facing view models
 - Frontend validation is for immediate feedback; backend entrypoints still validate
 - UI must not import agent loop, provider, tool, broker, policy, or MCP internals
-- See `docs/code_design/presentation_layer.md` before changing terminal UI structure
+- See `docs/Code-Conventions.md` before changing terminal UI structure
 
 ## Where the design lives
 - `docs/DESIGN.md` is normative. §0.5 is the decision register (D-01..D-34), §0.6 explains
@@ -107,13 +106,12 @@ A Bubbletea v2 (Go) CLI personal assistant app with modular feature sets, suppor
   asked to; it is verbose background material, not day-to-day guidance
 
 ## Read first
-- `docs/PLAN.md`
-- `docs/code_design/codebase_tour.md`
-- `docs/code_design/design_rationales.md`
-- `docs/code_design/implementation_example/ports_and_adapters.md`
-- `docs/code_design/implementation_example/error_handling.md`
-- `docs/code_design/presentation_layer.md`
 - `AGENTS.md`
+- `docs/Code-Conventions.md`
+- `docs/DESIGN-overview.md`
+- `docs/DESIGN.md`
+- `docs/PLAN.md`
+- `docs/DEV-SETUP.md`
 
 ## Hard rules
 - Use exactly one Go module
