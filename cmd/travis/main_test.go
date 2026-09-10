@@ -36,7 +36,7 @@ func TestRun(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var out bytes.Buffer
-			err := run(tt.args, &out)
+			err := run(tt.args, strings.NewReader(""), &out)
 
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("run(%q) error = %v, wantErr %v", tt.args, err, tt.wantErr)
@@ -48,5 +48,15 @@ func TestRun(t *testing.T) {
 				t.Errorf("run(%q) wrote %q to stdout on error; errors belong on stderr", tt.args, out.String())
 			}
 		})
+	}
+}
+
+// The chat command wires a real provider, so this only proves the composition holds
+// together: input ends before a prompt is submitted, so nothing reaches the network.
+func TestRunChatWiresTheSliceWithoutCallingTheProvider(t *testing.T) {
+	var out bytes.Buffer
+
+	if err := run([]string{"chat", "--model", "test-model"}, strings.NewReader(""), &out); err != nil {
+		t.Fatalf("run(chat) error = %v, want nil", err)
 	}
 }
