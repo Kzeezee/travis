@@ -67,10 +67,10 @@ func (s *recordingSink) types() []core.EventType {
 	return types
 }
 
-func buildRunner(t *testing.T, provider core.Provider, sink core.EventSink) *loop.Runner {
+func buildAssistantConversation(t *testing.T, provider core.Provider, sink core.EventSink) *loop.AssistantConversation {
 	t.Helper()
 	clock := core.FixedClock{Time: time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)}
-	return loop.BuildRunner(provider, sink, clock, "test-model")
+	return loop.BuildAssistantConversation(provider, sink, clock, "test-model")
 }
 
 func TestRunStreamsTextAndCompletesTheTurn(t *testing.T) {
@@ -82,8 +82,8 @@ func TestRunStreamsTextAndCompletesTheTurn(t *testing.T) {
 	provider := &fakeProvider{stream: stream}
 	sink := &recordingSink{}
 
-	if err := buildRunner(t, provider, sink).Run(context.Background(), "hi"); err != nil {
-		t.Fatalf("Run returned %v, want nil", err)
+	if err := buildAssistantConversation(t, provider, sink).RunAssistantTurn(context.Background(), "hi"); err != nil {
+		t.Fatalf("RunAssistantTurn returned %v, want nil", err)
 	}
 
 	want := []core.EventType{
@@ -119,14 +119,14 @@ func TestRunStreamsTextAndCompletesTheTurn(t *testing.T) {
 
 func TestRunSendsPriorTurnsAsContext(t *testing.T) {
 	provider := &fakeProvider{stream: &fakeStream{failAt: -1, chunks: []core.Chunk{{Text: "first reply"}}}}
-	runner := buildRunner(t, provider, &recordingSink{})
+	assistantConversation := buildAssistantConversation(t, provider, &recordingSink{})
 
-	if err := runner.Run(context.Background(), "first"); err != nil {
-		t.Fatalf("first Run returned %v, want nil", err)
+	if err := assistantConversation.RunAssistantTurn(context.Background(), "first"); err != nil {
+		t.Fatalf("first RunAssistantTurn returned %v, want nil", err)
 	}
 	provider.stream = &fakeStream{failAt: -1, chunks: []core.Chunk{{Text: "second reply"}}}
-	if err := runner.Run(context.Background(), "second"); err != nil {
-		t.Fatalf("second Run returned %v, want nil", err)
+	if err := assistantConversation.RunAssistantTurn(context.Background(), "second"); err != nil {
+		t.Fatalf("second RunAssistantTurn returned %v, want nil", err)
 	}
 
 	if len(provider.requests) != 2 {
@@ -149,7 +149,7 @@ func TestRunReportsAFailedProviderCall(t *testing.T) {
 	provider := &fakeProvider{chatErr: errProviderUnavailable}
 	sink := &recordingSink{}
 
-	err := buildRunner(t, provider, sink).Run(context.Background(), "hi")
+	err := buildAssistantConversation(t, provider, sink).RunAssistantTurn(context.Background(), "hi")
 
 	if !errors.Is(err, errProviderUnavailable) {
 		t.Fatalf("got %v, want errProviderUnavailable", err)
@@ -161,7 +161,7 @@ func TestRunReportsAFailureMidStream(t *testing.T) {
 	provider := &fakeProvider{stream: &fakeStream{failAt: 1, chunks: []core.Chunk{{Text: "partial"}}}}
 	sink := &recordingSink{}
 
-	err := buildRunner(t, provider, sink).Run(context.Background(), "hi")
+	err := buildAssistantConversation(t, provider, sink).RunAssistantTurn(context.Background(), "hi")
 
 	if !errors.Is(err, errProviderUnavailable) {
 		t.Fatalf("got %v, want errProviderUnavailable", err)

@@ -91,7 +91,7 @@ func TestBusUnsubscribeClosesChannelAndStopsDelivery(t *testing.T) {
 	events, cancel := bus.Subscribe(nil)
 	cancel()
 
-	if _, open := <-events; open {
+	if _, isSubscriptionChannelOpen := <-events; isSubscriptionChannelOpen {
 		t.Fatal("got an open channel, want unsubscribe to close it")
 	}
 
@@ -104,7 +104,7 @@ func TestBusCloseEndsSubscriptionsAndSilencesPublish(t *testing.T) {
 	defer cancel()
 
 	bus.Close()
-	if _, open := <-events; open {
+	if _, isSubscriptionChannelOpen := <-events; isSubscriptionChannelOpen {
 		t.Fatal("got an open channel, want Close to end the subscription")
 	}
 
@@ -112,7 +112,7 @@ func TestBusCloseEndsSubscriptionsAndSilencesPublish(t *testing.T) {
 
 	afterClose, cancelAfterClose := bus.Subscribe(nil)
 	defer cancelAfterClose()
-	if _, open := <-afterClose; open {
+	if _, isSubscriptionChannelOpen := <-afterClose; isSubscriptionChannelOpen {
 		t.Fatal("got an open channel, want subscribing after Close to yield a closed one")
 	}
 }

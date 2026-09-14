@@ -36,6 +36,10 @@ A Bubbletea v2 (Go) CLI personal assistant app with modular feature sets, suppor
 - Keep standard Go convention method names when they are required or strongly
   expected by standard interfaces, such as `String()`, `Error()`, `Unwrap()`,
   `MarshalJSON()`, and `UnmarshalJSON()`
+- Name boolean variables and fields as predicates that include the subject when context
+  is not obvious, such as `isEventChannelOpen`, `hasPendingEvents`, `canWrite`, or
+  `shouldRetry`; avoid bare adjectives or nouns like `open` when the value is a truth
+  condition
 - Avoid names tied to replaceable implementation details, such as a storage mechanism, OS source,
   transport, or parsing technology, unless that detail is the stable domain concept; prefer
   `buildPathSetFromInputs` over `pathsFromEnv` when the helper constructs and validates paths

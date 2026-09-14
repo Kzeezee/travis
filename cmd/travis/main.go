@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 
 	"github.com/Kzeezee/travis/internal/agent/loop"
+	"github.com/Kzeezee/travis/internal/app/chat"
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
@@ -54,9 +55,9 @@ func run(args []string, in io.Reader, out io.Writer) error {
 	}
 }
 
-// runChat assembles the text-assistant slice: a provider adapter, the turn runner, the
-// event bus they publish to, and the frontend that subscribes to it. This is the only
-// place that knows which concrete pieces are in play.
+// runChat assembles the text-assistant slice: a provider adapter, the assistant
+// conversation, the event bus they publish to, and the frontend that subscribes to it.
+// This is the only place that knows which concrete pieces are in play.
 func runChat(args []string, in io.Reader, out io.Writer) error {
 	flags := flag.NewFlagSet("chat", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
@@ -70,12 +71,14 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	defer bus.Close()
 
 	provider := openai.BuildProvider(*baseURL, config.ResolveProviderAPIKey(), nil)
-	runner := loop.BuildRunner(provider, bus, core.SystemClock{}, *model)
+	assistantConversation := loop.BuildAssistantConversation(provider, bus, core.SystemClock{}, *model)
 
 	events, unsubscribe := bus.Subscribe(nil)
 	defer unsubscribe()
 
-	return terminal.BuildApp(events, runner.Run, in, out).Run(context.Background())
+	chatTerminal := terminal.BuildTerminal(in, out)
+	chatSession := chat.BuildChatSession(events, chatTerminal, assistantConversation)
+	return chatSession.Run(context.Background())
 }
 
 func buildVersionString() string {
