@@ -3,8 +3,6 @@ package core
 import (
 	"context"
 	"sync"
-
-	"github.com/Kzeezee/travis/internal/log"
 )
 
 // defaultSubscriberBuffer follows DESIGN.md 5.1; a subscriber this far behind is
@@ -15,7 +13,7 @@ const defaultSubscriberBuffer = 1024
 // publisher, so delivery to a full subscriber drops the event and logs it rather than
 // blocking or queueing (Code-Conventions.md, async event delivery).
 type Bus struct {
-	logger log.Logger
+	logger Logger
 	buffer int
 
 	mu          sync.Mutex
@@ -31,7 +29,7 @@ type subscription struct {
 
 // BuildEventBus returns a bus that gives each subscriber its own buffer of the given
 // size. A size below one falls back to the default.
-func BuildEventBus(logger log.Logger, bufferPerSubscriber int) *Bus {
+func BuildEventBus(logger Logger, bufferPerSubscriber int) *Bus {
 	if bufferPerSubscriber < 1 {
 		bufferPerSubscriber = defaultSubscriberBuffer
 	}

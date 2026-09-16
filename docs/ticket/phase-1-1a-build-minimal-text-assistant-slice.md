@@ -10,15 +10,15 @@ agent-loop orchestration, `core.Provider`, one provider implementation, and
 
 **Status:** ready-after-0c
 
-- [ ] A user-facing command path exists for one prompt and one assistant response.
-- [ ] `internal/agent/loop` or the smallest equivalent package owns the prompt-to-response
+- [x] A user-facing command path exists for one prompt and one assistant response.
+- [x] `internal/agent/loop` or the smallest equivalent package owns the prompt-to-response
       orchestration.
-- [ ] The agent loop depends on `core.Provider`, not on a concrete provider package.
-- [ ] One provider implementation exists only as far as needed to prove the slice.
-- [ ] The provider choice is documented in the PR: real OpenAI-compatible, local/static,
+- [x] The agent loop depends on `core.Provider`, not on a concrete provider package.
+- [x] One provider implementation exists only as far as needed to prove the slice.
+- [x] The provider choice is documented in the PR: real OpenAI-compatible, local/static,
       Ollama, or another small provider path.
-- [ ] `cmd/travis` wires concrete terminal, runner, and provider pieces.
-- [ ] Terminal code collects user intent and renders assistant output without importing
+- [x] `cmd/travis` wires concrete terminal, runner, and provider pieces.
+- [x] Terminal code collects user intent and renders assistant output without importing
       provider, tool, broker, policy, or MCP internals.
 - [ ] Provider and stream failures are shown or returned cleanly enough for a developer
       to understand what failed.
