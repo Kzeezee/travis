@@ -1,2 +1,2 @@
-// Package log defines the logging facade used at Travis module seams.
+// Package log builds slog-backed implementations of core.Logger.
 package log

@@ -3,6 +3,8 @@ package log
 import (
 	"io"
 	"log/slog"
+
+	"github.com/Kzeezee/travis/internal/core"
 )
 
 // Level names the minimum severity a built logger should record.
@@ -15,29 +17,17 @@ const (
 	LevelError Level = "error"
 )
 
-// Logger is the small logging facade shared across Travis module seams.
-type Logger interface {
-	// LogDebugMsg records low-level diagnostic details, such as selected provider or retry count.
-	LogDebugMsg(msg string, attrs ...any)
-	// LogInfoMsg records normal progress, such as provider connected or config loaded.
-	LogInfoMsg(msg string, attrs ...any)
-	// LogWarnMsg records recoverable surprises, such as dropped events or fallback config paths.
-	LogWarnMsg(msg string, attrs ...any)
-	// LogErrorMsg records failed required work, such as provider request or tool execution failure.
-	LogErrorMsg(msg string, attrs ...any)
-}
-
 type slogLogger struct {
 	inner *slog.Logger
 }
 
 // BuildDefaultLogger returns the process default logger behind the Travis facade.
-func BuildDefaultLogger() Logger {
+func BuildDefaultLogger() core.Logger {
 	return slogLogger{inner: slog.Default()}
 }
 
 // BuildTextLogger returns a logger for CLI-visible text output at the requested level.
-func BuildTextLogger(out io.Writer, level Level) Logger {
+func BuildTextLogger(out io.Writer, level Level) core.Logger {
 	if out == nil {
 		out = io.Discard
 	}
@@ -46,7 +36,7 @@ func BuildTextLogger(out io.Writer, level Level) Logger {
 }
 
 // BuildNopLogger returns a logger for tests or call sites that intentionally suppress logs.
-func BuildNopLogger() Logger {
+func BuildNopLogger() core.Logger {
 	return BuildTextLogger(io.Discard, LevelError)
 }
 
