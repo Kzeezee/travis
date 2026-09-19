@@ -1,6 +1,6 @@
 # `travis` — Design Document
 
-**Status:** Draft v0.4 · **Owner:** Kzeezee · **Last updated:** 2026-09-01
+**Status:** Draft v0.4 · **Owner:** Kzeezee · **Last updated:** 2026-09-19
 **Changes in v0.4:** D-11 (travis is a **general personal assistant**, not a coding
 agent — closes the M1/OQ-17 inconsistency) · D-12 (broker is **one per session**, a
 child process, no privilege elevation, **binary verified before exec**) · D-13
@@ -670,9 +670,12 @@ not a caller. This is what makes the UI truthful about state without the brain
 knowing a TUI exists.
 
 ```go
-type Event interface{ isEvent() }
+type EventType string              // stable identifier per kind, e.g. "turn.completed"
+type Event interface{ ReportEventType() EventType }
 
-// Representative subset. Full list in core/events.go — that file is normative.
+// Representative subset. Full list in core/events.go — that file is normative. Each
+// concrete event there embeds a shared EventHeader{ID, At} for common metadata; the
+// TurnID/StepID/CallID fields below show what else each event's own payload carries.
 type TurnStarted    struct{ TurnID ID; Input string; Source InputSource }
 type StepStarted     struct{ TurnID, StepID ID; Model string }
 type TokenStreamed   struct{ StepID ID; Delta string }
@@ -694,6 +697,11 @@ type TurnCompleted   struct{ TurnID ID; Cost Cost; Stop StopReason }
 and leaving that state. No UI polling of brain internals. This directly satisfies the
 "always show the user what's going on" requirement in §7.
 
+⚠️ **As shipped in Phase 1A, a dropped event is logged, not re-published** — see
+§5.1's failure-mode note. That is a live exception to the rule above: today the UI has
+no event to react to when a drop happens. Revisit once a consumer (likely 1D) needs to
+show a "trace truncated" marker.
+
 ---
 
 ## 5. Module specifications
@@ -713,12 +721,27 @@ crosses a module boundary. Contains no logic beyond the bus.
 
 ```go
 type ID string                     // ULID; sortable, timestamped
-type Bus interface {
-    Publish(Event)
-    Subscribe(filter func(Event) bool) (<-chan Event, func())
+
+// EventSink is the narrow seam inner modules (e.g. the agent loop) depend on: publish
+// only, so a consumer never needs to know about subscription or fan-out.
+type EventSink interface {
+    Publish(ctx context.Context, event Event)
 }
-type Clock interface{ ReportCurrentTime() time.Time; After(time.Duration) <-chan time.Time }
+
+// Bus is the concrete pub/sub broadcaster and satisfies EventSink; it additionally
+// owns subscription. Built with BuildEventBus(logger Logger, bufferPerSubscriber int).
+type Bus struct{ /* unexported */ }
+func (b *Bus) Publish(ctx context.Context, event Event)
+func (b *Bus) Subscribe(filter func(Event) bool) (<-chan Event, func())
+func (b *Bus) Close()
+
+type Clock interface{ ReportCurrentTime() time.Time }
 ```
+
+→ **Note on `Clock.After`:** §5.3.1's jittered backoff will eventually want a timer
+primitive. `core.Clock` does not have one yet because nothing consumes it. Add it to
+this interface — not a separate timer seam — when a caller (likely 1B's retry/backoff
+work) actually needs it, rather than speculatively now.
 
 Plus `Tool`, `Provider`, `Policy`, `Broker`, `Capability`, `Message`, `Part`, `Cost`.
 
@@ -737,8 +760,11 @@ lives in its own package, which may use a ULID library freely. This is not a con
 **Swappable backends.** N/A — this _is_ the seam.
 
 **Failure modes.** A slow subscriber must not stall publishers. `Bus.Publish` is
-non-blocking; per-subscriber ring buffer of 1024, drops oldest, emits
-`EventsDropped{n}` so the UI can show a "trace truncated" marker. `[R-08]`
+non-blocking: per-subscriber buffer of 1024 by default (set via `BuildEventBus`), and
+a full buffer drops the incoming event — not the oldest queued one — and logs a
+warning. ⚠️ **As shipped in Phase 1A this is log-only**: no `EventsDropped` event is
+published back onto the bus, so the UI has no state to react to per §4.5's rule.
+Revisit once a consumer (likely 1D) needs to show a "trace truncated" marker. `[R-08]`
 
 **Testing.** Bus fuzz test for ordering/drop semantics. `Clock` fake used everywhere;
 `time.Now()` outside `core` is a lint error.
