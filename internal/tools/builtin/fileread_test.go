@@ -10,6 +10,7 @@ import (
 
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/tools/builtin"
+	"github.com/Kzeezee/travis/internal/tools/tooltest"
 )
 
 const testMaxBytes = 64 << 10
@@ -238,17 +239,17 @@ func TestReadReturnsAGoErrorWhenCancelled(t *testing.T) {
 	}
 }
 
+func TestFileReadToolMeetsTheToolContract(t *testing.T) {
+	tooltest.Run(t, builtin.BuildFileReadTool(t.TempDir(), testMaxBytes))
+}
+
 func TestDescribeReportsTheReadCapability(t *testing.T) {
 	root := t.TempDir()
 	tool := builtin.BuildFileReadTool(root, testMaxBytes)
 	spec := tool.Describe()
 
-	if spec.Name != tool.Name() || spec.Name != "fs.read" {
-		t.Fatalf("Describe().Name = %q, Name() = %q", spec.Name, tool.Name())
-	}
-	var schema map[string]any
-	if err := json.Unmarshal(spec.InputSchema, &schema); err != nil {
-		t.Fatalf("schema is not a JSON object: %v", err)
+	if spec.Name != "fs.read" {
+		t.Fatalf("Describe().Name = %q", spec.Name)
 	}
 	if len(spec.Capabilities) != 1 || spec.Capabilities[0].Kind != core.CapabilityFSRead ||
 		spec.Capabilities[0].Scope != filepath.Clean(root) {
