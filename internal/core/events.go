@@ -65,7 +65,8 @@ func (ToolCallStarted) ReportEventType() EventType {
 // ToolCallFinished records that a tool call produced a result.
 type ToolCallFinished struct {
 	EventHeader
-	Result ToolResult `json:"result"`
+	Result  ToolResult `json:"result"`
+	Display string     `json:"display,omitempty"`
 }
 
 func (ToolCallFinished) ReportEventType() EventType {
