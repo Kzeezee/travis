@@ -11,7 +11,6 @@ import (
 	"runtime/debug"
 
 	"github.com/Kzeezee/travis/internal/agent/loop"
-	"github.com/Kzeezee/travis/internal/app/chat"
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
@@ -76,9 +75,8 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	events, unsubscribe := bus.Subscribe(nil)
 	defer unsubscribe()
 
-	chatTerminal := terminal.BuildTerminal(in, out)
-	chatSession := chat.BuildChatSession(events, chatTerminal, assistantConversation)
-	return chatSession.Run(context.Background())
+	return terminal.RunChat(context.Background(), events, assistantConversation.RunAssistantTurn,
+		terminal.Options{ModelName: *model, Input: in, Output: out})
 }
 
 func buildVersionString() string {
