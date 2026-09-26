@@ -46,13 +46,13 @@ func drain(t *testing.T, stream core.Stream) ([]core.Chunk, error) {
 }
 
 func TestChatSendsAStreamingRequestWithTheCredential(t *testing.T) {
-	var gotAuth, gotPath string
-	var gotBody map[string]any
+	var capturedAuthorizationHeader, capturedRequestPath string
+	var capturedRequestBody map[string]any
 
 	server := startEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		gotPath = r.URL.Path
-		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		capturedAuthorizationHeader = r.Header.Get("Authorization")
+		capturedRequestPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&capturedRequestBody)
 		writeStream(w, `{"choices":[{"delta":{"content":"ok"}}]}`, "[DONE]")
 	})
 
@@ -66,25 +66,139 @@ func TestChatSendsAStreamingRequestWithTheCredential(t *testing.T) {
 	}
 	defer func() { _ = stream.Close() }()
 
-	if gotAuth != "Bearer "+testAPIKey {
-		t.Fatalf("got Authorization %q, want a bearer credential", gotAuth)
+	if capturedAuthorizationHeader != "Bearer "+testAPIKey {
+		t.Fatalf("got Authorization %q, want a bearer credential", capturedAuthorizationHeader)
 	}
-	if gotPath != "/v1/chat/completions" {
-		t.Fatalf("got path %q, want /v1/chat/completions", gotPath)
+	if capturedRequestPath != "/v1/chat/completions" {
+		t.Fatalf("got path %q, want /v1/chat/completions", capturedRequestPath)
 	}
-	if gotBody["model"] != "gpt-5" {
-		t.Fatalf("got model %v, want gpt-5", gotBody["model"])
+	if capturedRequestBody["model"] != "gpt-5" {
+		t.Fatalf("got model %v, want gpt-5", capturedRequestBody["model"])
 	}
-	if gotBody["stream"] != true {
-		t.Fatalf("got stream %v, want true", gotBody["stream"])
+	if capturedRequestBody["stream"] != true {
+		t.Fatalf("got stream %v, want true", capturedRequestBody["stream"])
 	}
-	messages, ok := gotBody["messages"].([]any)
+	messages, ok := capturedRequestBody["messages"].([]any)
 	if !ok || len(messages) != 1 {
-		t.Fatalf("got messages %v, want one message", gotBody["messages"])
+		t.Fatalf("got messages %v, want one message", capturedRequestBody["messages"])
 	}
 	first, _ := messages[0].(map[string]any)
 	if first["role"] != "user" || first["content"] != "hi" {
 		t.Fatalf("got message %v, want the user prompt", first)
+	}
+}
+
+func TestChatSerializesTools(t *testing.T) {
+	var capturedRequestBody map[string]any
+	server := startEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedRequestBody)
+		writeStream(w, "[DONE]")
+	})
+
+	provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
+		Model: "gpt-5",
+		Tools: []core.ToolSpec{{
+			Name:        "fs.read",
+			Description: "Read a file",
+			InputSchema: json.RawMessage(`{
+				"type":"object",
+				"properties":{"path":{"type":"string"}},
+				"required":["path"]
+			}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned %v, want nil", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	tools, ok := capturedRequestBody["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("got tools %v, want one tool", capturedRequestBody["tools"])
+	}
+	tool, _ := tools[0].(map[string]any)
+	if tool["type"] != "function" {
+		t.Fatalf("got tool type %v, want function", tool["type"])
+	}
+	function, _ := tool["function"].(map[string]any)
+	if function["name"] != "fs.read" || function["description"] != "Read a file" {
+		t.Fatalf("got function %v, want fs.read with description", function)
+	}
+	parameters, _ := function["parameters"].(map[string]any)
+	if parameters["type"] != "object" {
+		t.Fatalf("got parameters %v, want object schema", parameters)
+	}
+	if capturedRequestBody["tool_choice"] != "auto" {
+		t.Fatalf("got tool_choice %v, want auto", capturedRequestBody["tool_choice"])
+	}
+}
+
+func TestChatSerializesToolCallAndToolResultMessages(t *testing.T) {
+	var capturedRequestBody map[string]any
+	server := startEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedRequestBody)
+		writeStream(w, "[DONE]")
+	})
+
+	toolCallArguments := json.RawMessage(`{"path":"README.md"}`)
+	provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
+		Model: "gpt-5",
+		Messages: []core.Message{
+			{
+				Role: core.RoleAssistant,
+				Parts: []core.Part{
+					core.TextPart{Text: "reading file"},
+					core.ToolCallPart{ToolCall: core.ToolCall{
+						ID:        core.ID("call_123"),
+						Name:      "fs.read",
+						Arguments: toolCallArguments,
+					}},
+				},
+			},
+			{
+				Role: core.RoleTool,
+				Parts: []core.Part{
+					core.ToolResultPart{ToolResult: core.ToolResult{
+						CallID:  core.ID("call_123"),
+						Name:    "fs.read",
+						Content: "file contents",
+					}},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned %v, want nil", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	messages, ok := capturedRequestBody["messages"].([]any)
+	if !ok || len(messages) != 2 {
+		t.Fatalf("got messages %v, want assistant and tool messages", capturedRequestBody["messages"])
+	}
+
+	assistantMessage, _ := messages[0].(map[string]any)
+	if assistantMessage["role"] != "assistant" || assistantMessage["content"] != "reading file" {
+		t.Fatalf("got assistant message %v, want assistant text", assistantMessage)
+	}
+	toolCalls, ok := assistantMessage["tool_calls"].([]any)
+	if !ok || len(toolCalls) != 1 {
+		t.Fatalf("got tool_calls %v, want one tool call", assistantMessage["tool_calls"])
+	}
+	toolCall, _ := toolCalls[0].(map[string]any)
+	if toolCall["id"] != "call_123" || toolCall["type"] != "function" {
+		t.Fatalf("got tool call %v, want call_123 function", toolCall)
+	}
+	function, _ := toolCall["function"].(map[string]any)
+	if function["name"] != "fs.read" || function["arguments"] != string(toolCallArguments) {
+		t.Fatalf("got tool call function %v, want fs.read arguments", function)
+	}
+
+	toolMessage, _ := messages[1].(map[string]any)
+	if toolMessage["role"] != "tool" || toolMessage["tool_call_id"] != "call_123" || toolMessage["content"] != "file contents" {
+		t.Fatalf("got tool message %v, want tool result content", toolMessage)
 	}
 }
 
@@ -137,6 +251,43 @@ func TestStreamDecodesTextFinishReasonAndUsage(t *testing.T) {
 	}
 }
 
+func TestStreamDecodesToolCallFragments(t *testing.T) {
+	server := startEndpoint(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeStream(w,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"fs.read","arguments":""}}]},"finish_reason":null}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\""}}]},"finish_reason":null}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"README.md\"}"}}]},"finish_reason":null}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+			"[DONE]",
+		)
+	})
+
+	chunks, err := drain(t, openChat(t, server, ""))
+	if err != nil {
+		t.Fatalf("draining returned %v, want nil", err)
+	}
+	if len(chunks) != 4 {
+		t.Fatalf("got %d chunks, want 4", len(chunks))
+	}
+
+	firstFragment := chunks[0].ToolCall
+	if firstFragment == nil {
+		t.Fatal("first chunk did not include a tool-call fragment")
+	}
+	if firstFragment.Index != 0 || firstFragment.ID != core.ID("call_123") || firstFragment.Name != "fs.read" {
+		t.Fatalf("got first fragment %+v, want call_123 fs.read", firstFragment)
+	}
+	if chunks[1].ToolCall == nil || chunks[1].ToolCall.Arguments != `{"path"` {
+		t.Fatalf("got second fragment %+v, want first arguments fragment", chunks[1].ToolCall)
+	}
+	if chunks[2].ToolCall == nil || chunks[2].ToolCall.Arguments != `:"README.md"}` {
+		t.Fatalf("got third fragment %+v, want second arguments fragment", chunks[2].ToolCall)
+	}
+	if chunks[3].Finish != core.StopToolCalls {
+		t.Fatalf("got finish %q, want %q", chunks[3].Finish, core.StopToolCalls)
+	}
+}
+
 func TestStreamEndsCleanlyWithoutADoneMarker(t *testing.T) {
 	server := startEndpoint(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeStream(w, `{"choices":[{"delta":{"content":"only"}}]}`)
@@ -151,14 +302,14 @@ func TestStreamEndsCleanlyWithoutADoneMarker(t *testing.T) {
 	}
 }
 
-func TestStreamReportsAMalformedFrameAsInvalid(t *testing.T) {
+func TestStreamReportsAMalformedFrame(t *testing.T) {
 	server := startEndpoint(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeStream(w, `{"choices":[`)
 	})
 
 	_, err := drain(t, openChat(t, server, ""))
-	if !errors.Is(err, core.ErrInvalid) {
-		t.Fatalf("got %v, want core.ErrInvalid", err)
+	if !errors.Is(err, core.ErrProviderMalformed) {
+		t.Fatalf("got %v, want core.ErrProviderMalformed", err)
 	}
 }
 
@@ -166,18 +317,31 @@ func TestChatTranslatesStatusCodes(t *testing.T) {
 	cases := []struct {
 		name   string
 		status int
+		body   string
 		want   error
 	}{
-		{"rate limited", http.StatusTooManyRequests, core.ErrExhausted},
-		{"bad request", http.StatusBadRequest, core.ErrInvalid},
-		{"unauthorized", http.StatusUnauthorized, core.ErrInvalid},
-		{"server failure", http.StatusInternalServerError, core.ErrTransient},
+		{name: "rate limited", status: http.StatusTooManyRequests, want: core.ErrRateLimit},
+		{name: "bad request", status: http.StatusBadRequest, want: core.ErrInvalid},
+		{name: "unauthorized", status: http.StatusUnauthorized, want: core.ErrAuth},
+		{name: "forbidden", status: http.StatusForbidden, want: core.ErrAuth},
+		{name: "request too large", status: http.StatusRequestEntityTooLarge, want: core.ErrContextLength},
+		{
+			name:   "context size from openai error body",
+			status: http.StatusBadRequest,
+			body:   `{"error":{"code":"context_length_exceeded","message":"too many tokens"}}`,
+			want:   core.ErrContextLength,
+		},
+		{name: "server failure", status: http.StatusInternalServerError, want: core.ErrTransient},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			server := startEndpoint(t, func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(testCase.status)
-				_, _ = io.WriteString(w, `{"error":{"message":"nope"}}`)
+				errorBody := testCase.body
+				if errorBody == "" {
+					errorBody = `{"error":{"message":"nope"}}`
+				}
+				_, _ = io.WriteString(w, errorBody)
 			})
 
 			provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())

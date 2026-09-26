@@ -5,21 +5,21 @@ import (
 	"testing"
 )
 
-func TestPartsReportPartKind(t *testing.T) {
+func TestPartsReportMessageContentType(t *testing.T) {
 	tests := []struct {
 		name string
 		part Part
-		want PartKind
+		want MessageContentType
 	}{
-		{name: "text", part: TextPart{}, want: PartText},
-		{name: "tool call", part: ToolCallPart{}, want: PartToolCall},
-		{name: "tool result", part: ToolResultPart{}, want: PartToolResult},
+		{name: "text", part: TextPart{}, want: MessageContentText},
+		{name: "tool call", part: ToolCallPart{}, want: MessageContentToolCall},
+		{name: "tool result", part: ToolResultPart{}, want: MessageContentToolResult},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.part.ReportPartKind(); got != tt.want {
-				t.Fatalf("ReportPartKind() = %q, want %q", got, tt.want)
+			if got := tt.part.ReportMessageContentType(); got != tt.want {
+				t.Fatalf("ReportMessageContentType() = %q, want %q", got, tt.want)
 			}
 		})
 	}

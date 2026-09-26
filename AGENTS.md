@@ -19,7 +19,7 @@ A Bubbletea v2 (Go) CLI personal assistant app with modular feature sets, suppor
   or what answer they report, even when they only return a value
 - Avoid function or method names that are only the returned type, receiver type, field
   name, or bare noun; prefer `ReportEventType()` over `EventType()` and
-  `ReportPartKind()` over `partKind()`
+  `ReportMessageContentType()` over `contentType()`
 - Use a light verb for value-producing helpers when construction, normalization,
   aggregation, selection, conversion, or reporting is part of the stable intent, such
   as `buildPathSetFromInputs`, `normalizeConfigPath`, `selectProvider`, or

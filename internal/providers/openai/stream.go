@@ -28,7 +28,8 @@ func buildStream(body io.ReadCloser) *stream {
 type streamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content   string                `json:"content"`
+			ToolCalls []streamToolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -36,6 +37,16 @@ type streamChunk struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
 	} `json:"usage"`
+}
+
+type streamToolCallDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
 }
 
 // Next returns the next chunk, or io.EOF once the endpoint signals the end of the stream.
@@ -87,9 +98,13 @@ func decodeChunk(payload string) (core.Chunk, error) {
 
 	var chunk core.Chunk
 	if len(raw.Choices) > 0 {
-		chunk.Text = raw.Choices[0].Delta.Content
-		if raw.Choices[0].FinishReason != nil {
-			chunk.Finish = selectStopReason(*raw.Choices[0].FinishReason)
+		choice := raw.Choices[0]
+		chunk.Text = choice.Delta.Content
+		if len(choice.Delta.ToolCalls) > 0 {
+			chunk.ToolCall = buildToolCallFragment(choice.Delta.ToolCalls[0])
+		}
+		if choice.FinishReason != nil {
+			chunk.Finish = selectStopReason(*choice.FinishReason)
 		}
 	}
 	if raw.Usage != nil {
@@ -99,6 +114,15 @@ func decodeChunk(payload string) (core.Chunk, error) {
 		}
 	}
 	return chunk, nil
+}
+
+func buildToolCallFragment(toolCall streamToolCallDelta) *core.ToolCallFragment {
+	return &core.ToolCallFragment{
+		Index:     toolCall.Index,
+		ID:        core.ID(toolCall.ID),
+		Name:      toolCall.Function.Name,
+		Arguments: toolCall.Function.Arguments,
+	}
 }
 
 func selectStopReason(reason string) core.StopReason {

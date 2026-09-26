@@ -27,6 +27,7 @@ type Chunk struct {
 }
 
 type ToolCallFragment struct {
+	Index     int    `json:"index,omitempty"`
 	ID        ID     `json:"id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`

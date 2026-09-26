@@ -12,13 +12,14 @@ const (
 	RoleTool      Role = "tool"
 )
 
-// Part kinds identify the shape of one piece of message content.
-type PartKind string
+// MessageContentType identifies which concrete content payload a message part carries.
+// The current payloads are normal text, an assistant-requested tool call, and a tool result.
+type MessageContentType string
 
 const (
-	PartText       PartKind = "text"
-	PartToolCall   PartKind = "tool_call"
-	PartToolResult PartKind = "tool_result"
+	MessageContentText       MessageContentType = "text"
+	MessageContentToolCall   MessageContentType = "tool_call"
+	MessageContentToolResult MessageContentType = "tool_result"
 )
 
 // Message is provider-neutral conversation content passed between app modules.
@@ -29,7 +30,7 @@ type Message struct {
 
 // Part is one strictly typed piece of message content.
 type Part interface {
-	ReportPartKind() PartKind
+	ReportMessageContentType() MessageContentType
 }
 
 // TextPart carries normal text content.
@@ -37,16 +38,16 @@ type TextPart struct {
 	Text string `json:"text"`
 }
 
-func (TextPart) ReportPartKind() PartKind {
-	return PartText
+func (TextPart) ReportMessageContentType() MessageContentType {
+	return MessageContentText
 }
 
 func (p TextPart) MarshalJSON() ([]byte, error) {
 	type textPart struct {
-		Kind PartKind `json:"kind"`
-		Text string   `json:"text"`
+		Kind MessageContentType `json:"kind"`
+		Text string             `json:"text"`
 	}
-	return json.Marshal(textPart{Kind: p.ReportPartKind(), Text: p.Text})
+	return json.Marshal(textPart{Kind: p.ReportMessageContentType(), Text: p.Text})
 }
 
 // ToolCallPart carries a tool call requested by the assistant.
@@ -54,16 +55,16 @@ type ToolCallPart struct {
 	ToolCall ToolCall `json:"tool_call"`
 }
 
-func (ToolCallPart) ReportPartKind() PartKind {
-	return PartToolCall
+func (ToolCallPart) ReportMessageContentType() MessageContentType {
+	return MessageContentToolCall
 }
 
 func (p ToolCallPart) MarshalJSON() ([]byte, error) {
 	type toolCallPart struct {
-		Kind     PartKind `json:"kind"`
-		ToolCall ToolCall `json:"tool_call"`
+		Kind     MessageContentType `json:"kind"`
+		ToolCall ToolCall           `json:"tool_call"`
 	}
-	return json.Marshal(toolCallPart{Kind: p.ReportPartKind(), ToolCall: p.ToolCall})
+	return json.Marshal(toolCallPart{Kind: p.ReportMessageContentType(), ToolCall: p.ToolCall})
 }
 
 // ToolResultPart carries the output from a completed tool call.
@@ -71,14 +72,14 @@ type ToolResultPart struct {
 	ToolResult ToolResult `json:"tool_result"`
 }
 
-func (ToolResultPart) ReportPartKind() PartKind {
-	return PartToolResult
+func (ToolResultPart) ReportMessageContentType() MessageContentType {
+	return MessageContentToolResult
 }
 
 func (p ToolResultPart) MarshalJSON() ([]byte, error) {
 	type toolResultPart struct {
-		Kind       PartKind   `json:"kind"`
-		ToolResult ToolResult `json:"tool_result"`
+		Kind       MessageContentType `json:"kind"`
+		ToolResult ToolResult         `json:"tool_result"`
 	}
-	return json.Marshal(toolResultPart{Kind: p.ReportPartKind(), ToolResult: p.ToolResult})
+	return json.Marshal(toolResultPart{Kind: p.ReportMessageContentType(), ToolResult: p.ToolResult})
 }
