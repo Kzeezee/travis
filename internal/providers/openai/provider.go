@@ -128,6 +128,8 @@ func buildChatMessages(messages []core.Message) []chatMessage {
 	chatMessages := make([]chatMessage, 0, len(messages))
 	for _, message := range messages {
 		switch message.Role {
+		case core.RoleSystem, core.RoleUser, core.RoleAssistant:
+			chatMessages = append(chatMessages, buildAssistantOrUserMessage(message))
 		case core.RoleTool:
 			chatMessages = append(chatMessages, buildChatMessagesFromToolResults(message.Parts)...)
 		default:
