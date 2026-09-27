@@ -19,18 +19,11 @@ type Stream interface {
 }
 
 type Chunk struct {
-	Text      string            `json:"text,omitempty"`
-	Reasoning string            `json:"reasoning,omitempty"`
-	ToolCall  *ToolCallFragment `json:"tool_call,omitempty"`
-	Usage     *Usage            `json:"usage,omitempty"`
-	Finish    StopReason        `json:"finish,omitempty"`
-}
-
-type ToolCallFragment struct {
-	Index     int    `json:"index,omitempty"`
-	ID        ID     `json:"id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
+	Text      string     `json:"text,omitempty"`
+	Reasoning string     `json:"reasoning,omitempty"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // assembled, on the chunk carrying Finish
+	Usage     *Usage     `json:"usage,omitempty"`
+	Finish    StopReason `json:"finish,omitempty"`
 }
 
 type Usage struct {

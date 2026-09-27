@@ -251,11 +251,11 @@ func TestStreamDecodesTextFinishReasonAndUsage(t *testing.T) {
 	}
 }
 
-func TestStreamDecodesToolCallFragments(t *testing.T) {
+func TestStreamAssemblesToolCallsOnTheFinishFrame(t *testing.T) {
 	server := startEndpoint(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeStream(w,
 			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"fs.read","arguments":""}}]},"finish_reason":null}]}`,
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\""}}]},"finish_reason":null}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\""}},{"index":1,"id":"call_456","type":"function","function":{"name":"clock.now"}}]},"finish_reason":null}]}`,
 			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"README.md\"}"}}]},"finish_reason":null}]}`,
 			`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
 			"[DONE]",
@@ -269,22 +269,28 @@ func TestStreamDecodesToolCallFragments(t *testing.T) {
 	if len(chunks) != 4 {
 		t.Fatalf("got %d chunks, want 4", len(chunks))
 	}
+	for _, chunk := range chunks[:3] {
+		if len(chunk.ToolCalls) != 0 {
+			t.Fatalf("got tool calls %+v before the finish frame, want none", chunk.ToolCalls)
+		}
+	}
 
-	firstFragment := chunks[0].ToolCall
-	if firstFragment == nil {
-		t.Fatal("first chunk did not include a tool-call fragment")
+	final := chunks[3]
+	if final.Finish != core.StopToolCalls {
+		t.Fatalf("got finish %q, want %q", final.Finish, core.StopToolCalls)
 	}
-	if firstFragment.Index != 0 || firstFragment.ID != core.ID("call_123") || firstFragment.Name != "fs.read" {
-		t.Fatalf("got first fragment %+v, want call_123 fs.read", firstFragment)
+	want := []core.ToolCall{
+		{ID: "call_123", Name: "fs.read", Arguments: json.RawMessage(`{"path":"README.md"}`)},
+		{ID: "call_456", Name: "clock.now", Arguments: json.RawMessage(`{}`)},
 	}
-	if chunks[1].ToolCall == nil || chunks[1].ToolCall.Arguments != `{"path"` {
-		t.Fatalf("got second fragment %+v, want first arguments fragment", chunks[1].ToolCall)
+	if len(final.ToolCalls) != len(want) {
+		t.Fatalf("got tool calls %+v, want %+v", final.ToolCalls, want)
 	}
-	if chunks[2].ToolCall == nil || chunks[2].ToolCall.Arguments != `:"README.md"}` {
-		t.Fatalf("got third fragment %+v, want second arguments fragment", chunks[2].ToolCall)
-	}
-	if chunks[3].Finish != core.StopToolCalls {
-		t.Fatalf("got finish %q, want %q", chunks[3].Finish, core.StopToolCalls)
+	for i := range want {
+		got := final.ToolCalls[i]
+		if got.ID != want[i].ID || got.Name != want[i].Name || string(got.Arguments) != string(want[i].Arguments) {
+			t.Fatalf("got tool call %d %+v, want %+v", i, got, want[i])
+		}
 	}
 }
 
