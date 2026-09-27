@@ -15,6 +15,7 @@ import (
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
+	"github.com/Kzeezee/travis/internal/id"
 	"github.com/Kzeezee/travis/internal/log"
 	"github.com/Kzeezee/travis/internal/providers/openai"
 )
@@ -27,6 +28,7 @@ const (
 	defaultBaseURL          = "https://api.openai.com/v1"
 	defaultModel            = "gpt-4o-mini"
 	subscriberEventCapacity = 1024
+	defaultMaxSteps         = 40 // DESIGN §5.4 brain.max_steps
 )
 
 // Overridden at release time via: go build -ldflags "-X main.version=v0.1.0"
@@ -71,7 +73,9 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	defer bus.Close()
 
 	provider := openai.BuildProvider(*baseURL, config.ResolveProviderAPIKey(), nil)
-	assistantConversation := loop.BuildAssistantConversation(provider, bus, core.SystemClock{}, *model)
+	clock := core.SystemClock{}
+	deps := loop.Dependencies{Provider: provider, Events: bus, Clock: clock, IDs: id.BuildULIDGenerator(clock)}
+	assistantConversation := loop.BuildAssistantConversation(deps, *model, defaultMaxSteps)
 
 	events, unsubscribe := bus.Subscribe(nil)
 	defer unsubscribe()

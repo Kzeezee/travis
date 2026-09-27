@@ -4,8 +4,9 @@ package id
 import (
 	"crypto/rand"
 
-	"github.com/Kzeezee/travis/internal/core"
 	"github.com/oklog/ulid/v2"
+
+	"github.com/Kzeezee/travis/internal/core"
 )
 
 type ULIDGenerator struct {

@@ -67,7 +67,8 @@ func buildTestChatSession(t *testing.T, input string, provider *fakeProvider) (*
 	t.Cleanup(unsubscribe)
 
 	clock := core.FixedClock{Time: time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)}
-	assistantConversation := loop.BuildAssistantConversation(provider, bus, clock, "test-model")
+	deps := loop.Dependencies{Provider: provider, Events: bus, Clock: clock, IDs: &core.SequentialIDGenerator{}}
+	assistantConversation := loop.BuildAssistantConversation(deps, "test-model", 4)
 	var out strings.Builder
 	chatTerminal := terminal.BuildTerminal(strings.NewReader(input), &out)
 	return chat.BuildChatSession(events, chatTerminal, assistantConversation), &out
