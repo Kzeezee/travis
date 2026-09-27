@@ -202,6 +202,45 @@ func TestChatSerializesToolCallAndToolResultMessages(t *testing.T) {
 	}
 }
 
+func TestChatAlwaysSendsContentUnlessTheMessageIsOnlyToolCalls(t *testing.T) {
+	var capturedRequestBody map[string]any
+	server := startEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedRequestBody)
+		writeStream(w, "[DONE]")
+	})
+
+	provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
+		Model: "gpt-5",
+		Messages: []core.Message{
+			{Role: core.RoleAssistant, Parts: []core.Part{core.ToolCallPart{ToolCall: core.ToolCall{
+				ID: core.ID("call_1"), Name: "fs.read", Arguments: json.RawMessage(`{}`),
+			}}}},
+			{Role: core.RoleTool, Parts: []core.Part{core.ToolResultPart{ToolResult: core.ToolResult{CallID: core.ID("call_1")}}}},
+			{Role: core.RoleAssistant},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned %v, want nil", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	messages, ok := capturedRequestBody["messages"].([]any)
+	if !ok || len(messages) != 3 {
+		t.Fatalf("got messages %v, want three messages", capturedRequestBody["messages"])
+	}
+	toolCallsOnly, _ := messages[0].(map[string]any)
+	if _, hasContent := toolCallsOnly["content"]; hasContent {
+		t.Fatalf("got tool-calls-only message %v, want content omitted", toolCallsOnly)
+	}
+	for _, message := range messages[1:] {
+		fields, _ := message.(map[string]any)
+		if content, hasContent := fields["content"]; !hasContent || content != "" {
+			t.Fatalf("got message %v, want empty content sent", fields)
+		}
+	}
+}
+
 func TestChatOmitsTheCredentialWhenNoKeyIsConfigured(t *testing.T) {
 	var gotAuth string
 	server := startEndpoint(t, func(w http.ResponseWriter, r *http.Request) {

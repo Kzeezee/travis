@@ -18,6 +18,8 @@ import (
 	"github.com/Kzeezee/travis/internal/id"
 	"github.com/Kzeezee/travis/internal/log"
 	"github.com/Kzeezee/travis/internal/providers/openai"
+	"github.com/Kzeezee/travis/internal/tools/builtin"
+	"github.com/Kzeezee/travis/internal/tools/registry"
 )
 
 const shortRevLen = 12
@@ -29,6 +31,8 @@ const (
 	defaultModel            = "gpt-4o-mini"
 	subscriberEventCapacity = 1024
 	defaultMaxSteps         = 40 // DESIGN §5.4 brain.max_steps
+	defaultMaxExposedTools  = 60 // DESIGN §5.5 tools.max_exposed
+	defaultMaxReadBytes     = 256 << 10
 )
 
 // Overridden at release time via: go build -ldflags "-X main.version=v0.1.0"
@@ -69,12 +73,22 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		return err
 	}
 
+	paths, err := config.BuildCurrentPathSet()
+	if err != nil {
+		return err
+	}
+	toolRegistry := registry.BuildRegistry(defaultMaxExposedTools)
+	if err := toolRegistry.Register(registry.SourceBuiltin,
+		builtin.BuildFileReadTool(paths.WorkspaceDir, defaultMaxReadBytes)); err != nil {
+		return err
+	}
+
 	bus := core.BuildEventBus(log.BuildTextLogger(os.Stderr, log.LevelWarn), subscriberEventCapacity)
 	defer bus.Close()
 
 	provider := openai.BuildProvider(*baseURL, config.ResolveProviderAPIKey(), nil)
 	clock := core.SystemClock{}
-	deps := loop.Dependencies{Provider: provider, Events: bus, Clock: clock, IDs: id.BuildULIDGenerator(clock)}
+	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: bus, Clock: clock, IDs: id.BuildULIDGenerator(clock)}
 	assistantConversation := loop.BuildAssistantConversation(deps, *model, defaultMaxSteps)
 
 	events, unsubscribe := bus.Subscribe(nil)

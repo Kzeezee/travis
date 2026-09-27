@@ -12,9 +12,12 @@ import (
 )
 
 const (
-	promptMarker  = "\n› "
-	quitCommand   = "/quit"
-	errorTemplate = "\nerror: %v\n"
+	promptMarker         = "\n› "
+	quitCommand          = "/quit"
+	errorTemplate        = "\nerror: %v\n"
+	toolStartedTemplate  = "\n· %s\n"
+	toolFinishedTemplate = "  ✓ %s\n"
+	toolFailedTemplate   = "  ✗ %s\n"
 )
 
 type Prompt struct {
@@ -54,8 +57,16 @@ func (t *Terminal) RenderEvent(event core.Event) {
 		t.write(fact.Text)
 	case core.TurnCompleted:
 		t.write("\n")
-	case core.UserMessageSubmitted, core.ToolCallStarted, core.ToolCallFinished:
-		// The prompt is already on screen, and tools arrive with the registry in 1C.
+	case core.ToolCallStarted:
+		t.write(fmt.Sprintf(toolStartedTemplate, fact.Call.Name))
+	case core.ToolCallFinished:
+		template := toolFinishedTemplate
+		if fact.Result.IsError {
+			template = toolFailedTemplate
+		}
+		t.write(fmt.Sprintf(template, fact.Display))
+	case core.UserMessageSubmitted:
+		// The prompt is already on screen.
 	}
 }
 

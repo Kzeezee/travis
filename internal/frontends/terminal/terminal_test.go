@@ -69,6 +69,32 @@ func TestRenderEventWritesAssistantTextAndCompletion(t *testing.T) {
 	}
 }
 
+func TestRenderEventWritesToolCallStartedAndFinished(t *testing.T) {
+	var out strings.Builder
+	chatTerminal := terminal.BuildTerminal(strings.NewReader(""), &out)
+
+	chatTerminal.RenderEvent(core.ToolCallStarted{Call: core.ToolCall{Name: "fs.read"}})
+	chatTerminal.RenderEvent(core.ToolCallFinished{Display: "read AGENTS.md"})
+
+	if got, want := out.String(), "\n· fs.read\n  ✓ read AGENTS.md\n"; got != want {
+		t.Fatalf("got output %q, want %q", got, want)
+	}
+}
+
+func TestRenderEventWritesFailedToolCall(t *testing.T) {
+	var out strings.Builder
+	chatTerminal := terminal.BuildTerminal(strings.NewReader(""), &out)
+
+	chatTerminal.RenderEvent(core.ToolCallFinished{
+		Result:  core.ToolResult{IsError: true},
+		Display: "fs.read: file_not_found",
+	})
+
+	if got, want := out.String(), "  ✗ fs.read: file_not_found\n"; got != want {
+		t.Fatalf("got output %q, want %q", got, want)
+	}
+}
+
 func TestRenderTurnErrorWritesError(t *testing.T) {
 	var out strings.Builder
 	chatTerminal := terminal.BuildTerminal(strings.NewReader(""), &out)
