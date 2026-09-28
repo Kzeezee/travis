@@ -121,10 +121,33 @@ brew install ollama          # or https://ollama.com/download
 ollama pull qwen3:14b
 ```
 
-Then point `provider.profiles.local.base_url` at `http://127.0.0.1:11434/v1`.
+Then create `.travis/config.toml` in the repo root (already gitignored — it's a
+per-workspace, per-machine file, not something to commit):
+
+```toml
+[provider]
+active = "local"
+
+[provider.profiles.local]
+kind     = "openai_compatible"
+base_url = "http://127.0.0.1:11434/v1"
+model    = "qwen3:14b"
+```
+
+`config.Load()` picks this up automatically on the next `travis chat` — no env var or
+flag needed for a local model. To switch back to a cloud model, add a second
+`[provider.profiles.<name>]` block and change `active` to point at it, or set
+`TRAVIS_PROVIDER_ACTIVE` for a one-off override without editing the file.
 
 Use local models for day-to-day development; save a paid provider for quality
 benchmarking near the end.
+
+**Known gap:** `auth.ref` (e.g. `env://ANTHROPIC_API_KEY`) is parsed but not yet
+consulted — every profile currently shares the same `OPENAI_API_KEY` lookup
+(`config.ResolveProviderAPIKey()`). A profile needing a different credential source
+doesn't work yet; this lands with the broker in a later phase. There is also no
+config hot-reload: editing `.travis/config.toml` only takes effect on the next
+`travis chat`, not the running session.
 
 ## 6. The Makefile, and what CI will run
 

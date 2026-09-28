@@ -42,6 +42,11 @@ type ProviderProfileCfg struct {
 
 // AuthCfg never carries a credential value, only a reference the broker resolves
 // later (`keyring://`, `env://`, `cmd://`) — see ResolveProviderAPIKey.
+//
+// Known deviation, accepted for Phase 1: Ref is decoded but not yet consulted.
+// ResolveProviderAPIKey always reads OPENAI_API_KEY regardless of what Ref names, so
+// every profile shares one credential source until the broker (which resolves Ref
+// for real) arrives.
 type AuthCfg struct {
 	Kind string
 	Ref  string
