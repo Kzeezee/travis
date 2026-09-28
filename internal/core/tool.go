@@ -1,6 +1,19 @@
+// Flow: Tool.Describe → ToolSpec (what is this tool) → ToolCall (model asks for tool) →
+// Tool.Invoke → ToolOutput (tool answers) → ToolResult (loop replies to model)
+
 package core
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
+
+type Tool interface {
+	Name() string
+	Describe() ToolSpec
+	// error means the turn is in trouble; a request the tool could not fulfil is ToolOutput.IsError
+	Invoke(ctx context.Context, arguments json.RawMessage) (ToolOutput, error)
+}
 
 type ToolSpec struct {
 	Name         string          `json:"name"`
@@ -13,6 +26,12 @@ type ToolCall struct {
 	ID        ID              `json:"id"`
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
+}
+
+type ToolOutput struct {
+	Content string
+	Display string
+	IsError bool
 }
 
 type ToolResult struct {

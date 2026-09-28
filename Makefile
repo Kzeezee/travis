@@ -6,6 +6,9 @@ SHELL := /bin/sh
 GOLANGCI_LINT_VERSION := $(shell cat .golangci-lint-version)
 GOVULNCHECK_VERSION := v1.7.0
 GOBIN := $(shell go env GOPATH)/bin
+GOEXE := $(shell go env GOEXE)
+GOLANGCI_LINT := $(GOBIN)/golangci-lint$(GOEXE)
+GOVULNCHECK := $(GOBIN)/govulncheck$(GOEXE)
 
 # Tests are shuffled; the seed is printed on failure, replay it with `-shuffle=<seed>`.
 GOTEST_FLAGS := -timeout 5m -shuffle=on
@@ -38,12 +41,12 @@ vet: ## go vet for the host and for the other two supported OSes
 	GOOS=darwin go vet ./...
 
 .PHONY: lint
-lint: $(GOBIN)/golangci-lint ## Run golangci-lint at the pinned version
-	$(GOBIN)/golangci-lint run
+lint: $(GOLANGCI_LINT) ## Run golangci-lint at the pinned version
+	$(GOLANGCI_LINT) run
 
 .PHONY: fmt
-fmt: $(GOBIN)/golangci-lint ## Apply gofmt and goimports
-	$(GOBIN)/golangci-lint fmt
+fmt: $(GOLANGCI_LINT) ## Apply gofmt and goimports
+	$(GOLANGCI_LINT) fmt
 
 .PHONY: tidy
 tidy: ## Verify module downloads and that go.mod/go.sum are already tidy
@@ -51,15 +54,15 @@ tidy: ## Verify module downloads and that go.mod/go.sum are already tidy
 	go mod tidy -diff
 
 .PHONY: vuln
-vuln: $(GOBIN)/govulncheck ## Check dependencies against the Go vulnerability database
-	$(GOBIN)/govulncheck ./...
+vuln: $(GOVULNCHECK) ## Check dependencies against the Go vulnerability database
+	$(GOVULNCHECK) ./...
 
 .PHONY: check
 check: build vet lint test-race tidy vuln ## Everything CI runs, on this machine only
 
 # Version-pinned tool installs. `latest` would turn unrelated work red on a Tuesday.
-$(GOBIN)/golangci-lint:
+$(GOLANGCI_LINT):
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
-$(GOBIN)/govulncheck:
+$(GOVULNCHECK):
 	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)

@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/charmbracelet/x/exp/teatest/v2 v2.0.0-20260924144451-d676b019604b
 	github.com/charmbracelet/x/term v0.2.2
+	github.com/oklog/ulid/v2 v2.1.2
 )
 
 require (

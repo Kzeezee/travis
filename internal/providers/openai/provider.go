@@ -47,7 +47,7 @@ type chatRequest struct {
 
 type chatMessage struct {
 	Role       string         `json:"role"`
-	Content    string         `json:"content,omitempty"`
+	Content    *string        `json:"content,omitempty"` // nil only on a tool-calls-only assistant message
 	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
 }
@@ -152,11 +152,13 @@ func buildAssistantOrUserMessage(message core.Message) chatMessage {
 		}
 	}
 
-	return chatMessage{
-		Role:      string(message.Role),
-		Content:   content.String(),
-		ToolCalls: toolCalls,
+	wireMessage := chatMessage{Role: string(message.Role), ToolCalls: toolCalls}
+	// Endpoints reject a message carrying neither content nor tool_calls, so an empty
+	// reply still sends "".
+	if text := content.String(); text != "" || len(toolCalls) == 0 {
+		wireMessage.Content = &text
 	}
+	return wireMessage
 }
 
 func buildChatMessagesFromToolResults(parts []core.Part) []chatMessage {
@@ -168,10 +170,11 @@ func buildChatMessagesFromToolResults(parts []core.Part) []chatMessage {
 			continue
 		}
 
+		resultContent := toolResultPart.ToolResult.Content
 		toolResultMessages = append(toolResultMessages, chatMessage{
 			Role:       string(core.RoleTool),
 			ToolCallID: string(toolResultPart.ToolResult.CallID),
-			Content:    toolResultPart.ToolResult.Content,
+			Content:    &resultContent,
 		})
 	}
 
