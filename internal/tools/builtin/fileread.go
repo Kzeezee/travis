@@ -318,5 +318,6 @@ func buildErrorOutput(code string, fields map[string]any) core.ToolOutput {
 	if err != nil {
 		content = fmt.Appendf(nil, `{"error":%q}`, code)
 	}
-	return core.ToolOutput{Content: string(content), Display: "fs.read: " + code, IsError: true}
+	// The frontend already labels the card with the tool name, so Display carries only the cause.
+	return core.ToolOutput{Content: string(content), Display: code, IsError: true}
 }

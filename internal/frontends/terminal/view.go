@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"cmp"
 	"fmt"
 	"strings"
 
@@ -108,7 +109,7 @@ func renderToolCard(card toolCard) string {
 	case toolRunning:
 		return dimStyle.Render("  ⚙ " + card.name + " (running…)")
 	case toolSucceeded:
-		return dimStyle.Render("  ✓ " + card.name)
+		return dimStyle.Render("  ✓ " + cmp.Or(card.detail, card.name))
 	case toolFailed:
 		return errorStyle.Render("  ✗ " + card.name + ": " + card.detail)
 	}

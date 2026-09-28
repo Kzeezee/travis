@@ -17,7 +17,7 @@ func TestTranscriptKeepsTextAndToolCardsInArrivalOrder(t *testing.T) {
 		core.ToolCallStarted{Call: core.ToolCall{ID: "a", Name: "list_dir"}},
 		core.ToolCallStarted{Call: core.ToolCall{ID: "b", Name: "read_file"}},
 		core.ToolCallFinished{Result: core.ToolResult{CallID: "b", Name: "read_file", Content: "denied\nstack", IsError: true}},
-		core.ToolCallFinished{Result: core.ToolResult{CallID: "a", Name: "list_dir"}},
+		core.ToolCallFinished{Result: core.ToolResult{CallID: "a", Name: "list_dir"}, Display: "listed docs/notes"},
 		core.ToolCallFinished{Result: core.ToolResult{CallID: "zz", Name: "fetch"}},
 		core.AssistantTextStreamed{Text: "Done."},
 	} {
@@ -31,9 +31,10 @@ func TestTranscriptKeepsTextAndToolCardsInArrivalOrder(t *testing.T) {
 	if parts[0].text != "Let me look." || parts[4].text != "Done." {
 		t.Fatalf("got text parts %q and %q, want merged chunks either side of the cards", parts[0].text, parts[4].text)
 	}
-	if card := parts[1].tool; card.name != "list_dir" || card.status != toolSucceeded {
-		t.Fatalf("got first card %+v, want list_dir succeeded", *card)
+	if card := parts[1].tool; card.status != toolSucceeded || card.detail != "listed docs/notes" {
+		t.Fatalf("got first card %+v, want list_dir succeeded with its display text", *card)
 	}
+	// No Display, so the model-facing content is the only summary left to show.
 	if card := parts[2].tool; card.status != toolFailed || card.detail != "denied" {
 		t.Fatalf("got second card %+v, want read_file failed with its first line", *card)
 	}

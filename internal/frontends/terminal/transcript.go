@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"cmp"
 	"strings"
 
 	"github.com/Kzeezee/travis/internal/core"
@@ -78,7 +79,7 @@ func (t *transcript) applyEvent(event core.Event) {
 	case core.ToolCallStarted:
 		turn.parts = append(turn.parts, turnPart{tool: &toolCard{callID: fact.Call.ID, name: fact.Call.Name}})
 	case core.ToolCallFinished:
-		turn.finishToolCard(fact.Result)
+		turn.finishToolCard(fact.Result, fact.Display)
 	}
 }
 
@@ -91,11 +92,11 @@ func (turn *chatTurn) appendText(text string) {
 }
 
 // finishToolCard settles the running card with the result's call ID; a result without one
-// still renders, as its own card.
-func (turn *chatTurn) finishToolCard(result core.ToolResult) {
-	status, detail := toolSucceeded, ""
+// still renders, as its own card. Display is the human summary; Content is model-facing, so it is only a fallback.
+func (turn *chatTurn) finishToolCard(result core.ToolResult, display string) {
+	status, detail := toolSucceeded, display
 	if result.IsError {
-		status, detail = toolFailed, cutFirstLine(result.Content)
+		status, detail = toolFailed, cmp.Or(display, cutFirstLine(result.Content))
 	}
 
 	for _, part := range turn.parts {
