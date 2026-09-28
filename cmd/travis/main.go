@@ -23,15 +23,11 @@ import (
 
 const shortRevLen = 12
 
-// Compiled defaults for the model provider. Phase 1E replaces these with the bottom
-// layer of DESIGN.md 5.2's config precedence; until then they are the only defaults.
 const (
-	defaultBaseURL          = "https://api.openai.com/v1"
-	defaultModel            = "gpt-4o-mini"
 	subscriberEventCapacity = 1024
-	defaultMaxSteps         = 40 // DESIGN §5.4 brain.max_steps
-	defaultMaxExposedTools  = 60 // DESIGN §5.5 tools.max_exposed
-	defaultMaxReadBytes     = 256 << 10
+	// defaultMaxReadBytes is fs.read's own cap. It isn't a key in DESIGN.md 5.5's
+	// [tools] example, so it stays a compiled constant rather than a Config field.
+	defaultMaxReadBytes = 256 << 10
 )
 
 // Overridden at release time via: go build -ldflags "-X main.version=v0.1.0"
@@ -66,17 +62,38 @@ func run(args []string, in io.Reader, out io.Writer) error {
 func runChat(args []string, in io.Reader, out io.Writer) error {
 	flags := flag.NewFlagSet("chat", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	baseURL := flags.String("base-url", defaultBaseURL, "OpenAI-compatible endpoint base URL")
-	model := flags.String("model", defaultModel, "model name to send with each request")
+	baseURL := flags.String("base-url", "", "override the active provider profile's endpoint base URL")
+	model := flags.String("model", "", "override the active provider profile's model name")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	explicitFlags := map[string]bool{}
+	flags.Visit(func(f *flag.Flag) { explicitFlags[f.Name] = true })
+
+	cfg, diags, err := config.Load()
+	for _, diag := range diags {
+		fmt.Fprintf(os.Stderr, "travis: config: %s\n", diag.Message)
+	}
+	if err != nil {
+		return err
+	}
+
+	// CLI flags are the highest layer in DESIGN.md 5.2's precedence, above config
+	// files and env vars, but only when the user actually passed one — an unset
+	// flag must not clobber whatever config.Load resolved.
+	profile := cfg.Provider.Profiles[cfg.Provider.Active]
+	if explicitFlags["base-url"] {
+		profile.BaseURL = *baseURL
+	}
+	if explicitFlags["model"] {
+		profile.Model = *model
 	}
 
 	paths, err := config.BuildCurrentPathSet()
 	if err != nil {
 		return err
 	}
-	toolRegistry := registry.BuildRegistry(defaultMaxExposedTools)
+	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
 	if err := toolRegistry.Register(registry.SourceBuiltin,
 		builtin.BuildFileReadTool(paths.WorkspaceDir, defaultMaxReadBytes)); err != nil {
 		return err
@@ -85,16 +102,16 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	bus := core.BuildEventBus(log.BuildTextLogger(os.Stderr, log.LevelWarn), subscriberEventCapacity)
 	defer bus.Close()
 
-	provider := openai.BuildProvider(*baseURL, config.ResolveProviderAPIKey(), nil)
+	provider := openai.BuildProvider(profile.BaseURL, config.ResolveProviderAPIKey(), nil)
 	clock := core.SystemClock{}
 	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: bus, Clock: clock, IDs: id.BuildULIDGenerator(clock)}
-	assistantConversation := loop.BuildAssistantConversation(deps, *model, defaultMaxSteps)
+	assistantConversation := loop.BuildAssistantConversation(deps, profile.Model, cfg.Brain.MaxSteps)
 
 	events, unsubscribe := bus.Subscribe(nil)
 	defer unsubscribe()
 
 	return terminal.RunChat(context.Background(), events, assistantConversation.RunAssistantTurn,
-		terminal.Options{ModelName: *model, Input: in, Output: out})
+		terminal.Options{ModelName: profile.Model, Input: in, Output: out})
 }
 
 func buildVersionString() string {
