@@ -4,9 +4,6 @@
 version: "2"
 
 run:
-  # frontends/terminal/deps.go is behind //go:build tools; without this it is never analysed.
-  build-tags:
-    - tools
   timeout: 5m
 
 linters:

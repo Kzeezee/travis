@@ -108,22 +108,6 @@ jobs:
           GOOS=windows go vet ./...
           GOOS=darwin go vet ./...
 
-  build-tags-tools:
-    name: build (tags=tools)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          check-latest: true
-
-      # Plain `go build ./...` skips frontends/terminal/deps.go, so a broken Charm pin (D-06)
-      # is invisible. Delete this job with that file in Phase 1.
-      - name: Build with the tools tag
-        run: go build -tags tools ./...
-
   tidy-and-verify:
     name: tidy and verify
     runs-on: ubuntu-latest
@@ -161,14 +145,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
-    needs: [test, test-macos, lint, build-tags-tools, tidy-and-verify, vulncheck]
+    needs: [test, test-macos, lint, tidy-and-verify, vulncheck]
     steps:
       - name: Assert every job succeeded
         env:
           TEST: ${{ needs.test.result }}
           TEST_MACOS: ${{ needs.test-macos.result }}
           LINT: ${{ needs.lint.result }}
-          BUILD_TAGS_TOOLS: ${{ needs.build-tags-tools.result }}
           TIDY_AND_VERIFY: ${{ needs.tidy-and-verify.result }}
           VULNCHECK: ${{ needs.vulncheck.result }}
         run: |
@@ -176,7 +159,7 @@ jobs:
           status=0
 
           # Explicit, because skipped is not failed and would otherwise pass a `!= failure` test.
-          for job in TEST LINT BUILD_TAGS_TOOLS TIDY_AND_VERIFY VULNCHECK; do
+          for job in TEST LINT TIDY_AND_VERIFY VULNCHECK; do
             result="${!job}"
             echo "$job: $result"
             if [ "$result" != "success" ]; then
