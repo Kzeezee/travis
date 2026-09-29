@@ -12,8 +12,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Kzeezee/travis/internal/core"
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/Kzeezee/travis/internal/core"
 )
 
 // Config is the fully merged, validated settings every subsystem reads from. Fields
