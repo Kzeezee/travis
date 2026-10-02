@@ -68,6 +68,20 @@ type ToolsCfg struct {
 	MaxExposed      int    `toml:"max_exposed"`
 }
 
+// workspaceLayerCfg is every field the workspace config file (.travis/config.toml) is
+// allowed to set. It has no Provider field on purpose (DESIGN.md risk R-27): that file
+// ships inside whatever repo the user clones and is read with no action beyond `cd` +
+// `travis chat`, so letting it set provider.active or a profile's base_url would let a
+// hostile repo redirect the single shared credential (ResolveProviderAPIKey) to a
+// host of its choosing. Revisit when the broker (Phase 2, PR 2B) binds credentials to
+// their destination instead of trusting whichever file set it — at that point this
+// restriction becomes redundant, not complementary, and can be removed.
+type workspaceLayerCfg struct {
+	Profile string
+	Brain   BrainCfg
+	Tools   ToolsCfg
+}
+
 // DiagnosticSeverity distinguishes a warning a user can ignore from a hard failure.
 type DiagnosticSeverity int
 
@@ -127,8 +141,24 @@ func load(readFile fileReader, pathSet PathSet, extraPaths []string, lookup envL
 	var diags Diagnostics
 
 	userConfigFile := filepath.Join(pathSet.ConfigDir, "config.toml")
-	layers := append([]string{pathSet.SystemConfigFile, userConfigFile, pathSet.WorkspaceConfigFile}, extraPaths...)
-	for _, layerPath := range layers {
+	for _, layerPath := range []string{pathSet.SystemConfigFile, userConfigFile} {
+		layerDiags, err := decodeLayerFile(readFile, layerPath, &cfg)
+		diags = append(diags, layerDiags...)
+		if err != nil {
+			return nil, diags, err
+		}
+	}
+
+	// The workspace file alone decodes into the restricted workspaceLayerCfg (no
+	// Provider field), not Config — see its doc comment. Everything after it in
+	// precedence (extra paths, env vars) is trusted the same as system/user config.
+	workspaceDiags, err := decodeWorkspaceLayerFile(readFile, pathSet.WorkspaceConfigFile, &cfg)
+	diags = append(diags, workspaceDiags...)
+	if err != nil {
+		return nil, diags, err
+	}
+
+	for _, layerPath := range extraPaths {
 		layerDiags, err := decodeLayerFile(readFile, layerPath, &cfg)
 		diags = append(diags, layerDiags...)
 		if err != nil {
@@ -187,6 +217,55 @@ func decodeLayerFile(readFile fileReader, path string, cfg *Config) (Diagnostics
 		return diags, fmt.Errorf("config %s: %w", path, err)
 	}
 	return diags, nil
+}
+
+// decodeWorkspaceLayerFile merges one workspace config file's allowed fields (see
+// workspaceLayerCfg) into cfg. A [provider] table in the file is not an error — it's
+// silently inert, since workspaceLayerCfg has no field to decode it into — but is
+// still reported as a warning so the file's author isn't left wondering why it had no
+// effect on the active model.
+func decodeWorkspaceLayerFile(readFile fileReader, path string, cfg *Config) (Diagnostics, error) {
+	if path == "" {
+		return nil, nil
+	}
+	data, err := readFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("config %s: %w", path, err)
+	}
+
+	diags, err := reportUnknownKeys(path, data)
+	if err != nil {
+		return diags, err
+	}
+
+	if setsProviderTable(data) {
+		diags = append(diags, Diagnostic{
+			Severity: SeverityWarning,
+			Message:  fmt.Sprintf("config %s: [provider] may not be set by the workspace layer (DESIGN.md risk R-27); ignored", path),
+		})
+	}
+
+	seed := workspaceLayerCfg{Profile: cfg.Profile, Brain: cfg.Brain, Tools: cfg.Tools}
+	if err := toml.Unmarshal(data, &seed); err != nil {
+		return diags, fmt.Errorf("config %s: %w", path, err)
+	}
+	cfg.Profile, cfg.Brain, cfg.Tools = seed.Profile, seed.Brain, seed.Tools
+	return diags, nil
+}
+
+// setsProviderTable reports whether data has a top-level [provider] table, purely to
+// give decodeWorkspaceLayerFile's warning a clear cause. It never affects what gets
+// applied — workspaceLayerCfg's shape is what actually enforces the restriction.
+func setsProviderTable(data []byte) bool {
+	var raw map[string]any
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		return false
+	}
+	_, ok := raw["provider"]
+	return ok
 }
 
 // reportUnknownKeys decodes data in strict mode purely to find keys with no matching

@@ -121,8 +121,14 @@ brew install ollama          # or https://ollama.com/download
 ollama pull qwen3:14b
 ```
 
-Then create `.travis/config.toml` in the repo root (already gitignored — it's a
-per-workspace, per-machine file, not something to commit):
+Then create a `config.toml` in your **user config directory** (not the workspace
+`.travis/` one — see the next paragraph for why):
+
+| OS | Path |
+| --- | --- |
+| Linux | `$XDG_CONFIG_HOME/travis/config.toml` (→ `~/.config/travis/config.toml`) |
+| macOS | `~/Library/Application Support/travis/config.toml` |
+| Windows | `%AppData%\travis\config.toml` |
 
 ```toml
 [provider]
@@ -138,6 +144,29 @@ model    = "qwen3:14b"
 flag needed for a local model. To switch back to a cloud model, add a second
 `[provider.profiles.<name>]` block and change `active` to point at it, or set
 `TRAVIS_PROVIDER_ACTIVE` for a one-off override without editing the file.
+
+**Why not `.travis/config.toml`?** That file is read from whatever directory you run
+`travis` in, with no action beyond `cd` + `travis chat` — so a cloned repo could ship
+one that redirects `provider.active`/`base_url` and your API key would follow it
+there (DESIGN.md risk R-27). The workspace file can still set `[brain]`/`[tools]`, just
+not `[provider]`.
+
+**Windows: watch for a UTF-8 BOM.** `go-toml` rejects a leading byte-order mark with a
+confusing `invalid character at start of key` error. PowerShell's `Set-Content
+-Encoding utf8` writes one in Windows PowerShell 5.1 (`utf8` there means "UTF-8 with
+BOM" — `utf8NoBOM` isn't available until PowerShell 6+), and some editors default to
+it too. If you hit that error on a file that looks correct, check for a BOM:
+
+```powershell
+[System.IO.File]::ReadAllBytes("$env:AppData\travis\config.toml")[0..2]
+# BOM present if this prints 239 187 191 (EF BB BF)
+```
+
+Write it BOM-free instead:
+
+```powershell
+[System.IO.File]::WriteAllText($path, $content, (New-Object System.Text.UTF8Encoding $false))
+```
 
 Use local models for day-to-day development; save a paid provider for quality
 benchmarking near the end.
