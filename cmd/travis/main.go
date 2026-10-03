@@ -95,47 +95,73 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	provider := openaicompat.BuildProvider(profile.BaseURL, config.ResolveProviderAPIKey(), nil)
+	session, err := assembleChatSession(cfg, paths, provider, profile.Model, os.Stderr)
+	if err != nil {
+		return err
+	}
+
+	events, unsubscribe := session.bus.Subscribe(nil)
+	defer unsubscribe()
+
+	chatErr := terminal.RunChat(context.Background(), events, session.conversation.RunAssistantTurn,
+		terminal.Options{ModelName: profile.Model, Input: in, Output: out})
+	session.close()
+	return chatErr
+}
+
+// chatSession is everything a chat runs on apart from its frontend: the conversation,
+// the bus it publishes to, and the trace recording that bus.
+type chatSession struct {
+	conversation *loop.AssistantConversation
+	bus          *core.Bus
+	waitForTrace func()
+}
+
+// assembleChatSession wires the registry, built-in tools, bus, trace and conversation for
+// one session. The provider is a parameter so the end-to-end test can script it while
+// everything else stays real; diagnostics receives bus warnings and trace status lines.
+func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core.Provider, model string, diagnostics io.Writer) (*chatSession, error) {
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
 	for _, tool := range []core.Tool{
 		builtin.BuildFileReadTool(paths.WorkspaceDir, defaultMaxReadBytes),
 		builtin.BuildGrepTool(paths.WorkspaceDir),
 	} {
 		if err := toolRegistry.Register(registry.SourceBuiltin, tool); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	bus := core.BuildEventBus(log.BuildTextLogger(os.Stderr, log.LevelWarn), subscriberEventCapacity)
-	defer bus.Close()
-
-	provider := openaicompat.BuildProvider(profile.BaseURL, config.ResolveProviderAPIKey(), nil)
+	bus := core.BuildEventBus(log.BuildTextLogger(diagnostics, log.LevelWarn), subscriberEventCapacity)
 	clock := core.SystemClock{}
 	ids := id.BuildULIDGenerator(clock)
 	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: bus, Clock: clock, IDs: ids}
-	assistantConversation := loop.BuildAssistantConversation(deps, profile.Model, cfg.Brain.MaxSteps)
 
-	waitForTrace := func() {}
-	if cfg.Eval.Traces {
-		waitForTrace = startSessionTrace(bus, filepath.Join(paths.StateDir, "traces"), ids.GenerateID())
+	session := &chatSession{
+		conversation: loop.BuildAssistantConversation(deps, model, cfg.Brain.MaxSteps),
+		bus:          bus,
+		waitForTrace: func() {},
 	}
+	if cfg.Eval.Traces {
+		session.waitForTrace = startSessionTrace(bus, filepath.Join(paths.StateDir, "traces"), ids.GenerateID(), diagnostics)
+	}
+	return session, nil
+}
 
-	events, unsubscribe := bus.Subscribe(nil)
-	defer unsubscribe()
-
-	chatErr := terminal.RunChat(context.Background(), events, assistantConversation.RunAssistantTurn,
-		terminal.Options{ModelName: profile.Model, Input: in, Output: out})
-	bus.Close()
-	waitForTrace()
-	return chatErr
+// close ends the session's event stream, which lets observers finish, then waits for the
+// trace to flush.
+func (s *chatSession) close() {
+	s.bus.Close()
+	s.waitForTrace()
 }
 
 // startSessionTrace records the bus to a per-session trace. Tracing only observes, so a
 // trace that cannot be opened or written is reported and the chat carries on without it.
 // The returned function waits, once the bus has closed, for the trace to be flushed.
-func startSessionTrace(bus *core.Bus, traceDir string, sessionID core.ID) func() {
+func startSessionTrace(bus *core.Bus, traceDir string, sessionID core.ID, diagnostics io.Writer) func() {
 	file, err := trace.CreateSessionFile(traceDir, sessionID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "travis: %v; continuing without a trace\n", err)
+		fmt.Fprintf(diagnostics, "travis: %v; continuing without a trace\n", err)
 		return func() {}
 	}
 
@@ -149,10 +175,10 @@ func startSessionTrace(bus *core.Bus, traceDir string, sessionID core.ID) func()
 			err = closeErr
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "travis: trace %s is incomplete: %v\n", file.Name(), err)
+			fmt.Fprintf(diagnostics, "travis: trace %s is incomplete: %v\n", file.Name(), err)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "travis: trace written to %s\n", file.Name())
+		fmt.Fprintf(diagnostics, "travis: trace written to %s\n", file.Name())
 	}
 }
 
