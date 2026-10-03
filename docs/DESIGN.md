@@ -1306,12 +1306,20 @@ pick wrongly. So each tool has to justify itself against "can an existing tool d
 without getting worse?"
 
 **`glob` fails that test — deleted.** "Find files matching `**/*_test.go`" is the same
-operation as `grep` with an empty content pattern. So `grep` grows one field instead:
+walk `grep` already does, minus opening the files. So `grep` grows one field instead,
+and `mode` decides what `pattern` means:
 
 ```jsonc
-{ "pattern": "ExpiresAt", "path": "internal/auth", "include": "**/*.go", "mode": "content" }
-{ "pattern": "",          "path": ".",             "include": "**/*_test.go", "mode": "files" }
+{ "pattern": "ExpiresAt",     "path": "internal/auth", "include": "**/*.go", "mode": "content" } // regex over contents
+{ "pattern": "**/*_test.go",  "path": ".",                                   "mode": "files" }   // glob over names
+{ "pattern": "",              "path": "admin",                               "mode": "files" }   // list a folder
 ```
+
+In `files` mode `pattern` is a glob over paths relative to `path` (one without a `/`
+matches names at any depth), and empty lists every file. This is how models already
+read the call: in 1F's live runs, `gpt-4o-mini` sent `mode="files"` with a name as
+`pattern` to find a file, and tried to list a folder, both unprompted. Listing the files whose
+*contents* match is `content` mode; its results already carry the paths.
 
 One tool, one capability (`fs.read`), one implementation (we already walk the tree and
 already honour `.gitignore`), one place to enforce the read grant. And `exec` with
