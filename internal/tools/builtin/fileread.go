@@ -1,6 +1,6 @@
 // Package builtin holds the core tools.
 // Phase 1 tools perform their own IO; D-18's broker swap happens in Phase 2A.
-// Read flow: Invoke → decodeFileReadArgs → resolveWorkspacePath (which uses isInsideRoot) → check it isn't a folder → open the file →
+// Read flow: Invoke → decodeFileReadArgs → workspace.resolvePath → check it isn't a folder → open the file →
 // readLineRange: file → 64 KiB read buffer (refills as it is used; first 8 KiB checked for NUL) → one line at a time,
 // lines before start_line dropped, the rest numbered into the output buffer (grows up to maxBytes, cut by cutAtRuneBoundary) →
 // describeRead if it worked, or buildErrorOutput at whichever step it failed.
@@ -14,13 +14,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
 )
 
@@ -39,15 +36,6 @@ const (
 	readBufferBytes = 64 << 10
 )
 
-const (
-	errorInvalidArguments     = "invalid_arguments"
-	errorPathOutsideWorkspace = "path_outside_workspace"
-	errorFileNotFound         = "file_not_found"
-	errorPathIsDirectory      = "path_is_directory"
-	errorBinaryFile           = "binary_file"
-	errorReadFailed           = "read_failed"
-)
-
 var expectedFileReadArgs = map[string]string{
 	"path":       "string (required)",
 	"start_line": "int",
@@ -55,11 +43,8 @@ var expectedFileReadArgs = map[string]string{
 }
 
 type FileReadTool struct {
-	paths         config.PathSet
-	workspaceRoot string
-	// resolvedRoot is workspaceRoot with symlinks evaluated, so confinement compares like with like.
-	resolvedRoot string
-	maxBytes     int64
+	workspace workspaceRoot
+	maxBytes  int64
 }
 
 type fileReadArgs struct {
@@ -78,17 +63,7 @@ type lineRangeResult struct {
 }
 
 func BuildFileReadTool(workspaceRoot string, maxBytes int64) *FileReadTool {
-	root := filepath.Clean(workspaceRoot)
-	resolvedRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		resolvedRoot = root
-	}
-	return &FileReadTool{
-		paths:         config.PathSet{WorkspaceDir: root},
-		workspaceRoot: root,
-		resolvedRoot:  resolvedRoot,
-		maxBytes:      maxBytes,
-	}
+	return &FileReadTool{workspace: buildWorkspaceRoot(workspaceRoot), maxBytes: maxBytes}
 }
 
 func (t *FileReadTool) Name() string {
@@ -100,7 +75,7 @@ func (t *FileReadTool) Describe() core.ToolSpec {
 		Name:         fileReadToolName,
 		Description:  fileReadDescription,
 		InputSchema:  json.RawMessage(fileReadSchema),
-		Capabilities: []core.Capability{{Kind: core.CapabilityFSRead, Scope: t.workspaceRoot}},
+		Capabilities: []core.Capability{{Kind: core.CapabilityFSRead, Scope: t.workspace.root}},
 	}
 }
 
@@ -117,7 +92,7 @@ func (t *FileReadTool) Invoke(ctx context.Context, arguments json.RawMessage) (c
 		}), nil
 	}
 
-	target, rejection, isAllowed := t.resolveWorkspacePath(args.Path)
+	target, rejection, isAllowed := t.workspace.resolvePath(args.Path, expectedFileReadArgs)
 	if !isAllowed {
 		return rejection, nil
 	}
@@ -191,46 +166,6 @@ func decodeFileReadArgs(arguments json.RawMessage) (fileReadArgs, error) {
 	return args, nil
 }
 
-// takes the path the model asked for, turns it into a real path on disk, and allows it only if that path is inside the workspace
-// can move inside Broker during Phase 2
-func (t *FileReadTool) resolveWorkspacePath(requested string) (string, core.ToolOutput, bool) {
-	outside := buildErrorOutput(errorPathOutsideWorkspace, map[string]any{
-		"path":      requested,
-		"workspace": t.workspaceRoot,
-	})
-
-	resolved, err := t.paths.Resolve(requested)
-	if err != nil {
-		return "", buildErrorOutput(errorInvalidArguments, map[string]any{
-			"detail":   err.Error(),
-			"expected": expectedFileReadArgs,
-		}), false
-	}
-	if !filepath.IsAbs(resolved) || !isInsideRoot(t.workspaceRoot, resolved) {
-		return "", outside, false
-	}
-
-	evaluated, err := filepath.EvalSymlinks(resolved)
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", buildErrorOutput(errorFileNotFound, map[string]any{"path": requested}), false
-	}
-	if err != nil {
-		return "", buildErrorOutput(errorReadFailed, map[string]any{"path": requested, "detail": err.Error()}), false
-	}
-	if !isInsideRoot(t.resolvedRoot, evaluated) {
-		return "", outside, false
-	}
-	return evaluated, core.ToolOutput{}, true
-}
-
-func isInsideRoot(root, target string) bool {
-	rel, err := filepath.Rel(root, target)
-	if err != nil || filepath.IsAbs(rel) {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
 // streams line fragments so memory stays bounded by maxBytes even for one huge line.
 func readLineRange(ctx context.Context, source io.Reader, startLine, endLine int, maxBytes int64) (lineRangeResult, error) {
 	reader := bufio.NewReaderSize(source, readBufferBytes)
@@ -292,10 +227,7 @@ func cutAtRuneBoundary(data []byte, limit int64) string {
 }
 
 func (t *FileReadTool) describeRead(target string, args fileReadArgs) string {
-	shown := args.Path
-	if rel, err := filepath.Rel(t.resolvedRoot, target); err == nil {
-		shown = filepath.ToSlash(rel)
-	}
+	shown := t.workspace.reportDisplayPath(target, args.Path)
 	if args.StartLine == 0 && args.EndLine == 0 {
 		return "read " + shown
 	}
@@ -307,17 +239,4 @@ func (t *FileReadTool) describeRead(target string, args fileReadArgs) string {
 		end = fmt.Sprint(args.EndLine)
 	}
 	return fmt.Sprintf("read %s (lines %s-%s)", shown, start, end)
-}
-
-func buildErrorOutput(code string, fields map[string]any) core.ToolOutput {
-	payload := map[string]any{"error": code}
-	for key, value := range fields {
-		payload[key] = value
-	}
-	content, err := json.Marshal(payload)
-	if err != nil {
-		content = fmt.Appendf(nil, `{"error":%q}`, code)
-	}
-	// The frontend already labels the card with the tool name, so Display carries only the cause.
-	return core.ToolOutput{Content: string(content), Display: code, IsError: true}
 }
