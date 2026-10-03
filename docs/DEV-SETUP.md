@@ -178,6 +178,40 @@ doesn't work yet; this lands with the broker in a later phase. There is also no
 config hot-reload: editing `.travis/config.toml` only takes effect on the next
 `travis chat`, not the running session.
 
+### Session traces
+
+Every `travis chat` session records what happened (your prompts, streamed replies,
+each tool call with its arguments and result, and token usage per turn) to one JSONL
+file, and prints its path when you quit:
+
+| OS | Folder |
+| --- | --- |
+| Linux | `$XDG_STATE_HOME/travis/traces/` (→ `~/.local/state/travis/traces/`) |
+| macOS | `~/Library/Application Support/travis/traces/` |
+| Windows | `%LocalAppData%\travis\traces\` |
+
+Each file is named after the session's ULID, so they sort by start time. Each line is
+`{"type": "<event type>", "event": {...}}`, and every event carries a `turn_id`, so
+`jq` can slice a trace by event type or by turn:
+
+```sh
+jq -c 'select(.type | startswith("tool_call")) | .event' <trace>.jsonl   # every tool call
+jq -c 'select(.event.turn_id == "<turn id>")' <trace>.jsonl              # one turn
+```
+
+Traces hold file contents and are **not redacted yet**, so they are created readable
+only by you; don't paste one into an issue without reading it first. To turn them off,
+set this in your user config file (a workspace `.travis/config.toml` cannot, so a cloned
+repo can't hide what the agent did inside it):
+
+```toml
+[eval]
+traces = false
+```
+
+To keep a throwaway session (tests, experiments) out of your real state folder,
+point `TRAVIS_HOME` at another directory; config, state and traces all move under it.
+
 ## 6. The Makefile, and what CI will run
 
 `make help` lists the targets. `make check` is everything CI runs, on your machine, in
