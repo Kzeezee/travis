@@ -302,3 +302,26 @@ func TestValidateWarnsOnUnrecognizedApprovalDefault(t *testing.T) {
 		t.Fatal("Validate() returned no diagnostics, want a warning about approval_default")
 	}
 }
+
+func TestLoadTracesAreOnByDefaultAndOnlyTrustedLayersTurnThemOff(t *testing.T) {
+	pathSet := testPathSet()
+	for _, tc := range []struct {
+		name       string
+		files      map[string]string
+		wantTraces bool
+	}{
+		{"compiled default", nil, true},
+		{"user file", map[string]string{testUserConfigFile(pathSet): "[eval]\ntraces = false\n"}, false},
+		{"workspace file is ignored", map[string]string{pathSet.WorkspaceConfigFile: "[eval]\ntraces = false\n"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, diags, err := load(buildFileReaderFromMap(tc.files), pathSet, nil, buildEnvLookupFromMap(nil))
+			if err != nil {
+				t.Fatalf("load() error = %v, diags = %v", err, diags)
+			}
+			if cfg.Eval.Traces != tc.wantTraces {
+				t.Fatalf("Eval.Traces = %v, want %v", cfg.Eval.Traces, tc.wantTraces)
+			}
+		})
+	}
+}

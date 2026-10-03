@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 
 	"github.com/Kzeezee/travis/internal/agent/loop"
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
+	"github.com/Kzeezee/travis/internal/eval/trace"
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
 	"github.com/Kzeezee/travis/internal/id"
 	"github.com/Kzeezee/travis/internal/log"
@@ -108,14 +110,50 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 
 	provider := openaicompat.BuildProvider(profile.BaseURL, config.ResolveProviderAPIKey(), nil)
 	clock := core.SystemClock{}
-	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: bus, Clock: clock, IDs: id.BuildULIDGenerator(clock)}
+	ids := id.BuildULIDGenerator(clock)
+	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: bus, Clock: clock, IDs: ids}
 	assistantConversation := loop.BuildAssistantConversation(deps, profile.Model, cfg.Brain.MaxSteps)
+
+	waitForTrace := func() {}
+	if cfg.Eval.Traces {
+		waitForTrace = startSessionTrace(bus, filepath.Join(paths.StateDir, "traces"), ids.GenerateID())
+	}
 
 	events, unsubscribe := bus.Subscribe(nil)
 	defer unsubscribe()
 
-	return terminal.RunChat(context.Background(), events, assistantConversation.RunAssistantTurn,
+	chatErr := terminal.RunChat(context.Background(), events, assistantConversation.RunAssistantTurn,
 		terminal.Options{ModelName: profile.Model, Input: in, Output: out})
+	bus.Close()
+	waitForTrace()
+	return chatErr
+}
+
+// startSessionTrace records the bus to a per-session trace. Tracing only observes, so a
+// trace that cannot be opened or written is reported and the chat carries on without it.
+// The returned function waits, once the bus has closed, for the trace to be flushed.
+func startSessionTrace(bus *core.Bus, traceDir string, sessionID core.ID) func() {
+	file, err := trace.CreateSessionFile(traceDir, sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "travis: %v; continuing without a trace\n", err)
+		return func() {}
+	}
+
+	events, _ := bus.Subscribe(nil)
+	recorded := make(chan error, 1)
+	go func() { recorded <- trace.RecordEvents(events, file) }()
+
+	return func() {
+		err := <-recorded
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "travis: trace %s is incomplete: %v\n", file.Name(), err)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "travis: trace written to %s\n", file.Name())
+	}
 }
 
 func buildVersionString() string {

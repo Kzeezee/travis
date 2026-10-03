@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -54,9 +55,16 @@ func TestRun(t *testing.T) {
 // The chat command wires a real provider, so this only proves the composition holds
 // together: input ends before a prompt is submitted, so nothing reaches the network.
 func TestRunChatWiresTheSliceWithoutCallingTheProvider(t *testing.T) {
+	travisHome := t.TempDir()
+	t.Setenv("TRAVIS_HOME", travisHome)
 	var out bytes.Buffer
 
 	if err := run([]string{"chat", "--model", "test-model"}, strings.NewReader(""), &out); err != nil {
 		t.Fatalf("run(chat) error = %v, want nil", err)
+	}
+
+	traces, err := filepath.Glob(filepath.Join(travisHome, "state", "traces", "*.jsonl"))
+	if err != nil || len(traces) != 1 {
+		t.Fatalf("got traces %v (%v), want one session trace", traces, err)
 	}
 }
