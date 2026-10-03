@@ -1,6 +1,6 @@
-// Search flow: Invoke → decodeGrepArgs (compiles the pattern, validates the glob) → workspace.resolvePath →
-// searchTree walks files in lexical order, skipping hidden entries, non-regular files and escaping symlinks →
-// each file is filtered by include, then scanned line by line (content) or until its first match (files) →
+// Search flow: Invoke → decodeGrepArgs (content: compiles the regex; files: turns pattern into a name glob) →
+// workspace.resolvePath → searchTree walks files in lexical order, skipping hidden entries, non-regular files and
+// escaping symlinks → each file is filtered by its globs, then listed (files) or scanned line by line (content) →
 // results stop after maxGrepResults → formatGrepResults for the model, describeSearch for the person.
 
 package builtin
@@ -26,18 +26,21 @@ import (
 
 const (
 	grepToolName    = "grep"
-	grepDescription = "Search the workspace; this is also how to find files. " +
-		"mode=content (default) returns matching lines as path:line:text. " +
-		"mode=files returns the paths of files containing the pattern, or of every file when pattern is empty. " +
-		"pattern is an RE2 regular expression; start it with (?i) to ignore case. " +
-		"path narrows the search to a folder or file relative to the workspace root. " +
-		"include is a glob relative to path, such as **/*.md; a glob without a slash matches file names at any depth. " +
+	grepDescription = "Search the workspace; this is also how to find and list files. " +
+		"mode=content (default): pattern is an RE2 regular expression matched against file contents, " +
+		"and matching lines come back as path:line:text; start it with (?i) to ignore case. " +
+		"mode=files: pattern matches file names, not contents, and matching paths come back one per line; " +
+		"a word without wildcards matches names containing it (confirm finds clinic-confirmation.md), " +
+		"a glob such as **/*.md works too, and an empty pattern lists every file under path. " +
+		"path narrows either mode to a folder or file relative to the workspace root. " +
+		"include is an extra glob that file paths must match, such as *.md. " +
+		"Globs are relative to path; one without a slash matches names at any depth. " +
 		"Hidden files and folders are skipped. Returned paths are relative to the workspace root."
 	grepSchema = `{"type":"object","properties":{` +
-		`"pattern":{"type":"string","description":"RE2 regular expression; required in content mode, empty lists files in files mode"},` +
+		`"pattern":{"type":"string","description":"content mode: RE2 regex over file contents (required). files mode: file-name word or glob; empty lists every file"},` +
 		`"path":{"type":"string","description":"Folder or file to search, relative to the workspace root; defaults to the root"},` +
 		`"include":{"type":"string","description":"Glob that file paths must match, relative to path, e.g. **/*.md"},` +
-		`"mode":{"type":"string","enum":["content","files"],"description":"content returns matching lines; files returns file paths"}},` +
+		`"mode":{"type":"string","enum":["content","files"],"description":"content searches inside files; files finds or lists files by name"}},` +
 		`"additionalProperties":false}`
 
 	grepModeContent = "content"
@@ -49,7 +52,7 @@ const (
 )
 
 var expectedGrepArgs = map[string]string{
-	"pattern": "string (RE2; required in content mode)",
+	"pattern": "string (content mode: RE2 regex, required; files mode: name word or glob)",
 	"path":    `string (folder or file, default ".")`,
 	"include": "string (glob, e.g. **/*.md)",
 	"mode":    `"content" (default) or "files"`,
@@ -68,11 +71,11 @@ type grepArgs struct {
 
 // grepQuery is grepArgs validated into the form the search runs on.
 type grepQuery struct {
-	// matcher is nil only in files mode with an empty pattern, which lists every file.
-	matcher *regexp.Regexp
-	// include is "" to match every file; a slash-free glob has already been widened to any depth.
-	include string
-	mode    string
+	mode string
+	// contentMatcher is set only in content mode.
+	contentMatcher *regexp.Regexp
+	// pathGlobs must all match a file's path relative to the search path; none means every file.
+	pathGlobs []string
 }
 
 type grepMatch struct {
@@ -154,27 +157,47 @@ func decodeGrepArgs(arguments json.RawMessage) (grepArgs, grepQuery, error) {
 	query := grepQuery{mode: args.Mode}
 
 	switch {
-	case args.Pattern != "":
+	case args.Mode == grepModeContent && args.Pattern == "":
+		return grepArgs{}, grepQuery{}, errors.New("pattern is required in content mode; use mode=files to list files")
+	case args.Mode == grepModeContent:
 		matcher, err := regexp.Compile(args.Pattern)
 		if err != nil {
 			return grepArgs{}, grepQuery{}, fmt.Errorf("pattern is not a valid RE2 regular expression: %w", err)
 		}
-		query.matcher = matcher
-	case args.Mode == grepModeContent:
-		return grepArgs{}, grepQuery{}, errors.New("pattern is required in content mode; use mode=files to list files")
+		query.contentMatcher = matcher
+	case strings.TrimSpace(args.Pattern) != "":
+		// A bare word is a substring of the name, as in fd, because that is how models ask for files.
+		namePattern := strings.TrimSpace(args.Pattern)
+		if !strings.ContainsAny(namePattern, "*?[{") {
+			namePattern = "*" + namePattern + "*"
+		}
+		glob, err := normalizePathGlob(namePattern)
+		if err != nil {
+			return grepArgs{}, grepQuery{}, fmt.Errorf("in files mode pattern matches file names: %w", err)
+		}
+		query.pathGlobs = append(query.pathGlobs, glob)
 	}
 
-	if include := strings.TrimPrefix(strings.TrimSpace(args.Include), "./"); include != "" {
-		// Slash-free globs match file names at any depth, as in ripgrep and .gitignore.
-		if !strings.Contains(include, "/") {
-			include = "**/" + include
+	if strings.TrimSpace(args.Include) != "" {
+		glob, err := normalizePathGlob(args.Include)
+		if err != nil {
+			return grepArgs{}, grepQuery{}, fmt.Errorf("include: %w", err)
 		}
-		if !doublestar.ValidatePattern(include) {
-			return grepArgs{}, grepQuery{}, fmt.Errorf("include %q is not a valid glob", args.Include)
-		}
-		query.include = include
+		query.pathGlobs = append(query.pathGlobs, glob)
 	}
 	return args, query, nil
+}
+
+// normalizePathGlob widens a slash-free glob to any depth, as in ripgrep and .gitignore.
+func normalizePathGlob(raw string) (string, error) {
+	glob := strings.TrimPrefix(strings.TrimSpace(raw), "./")
+	if !strings.Contains(glob, "/") {
+		glob = "**/" + glob
+	}
+	if !doublestar.ValidatePattern(glob) {
+		return "", fmt.Errorf("%q is not a valid glob", raw)
+	}
+	return glob, nil
 }
 
 // searchTree returns a Go error only when the context ends; a file it cannot read is skipped.
@@ -193,12 +216,14 @@ func (t *GrepTool) searchTree(ctx context.Context, start string, query grepQuery
 			}
 			return nil
 		}
-		if entry.IsDir() || !t.isSearchableFile(path, entry) || !matchesInclude(query.include, start, path) {
+		if entry.IsDir() || !t.isSearchableFile(path, entry) || !matchesPathGlobs(query.pathGlobs, start, path) {
 			return nil
 		}
 
 		shown := t.workspace.reportDisplayPath(path, path)
-		if err := searchFile(ctx, path, shown, query, &results); err != nil && ctx.Err() != nil {
+		if query.mode == grepModeFiles {
+			results.addMatch(grepMatch{path: shown}, true)
+		} else if err := searchFileContents(ctx, path, shown, query.contentMatcher, &results); err != nil && ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if results.isTruncated {
@@ -226,8 +251,8 @@ func (t *GrepTool) isSearchableFile(path string, entry fs.DirEntry) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-func matchesInclude(include, start, path string) bool {
-	if include == "" {
+func matchesPathGlobs(globs []string, start, path string) bool {
+	if len(globs) == 0 {
 		return true
 	}
 	rel, err := filepath.Rel(start, path)
@@ -238,17 +263,17 @@ func matchesInclude(include, start, path string) bool {
 	if rel == "." {
 		rel = filepath.Base(path)
 	}
-	isMatch, err := doublestar.Match(include, filepath.ToSlash(rel))
-	return err == nil && isMatch
+	rel = filepath.ToSlash(rel)
+	for _, glob := range globs {
+		if isMatch, err := doublestar.Match(glob, rel); err != nil || !isMatch {
+			return false
+		}
+	}
+	return true
 }
 
-// searchFile adds this file's matches to results; binary files are skipped like unreadable ones.
-func searchFile(ctx context.Context, path, shown string, query grepQuery, results *grepResults) error {
-	if query.matcher == nil {
-		results.addMatch(grepMatch{path: shown}, true)
-		return nil
-	}
-
+// searchFileContents adds this file's matching lines to results; binary files are skipped like unreadable ones.
+func searchFileContents(ctx context.Context, path, shown string, matcher *regexp.Regexp, results *grepResults) error {
 	// path is confined to the workspace by resolvePath and isSearchableFile; replaced by Broker in Phase 2
 	file, err := os.Open(path)
 	if err != nil {
@@ -274,11 +299,7 @@ func searchFile(ctx context.Context, path, shown string, query grepQuery, result
 		if errors.Is(readErr, io.EOF) && len(text) == 0 {
 			return nil
 		}
-		if query.matcher.Match(text) {
-			if query.mode == grepModeFiles {
-				results.addMatch(grepMatch{path: shown}, true)
-				return nil
-			}
+		if matcher.Match(text) {
 			if !results.addMatch(grepMatch{path: shown, line: line, text: buildShownLine(text)}, isFirstMatch) {
 				return nil
 			}
@@ -350,11 +371,17 @@ func formatGrepResults(results grepResults, mode string) string {
 	return output.String()
 }
 
-// describeSearch is the card summary, e.g. `"TODO" in notes (*.md): 7 matches in 3 files`.
+// describeSearch is the card summary, e.g. `"TODO" in notes (*.md): 7 matches in 3 files`
+// or `files named "confirm" in admin: 1 file`.
 func describeSearch(args grepArgs, results grepResults) string {
-	subject := "files"
-	if args.Pattern != "" {
+	var subject string
+	switch {
+	case args.Mode == grepModeContent:
 		subject = fmt.Sprintf("%q", args.Pattern)
+	case args.Pattern != "":
+		subject = fmt.Sprintf("files named %q", args.Pattern)
+	default:
+		subject = "files"
 	}
 	if args.Path != "." {
 		subject += " in " + args.Path

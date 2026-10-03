@@ -58,11 +58,29 @@ func TestGrepListsEveryFileWhenFilesModeHasNoPattern(t *testing.T) {
 	}
 }
 
-func TestGrepListsOnlyFilesContainingThePatternOnceEach(t *testing.T) {
+func TestGrepFilesModeMatchesNamesNotContents(t *testing.T) {
 	tool := builtin.BuildGrepTool(writeNotesFixture(t))
 
-	assertContent(t, invokeGrep(t, tool, `{"pattern":"TODO","mode":"files"}`),
-		"inbox.md\nnotes/2026-09-01-standup.md\nnotes/projects/travis.txt")
+	for _, tc := range []struct {
+		name, arguments, want string
+	}{
+		{"a bare word matches names containing it", `{"mode":"files","pattern":"standup"}`, "notes/2026-09-01-standup.md"},
+		{"a word found only in contents matches nothing", `{"mode":"files","pattern":"TODO"}`, "[no files found]"},
+		{"a glob works as a glob", `{"mode":"files","pattern":"**/*.txt"}`, "notes/projects/travis.txt"},
+		{"a slash-free glob matches at any depth", `{"mode":"files","pattern":"g*.md"}`, "notes/projects/garden.md"},
+		{"an empty pattern lists the folder", `{"mode":"files","path":"notes/projects"}`,
+			"notes/projects/garden.md\nnotes/projects/travis.txt"},
+		{"include narrows a name match", `{"mode":"files","pattern":"*a*","include":"*.txt"}`, "notes/projects/travis.txt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertContent(t, invokeGrep(t, tool, tc.arguments), tc.want)
+		})
+	}
+
+	output := invokeGrep(t, tool, `{"mode":"files","pattern":"standup","path":"notes"}`)
+	if output.Display != `files named "standup" in notes: 1 file` {
+		t.Fatalf("Display = %q", output.Display)
+	}
 }
 
 func TestGrepFiltersByIncludeGlob(t *testing.T) {
@@ -111,7 +129,7 @@ func TestGrepSkipsHiddenEntriesUnlessSearchedDirectly(t *testing.T) {
 	writeFixture(t, root, "notes/visible.md", "needle")
 	tool := builtin.BuildGrepTool(root)
 
-	assertContent(t, invokeGrep(t, tool, `{"pattern":"needle","mode":"files"}`), "notes/visible.md")
+	assertContent(t, invokeGrep(t, tool, `{"mode":"files"}`), "notes/visible.md")
 	assertContent(t, invokeGrep(t, tool, `{"pattern":"needle","path":".git"}`), ".git/config:1:needle")
 }
 
@@ -139,7 +157,7 @@ func TestGrepFollowsSymlinkedFilesOnlyInsideTheWorkspace(t *testing.T) {
 	}
 	tool := builtin.BuildGrepTool(root)
 
-	assertContent(t, invokeGrep(t, tool, `{"pattern":"needle","mode":"files"}`), "alias.txt\nreal/inside.txt")
+	assertContent(t, invokeGrep(t, tool, `{"mode":"files"}`), "alias.txt\nreal/inside.txt")
 }
 
 func TestGrepRejectsPathsOutsideTheWorkspace(t *testing.T) {
@@ -207,6 +225,7 @@ func TestGrepRejectsInvalidArguments(t *testing.T) {
 		`{"pattern":"x","mode":"lines"}`,
 		`{"pattern":"("}`,
 		`{"pattern":"x","include":"[a"}`,
+		`{"mode":"files","pattern":"[a"}`,
 		`{"pattern":"x"} {}`,
 		`{"pattern":"x","path":"nope:dir"}`,
 		`[]`,

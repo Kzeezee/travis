@@ -92,8 +92,8 @@ func requireContains(t *testing.T, step, content, want string) {
 	}
 }
 
-// buildNotesTaskScript searches for the note, reads it, follows its pointer into admin/,
-// and answers from what the tools returned.
+// buildNotesTaskScript searches contents for the note, reads it, lists the folder it points
+// at, reads the confirmation there, and answers from what the tools returned.
 func buildNotesTaskScript() []scriptedStep {
 	var notePath string
 	return []scriptedStep{
@@ -105,39 +105,44 @@ func buildNotesTaskScript() []scriptedStep {
 			if !offered["grep"] || !offered["fs_read"] {
 				t.Fatalf("offered tools %v, want grep and fs_read from the real registry", request.Tools)
 			}
-			return buildToolCallChunks("call-find", "grep", `{"pattern":"(?i)dentist","mode":"files"}`)
+			return buildToolCallChunks("call-search", "grep", `{"pattern":"(?i)dentist"}`)
 		},
 		func(t *testing.T, request core.ProviderRequest) []core.Chunk {
-			notePath = strings.TrimSpace(readLatestToolResult(t, request).Content)
-			if notePath != notesTask.answerNote {
-				t.Fatalf("grep files found %q, want only %q", notePath, notesTask.answerNote)
+			match := readLatestToolResult(t, request).Content
+			notePath, _, _ = strings.Cut(match, ":")
+			if notePath != notesTask.answerNote || strings.Contains(match, "\n") {
+				t.Fatalf("content search returned %q, want one match in %q", match, notesTask.answerNote)
 			}
 			arguments, err := json.Marshal(map[string]string{"path": notePath})
 			if err != nil {
 				t.Fatal(err)
 			}
-			return buildToolCallChunks("call-read", "fs_read", string(arguments))
+			return buildToolCallChunks("call-read-note", "fs_read", string(arguments))
 		},
 		func(t *testing.T, request core.ProviderRequest) []core.Chunk {
 			note := readLatestToolResult(t, request).Content
-			requireContains(t, "fs_read", note, "Finally booked the dentist")
-			requireContains(t, "fs_read", note, "filed under admin/")
-			return buildToolCallChunks("call-search", "grep", `{"pattern":"^Appointment:","path":"admin"}`)
+			requireContains(t, "fs_read note", note, "Finally booked the dentist")
+			requireContains(t, "fs_read note", note, "filed under admin/")
+			return buildToolCallChunks("call-list", "grep", `{"mode":"files","path":"admin"}`)
 		},
 		func(t *testing.T, request core.ProviderRequest) []core.Chunk {
-			matches := readLatestToolResult(t, request).Content
-			requireContains(t, "grep content", matches, "admin/insurance.md:4:Appointment: none scheduled")
-			var confirmation string
-			for _, line := range strings.Split(matches, "\n") {
-				if strings.HasPrefix(line, "admin/clinic-confirmation.md:") {
-					confirmation = line
+			listing := readLatestToolResult(t, request).Content
+			if listing != "admin/clinic-confirmation.md\nadmin/insurance.md" {
+				t.Fatalf("listing admin/ returned %q, want both files", listing)
+			}
+			return buildToolCallChunks("call-read-confirmation", "fs_read", `{"path":"admin/clinic-confirmation.md"}`)
+		},
+		func(t *testing.T, request core.ProviderRequest) []core.Chunk {
+			confirmation := readLatestToolResult(t, request).Content
+			// fs_read returns file bytes as they are, so this fails if a checkout rewrote the CRLF fixture.
+			const line = "3\tAppointment: Tuesday 13 October 2026, 09:30\r\n"
+			requireContains(t, "fs_read confirmation", confirmation, line)
+			var date string
+			for _, numbered := range strings.Split(confirmation, "\n") {
+				if appointment, isAppointment := strings.CutPrefix(numbered, "3\tAppointment: "); isAppointment {
+					date, _, _ = strings.Cut(appointment, ",")
 				}
 			}
-			// The whole line is compared so a \r left over from the CRLF file fails here.
-			if want := "admin/clinic-confirmation.md:3:Appointment: Tuesday 13 October 2026, 09:30"; confirmation != want {
-				t.Fatalf("grep returned %q for the CRLF confirmation, want %q", confirmation, want)
-			}
-			date, _, _ := strings.Cut(strings.TrimPrefix(confirmation, "admin/clinic-confirmation.md:3:Appointment: "), ",")
 			answer := fmt.Sprintf("%s mentions the dentist appointment; it is on %s.", notePath, date)
 			half := len(answer) / 2
 			return []core.Chunk{{Text: answer[:half]}, {Text: answer[half:], Finish: core.StopEndTurn}}
