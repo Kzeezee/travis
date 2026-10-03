@@ -1,6 +1,7 @@
 # `travis` — Design Document
 
-**Status:** Draft v0.4 · **Owner:** Kzeezee · **Last updated:** 2026-09-19
+**Status:** Draft v0.4 · **Owner:** Kzeezee · **Last updated:** 2026-10-03
+**Amended since v0.4:** D-31 (tool-name separator is `_`, MCP tools `mcp__<server>__<tool>`; providers reject `.`)
 **Changes in v0.4:** D-11 (travis is a **general personal assistant**, not a coding
 agent — closes the M1/OQ-17 inconsistency) · D-12 (broker is **one per session**, a
 child process, no privilege elevation, **binary verified before exec**) · D-13
@@ -16,7 +17,7 @@ D-25 (OS work pattern: interface + all-OS stubs first) · D-26 (**untrusted cont
 never summarised — it is dropped**) · D-27 (**`exec` is irreversible**; unrelaxable) ·
 D-28 (`memory` stays core, bounded by a **size cap**) · D-29 (red-team cases MUST
 assert `PolicyDenied`) · D-30 (**decision rules written by the broker**, never by
-`fs.write`) · D-31 (tool names are namespaced) · D-32 (concurrent sessions allowed) ·
+`fs_write`) · D-31 (tool names are namespaced) · D-32 (concurrent sessions allowed) ·
 D-33 (**no tokenizer**; conservative + self-correcting) · D-34 (four smaller items
 scoped) · OQ-06, OQ-17, OQ-22 closed · OQ-24 reopened · R-23…R-26 added
 **Changes in v0.3:** project renamed `assistance` → **travis** throughout (§0.3) ·
@@ -180,7 +181,7 @@ The last column names what a decision supersedes, or the sections it affects.
 | **D-05** | **Subscription/OAuth providers use the same `Provider` interface as API-key providers.** The difference is confined to a `Credential` seam (§5.3.1): `api_key`, `oauth`, `oauth_device`. There is no `SubscriptionProvider` type and no second code path in `brain`. | The wire protocol is identical; only how a bearer token is obtained and refreshed differs. Splitting the interface would duplicate streaming, tool-call repair, and error taxonomy for a token-refresh difference. | — |
 | **D-06** | **Bubble Tea v2 (`charm.land/bubbletea/v2`), not v1**, from the first commit. Same for Lipgloss v2 and Bubbles v2. | v1 cannot report key *release*, so hold-to-talk push-to-talk is impossible; v1's renderer repaints whole lines, which tears under token streaming; v1 has no colour-profile/background-colour query, which we need for Windows terminals. See §5.9.1. | — |
 | **D-07** | **Linux, macOS, and Windows are all first-class MVP targets.** Windows means native `windows/amd64` and `windows/arm64` binaries, not WSL2. | The team develops on all three. Go and Bubble Tea v2 are genuinely cross-platform; the only truly OS-specific work is the sandbox layer, which is defence-in-depth *below* an OS-independent broker (§9.2.1). | OQ-01, §2.2 |
-| **D-08** | **Eight core tools: `fs.read`, `fs.write`, `fs.edit`, `grep`, `exec`, `fetch`, `ask_user`, `memory`. `glob` is deleted.** | File discovery is a mode of `grep`, not a tool. `edit` stays because whole-file `write` is O(file) tokens per change and is the top cause of silent truncation on small models — see §5.6.2. | §3, §5.6 |
+| **D-08** | **Eight core tools: `fs_read`, `fs_write`, `fs_edit`, `grep`, `exec`, `fetch`, `ask_user`, `memory`. `glob` is deleted.** | File discovery is a mode of `grep`, not a tool. `edit` stays because whole-file `write` is O(file) tokens per change and is the top cause of silent truncation on small models — see §5.6.2. | §3, §5.6 |
 | **D-09** | **Autonomy is bought with reversibility and durable decisions, not with permission prompts.** The agent acts without asking when the action is reversible and in-scope; it asks when the action is irreversible, out-of-scope, or over budget; every answer can become a persistent rule. | "Ask the human" and "be useful unattended" are only in conflict if asking is the *only* safety mechanism. See §6.4. | C6, G5 |
 | **D-10** | **Approvals, confirmations, and any yes/no are keyboard-only. Voice input is for composing prose (prompts, dictation) only.** | An ASR mishearing on a security decision is a policy bypass, and "yes" spoken by a podcast in the background is a practical attack. Composition errors are visible and correctable; approval errors are not. | C9, R-15 |
 | **D-11** | **travis is a general personal assistant, not a coding agent.** | Settles the one real inconsistency in `DESIGN.md`: §5.13's OQ-17 already says *"this is a personal assistant"*, but M1's exit criterion is a coding task and every example is Go code. The identity was never muddled — the milestone was. | M1 exit criterion, eval scenarios, `memory` priority, `mcp` priority |
@@ -202,8 +203,8 @@ The last column names what a decision supersedes, or the sections it affects.
 | **D-27** | **`exec` is irreversible by default and always asks. No decision rule or profile may relax it to `auto`.** Closes G-4. Single exception, available only once Phase 4 lands: an `exec` invocation the broker runs under a **read-only sandbox** has no writable effect and may be treated as reversible. | The journal only snapshots `fs.write`/`fs.edit`; it cannot see what a subprocess writes, so nothing `exec` changes can be restored. §6.4's rule ("reversible → act; irreversible → ask") therefore never covered `exec`, because nobody classified it. Today `exec` asks only because of a **config default** (§5.5 `"exec" = "ask"`), which a `[a] always` rule may legitimately relax — after which `exec sed -i` silently rewrites 40 files and `/undo` does nothing. Making it a *classification* rather than a default makes that relaxation impossible, since §6.4 already forbids relaxing irreversible actions. This is also the exact hole in a competitor's checkpointing (files changed by shell commands are not tracked, so its rewind silently under-restores) — we fail safe where they fail silent, but only if it is written down. The read-only-sandbox exception matters because most `exec` calls (`git status`, `ls`, `go test`) write nothing, and asking forever would be approval fatigue (R-14); classifying by argv is not an option, since that is the adversarial-parsing fight D-04 already lost for `curl`. | §6.4, §5.5, §5.6, C6b, G-4, R-14, Phase 4 |
 | **D-28** | **`memory` stays a core tool, and is bounded by a hard size cap rather than a retention policy.** Closes G-6 and `OQ-06`. Rules: it remains one of the eight core tools · a hard cap (~8 KB / ~200 lines) — **when full, the model must delete before it can add** · a `/memory` command to view and edit the file · **no automatic redaction** (that stays PII Level 3, deferred) · untrusted-derived notes live in a separate delimited section per D-26 rule 3. | An assistant without memory is not one (D-11), and dropping it would take D-08's eight core tools to seven. The cap converts unbounded growth into bounded growth **with no new machinery** — no expiry logic, no retention policy, no cleanup job — and forces curation as a side effect. Since the file is markdown and human-editable, *inspectability* is the privacy guarantee that actually holds; an automatic PII scanner would be Level 3 work with poor precision. | §5.4, §5.6, `OQ-06`, G-6, D-26 |
 | **D-29** | **Every red-team case MUST assert the denial fired, not merely that the effect was absent.** Closes G-7. `assert_event = "PolicyDenied"` is mandatory alongside `assert_no_effect`. **Adopted in Phase 0**, before any cases are authored. | A case that asserts only "the bad thing did not happen" passes when the model simply declines on its own — leaving the broker unexercised. That is a false pass: it tested the model's manners, not our enforcement. Because model behaviour changes with every provider, model and prompt tweak, a suite of these can go green while enforcement rots. Adopted in Phase 0 purely because retrofitting the convention after 200 cases exist means rewriting all 200. | §9.4, G-7, Phase 0 |
-| **D-30** | **Decision rules are written by the broker through a dedicated call, never as a file write.** Closes G-13. Three parts: **(1)** `.travis/**` goes on the **write-deny** list, so `fs.write` can never reach it · **(2)** the broker gains `AddDecisionRule`, callable only from a real keypress in the approval modal, and the broker writes the file itself outside the `fs.write` path · **(3)** `**/.git/hooks/**` also goes on write-deny. | `.travis/decisions.toml` holds the learned "always allow" rules and sits **inside the workspace**, so the model can write it with `fs.write`. §6.4's *"rules narrow, never widen"* correctly prevents capability escalation, but a written rule can still flip `ask` → `auto`, removing the human gate on everything already granted — so injected content could grant travis blanket auto-approval. Moving the file out of the workspace would work but forfeits §6.4's *"editable, reviewable in git"* property; write-denying it alone would also block the UI, which has no filesystem access either (§4.4). Making rule-creation a broker call fixes the actual shape of the problem: writing a rule should never have been a generic file operation the model can imitate. `.git/hooks` is the same bug class — a file written there executes on the next `git commit` with no `exec` capability involved, bypassing the allowlist entirely. | §6.4, §4.4, §5.12, G-5a, G-13 |
-| **D-31** | **Tool names use the namespaced form everywhere: `fs.read`, `fs.write`, `fs.edit`, `grep`, `exec`, `fetch`, `ask_user`, `memory`.** Closes G-8. The shorthand in §3 and D-08 is the error and gets corrected. Done in **Phase 0**. | These strings are model-facing *and* config keys, so an inconsistency is a real bug, not a style nit. The namespaced form wins because MCP tools are already namespaced (`mcp.github.create_issue`), because bare `write` is ambiguous once `memory` also writes, and because every config example in `DESIGN.md` already uses it — so the table is right and the shorthand list is wrong. Phase 0 because it is a find-and-replace in an empty repo; once config files, red-team cases and skill definitions reference the old names it becomes a migration. | §3, §5.5, §5.6, D-08, G-8 |
+| **D-30** | **Decision rules are written by the broker through a dedicated call, never as a file write.** Closes G-13. Three parts: **(1)** `.travis/**` goes on the **write-deny** list, so `fs_write` can never reach it · **(2)** the broker gains `AddDecisionRule`, callable only from a real keypress in the approval modal, and the broker writes the file itself outside the `fs_write` path · **(3)** `**/.git/hooks/**` also goes on write-deny. | `.travis/decisions.toml` holds the learned "always allow" rules and sits **inside the workspace**, so the model can write it with `fs_write`. §6.4's *"rules narrow, never widen"* correctly prevents capability escalation, but a written rule can still flip `ask` → `auto`, removing the human gate on everything already granted — so injected content could grant travis blanket auto-approval. Moving the file out of the workspace would work but forfeits §6.4's *"editable, reviewable in git"* property; write-denying it alone would also block the UI, which has no filesystem access either (§4.4). Making rule-creation a broker call fixes the actual shape of the problem: writing a rule should never have been a generic file operation the model can imitate. `.git/hooks` is the same bug class — a file written there executes on the next `git commit` with no `exec` capability involved, bypassing the allowlist entirely. | §6.4, §4.4, §5.12, G-5a, G-13 |
+| **D-31** | **Tool names are namespaced with underscores: `fs_read`, `fs_write`, `fs_edit`, `grep`, `exec`, `fetch`, `ask_user`, `memory`; MCP tools are `mcp__<server>__<tool>`. Every tool name matches `^[a-zA-Z0-9_-]{1,64}$`, enforced by the registry at registration.** Closes G-8. *Amended 2026-10-03:* the separator was `.` (`fs.read`); the namespacing itself is unchanged. Capability kinds (`fs.read:<glob>`) keep the dot: they name permissions, never reach the model, and are a different concept from tool names. | These strings are model-facing *and* config keys, so an inconsistency is a real bug, not a style nit. Namespacing wins because MCP tools need a server prefix and because bare `write` is ambiguous once `memory` also writes. The separator is `_` because providers constrain function names: the OpenAI chat-completions API rejects `fs.read` with `string does not match pattern '^[a-zA-Z0-9_-]+$'` (verified 2026-10-03). Translating names inside each provider adapter was rejected: it gives one tool two spellings (config and UI versus model and trace) and makes every future adapter repeat the mapping. `__` separates the MCP server from the tool so names that themselves contain `_` stay unambiguous. | §3, §5.5, §5.6, §5.7, D-08, G-8 |
 | **D-32** | **Concurrent sessions in one workspace are allowed, not refused.** Closes G-9. Per-session state is already isolated; the two genuinely shared files get append-safe writes; a second session shows a **warning**, never a block. Rules: **(1)** session logs and journal metadata are already per-session (§5.15) — no change · **(2)** journal blobs are content-addressed, so concurrent writes are **idempotent** — no change · **(3)** `decisions.toml` **stays shared** and the broker appends under an exclusive lock (`O_APPEND` + lock; Windows needs `LockFileEx`) · **(4)** `mcp.lock` takes a lock during install only · **(5)** on start, if another session holds the workspace, **warn and continue**, naming the other PID and suggesting a git worktree. | The initial instinct — refuse the second session — was overkill. Most state is already isolated: session logs are per-session by construction, and content-addressed blobs make concurrent journal writes a no-op rather than a conflict. `decisions.toml` must *stay* shared, because §6.4's whole point is a durable project-level rule; per-session rules would mean approving "always allow" in one terminal and being asked again in the other. Comparable tools (OpenCode advertises parallel agent instances on one project) allow this, so refusing would be a conspicuous limitation. The one unfixable case — two sessions editing the same source file — is a git problem, not a travis problem, which is what the warning points at. | §2.2, §5.15, §6.4, §5.7, G-9, D-12, D-30 |
 | **D-33** | **Context measurement: don't ship a tokenizer. Be conservative and self-correcting.** Closes G-10. **(1)** `context_length` is **required in the provider profile**, not detected — onboarding may pre-fill it where the endpoint exposes it, but config is the source of truth · **(2)** estimate cheaply (the provider's `Count()` where available, else a heuristic) and mark it as an estimate, which §5.3 already requires · **(3)** compact at **60%, not 75%**, whenever the count is an estimate · **(4)** treat `ErrContextLength` as the correction signal and lower the threshold for the rest of the session. ⚠️ **Flagged as needing further research during implementation** — see G-10. | Compaction currently fires at 75% of a number that may be wrong in either direction: underestimating means the request fails mid-task with `ErrContextLength`; overestimating throws away context that was still needed. §7.1's onboarding screen claims to *detect* context length, which most OpenAI-compatible endpoints do not expose. Shipping a real tokenizer per model family (tiktoken, sentencepiece, …) would mean a dependency per family, drifting as models change, for accuracy this design does not need — wasting some context is far cheaper than a failed turn. §5.3 already routes `ErrContextLength` to the brain, so the correction signal exists for free. | §5.3, §5.4.2, §7.1, G-10 |
 | **D-34** | **The four smaller items are accepted as scoped below.** Closes G-12. **(1) Daily cost ceiling** — add `max_daily_cost_usd` to `[brain]`, tracked in the state dir (Phase 2) · **(2) Privacy statement** — write the paragraph: *"travis sends nothing anywhere except to the model provider you configured. No analytics, no crash reporting, no update checks."* · **(3) Licensing** — ⚠️ **audit required at the start of Phase 4**, because D-15 reversed to full duplex: `malgo`/miniaudio, whisper.cpp, and the **Whisper model weights** (licensed separately from the code) are all v1 dependencies again · **(4) Accessibility** — one paragraph naming the `plain` renderer as the screen-reader path, `mono`/`high_contrast` for low vision, 60-column degradation. ⚠️ **Items 1 and 3 flagged as needing further research during implementation** — see G-12. | C12 promised a ceiling "per turn and per day" but config only has `max_turn_cost_usd`, and one runaway overnight loop is the scenario that matters. The privacy paragraph is free and, for a trust-first product, worth more than most features — C14 recorded "no telemetry" as a scope cut rather than a stated posture. Licensing **is back in scope**: an earlier draft of D-15 removed the audio libraries, but D-15 now ships full duplex, so `malgo`/miniaudio, whisper.cpp and the Whisper weights are v1 dependencies — and model weights carry their own licence, separate from the code's. Accessibility needs no new mechanism — the `plain` renderer and `mono` theme already exist; nobody has said what they are for. | C12, C14, §5.9, §5.10, D-15, G-12 |
@@ -337,7 +338,7 @@ In plain words: the fixed tool list is `read, write, edit, grep, exec, fetch,
 ask_user, memory`. Finding files by pattern is a _mode_ of `grep`, not its own tool.
 
 ```go
-// grep(mode="files", pattern="**/*_test.go")   ← replaces the deleted fs.glob tool
+// grep(mode="files", pattern="**/*_test.go")   ← replaces the deleted fs_glob tool
 // grep(mode="content", pattern="TODO")          ← ordinary content search
 ```
 
@@ -414,9 +415,9 @@ stops and asks (D-09, §6.4).
 1. **The model reasons.** The provider (whatever LLM is configured) reads the
    request and decides: "I should read the current `.env.example`, then write an
    updated version." It does not touch any file itself — it can only emit a
-   request like `fs.write(path=".env.example", content=<new file contents>)`.
+   request like `fs_write(path=".env.example", content=<new file contents>)`.
 2. **The brain receives that request.** This is the `dispatch` step of the agent
-   loop (§5.4): the brain looks up the `fs.write` tool in the registry and prepares
+   loop (§5.4): the brain looks up the `fs_write` tool in the registry and prepares
    to invoke it — but invoking it means asking the broker, not touching the disk
    directly (the brain has no filesystem access of its own, §4.4).
 3. **The broker checks the grant.** The broker holds the actual capability tokens
@@ -476,7 +477,7 @@ the model can't reach or reason its way around, not in the model's own judgment.
    `go.mod` walls. Dependency injection passes ports and runtime choices across
    module seams when they vary by runtime environment, config, or test scenario;
    stable implementation mechanics stay inside their owning module.
-2. **Core tools — eight of them (D-08).** `fs.read`, `fs.write`, `fs.edit`, `grep`,
+2. **Core tools — eight of them (D-08).** `fs_read`, `fs_write`, `fs_edit`, `grep`,
    `exec`, `fetch`, `ask_user`, `memory`. Names are namespaced (D-31); the bare forms
    are not used anywhere, because these strings are model-facing *and* config keys. Small, auditable, no cleverness. There is no `glob`
    (it is a mode of `grep`, §5.6.2) and no separate web-search module — search is an
@@ -579,7 +580,7 @@ entry points, and subagents are the same thing to the brain.**
 
 // Tool is the only way the model affects the world.
 type Tool interface {
-    // Name is globally unique after namespacing, e.g. "fs.read", "mcp.github.create_issue".
+    // Name is globally unique after namespacing, e.g. "fs_read", "mcp__github__create_issue".
     Name() string
     // Schema is a JSON Schema draft-2020-12 object describing arguments.
     Schema() json.RawMessage
@@ -1167,11 +1168,11 @@ type Registry interface {
 approval_default = "ask"           # auto | ask | never
 max_exposed      = 60              # hard cap on tools sent to the model per step
 [tools.approval]
-"fs.read"        = "auto"
-"fs.write"       = "auto_if_reversible"   # journalled + in workspace → no prompt (§6.4)
-"fs.edit"        = "auto_if_reversible"
+"fs_read"        = "auto"
+"fs_write"       = "auto_if_reversible"   # journalled + in workspace → no prompt (§6.4)
+"fs_edit"        = "auto_if_reversible"
 "exec"           = "ask"
-"mcp.github.*"   = "ask"
+"mcp__github__*" = "ask"
 "mcp.*.delete_*" = "never"
 ```
 
@@ -1211,16 +1212,16 @@ in one more thing a small model can confuse for another.
 
 | Tool       | Effect | Capability             | Notes                                                                                               |
 | ---------- | ------ | ---------------------- | --------------------------------------------------------------------------------------------------- |
-| `fs.read`  | read   | `fs.read:<glob>`       | line ranges, byte cap, binary detection                                                             |
-| `fs.write` | write  | `fs.write:<glob>`      | atomic temp+rename; refuses outside grant; creates dirs                                             |
-| `fs.edit`  | write  | `fs.write:<glob>`      | exact-match string replace; fails loudly on ambiguity (§5.6.2)                                      |
+| `fs_read`  | read   | `fs.read:<glob>`       | line ranges, byte cap, binary detection                                                             |
+| `fs_write` | write  | `fs.write:<glob>`      | atomic temp+rename; refuses outside grant; creates dirs                                             |
+| `fs_edit`  | write  | `fs.write:<glob>`      | exact-match string replace; fails loudly on ambiguity (§5.6.2)                                      |
 | `grep`     | read   | `fs.read:<glob>`       | ripgrep semantics in-process; `mode = content \| files` — **this is also the file finder** (§5.6.2) |
 | `exec`     | exec   | `exec:<allowlist>`     | sandboxed child, no shell by default                                                                |
 | `fetch`    | net    | `net.http:<host-glob>` | GET/POST, redirect policy, size cap, HTML→md                                                        |
 | `ask_user` | none   | —                      | the human-in-the-loop primitive (§6.4)                                                              |
 | `memory`   | write  | `fs.write:<memdir>`    | markdown-backed long-term notes. **Hard size cap (~8 KB); when full the model MUST delete before adding** (D-28) |
 
-**Deleted: `fs.glob`.** See §5.6.2.
+**Deleted: `fs_glob`.** See §5.6.2.
 
 **Depends on:** `core`, `security`
 
@@ -1315,8 +1316,8 @@ operation as `grep` with an empty content pattern. So `grep` grows one field ins
 One tool, one capability (`fs.read`), one implementation (we already walk the tree and
 already honour `.gitignore`), one place to enforce the read grant. And `exec` with
 `rg`/`ls` on the allowlist remains available for anything exotic. Zero capability is
-lost; one tool is saved. Same reasoning kills any future `fs.list`, `fs.stat`, or
-`fs.tree`.
+lost; one tool is saved. Same reasoning kills any future `fs_list`, `fs_stat`, or
+`fs_tree`.
 
 **`edit` passes that test — kept.** The question "can't `write` do this?" is fair, and
 the answer is that it can, but at a cost that is not a matter of taste:
@@ -1347,7 +1348,7 @@ So the minimal set is not "the fewest tools" but "the fewest tools that make the
 common path cheap and failures loud". `edit` is the second-most-called tool in any
 coding session; `glob` is a rounding error that `grep` already covers.
 
-**How this gets revisited, if at all.** `fs.edit` and `fs.write` both emit
+**How this gets revisited, if at all.** `fs_edit` and `fs_write` both emit
 `bytes_written` and `retry_count` to the eval scorecard. If a milestone's data shows
 `edit` retry rates above ~15% on our default local model, the honest response is to
 drop `edit` and eat the token cost — not to add a third editing tool. That closes
@@ -1357,11 +1358,11 @@ drop `edit` and eat the token cost — not to add a third editing tool. That clo
 `{"error":"path_outside_grant","path":"/etc/passwd","granted":["/home/u/proj/**"]}`.
 Good errors let the model self-correct instead of flailing.
 
-**Testing.** Golden tests over a fixture tree; fuzz `fs.edit` matching; property test
+**Testing.** Golden tests over a fixture tree; fuzz `fs_edit` matching; property test
 that no core tool can produce an effect outside its declared capability set.
 
-**Open questions.** `[OQ-08]` **CLOSED by D-08** — no `fs.patch`, no `fs.glob`. The
-tool set is `fs.read`/`fs.write`/`fs.edit`/`grep`/`exec`/`fetch`/`ask_user`/`memory` and a
+**Open questions.** `[OQ-08]` **CLOSED by D-08** — no `fs_patch`, no `fs_glob`. The
+tool set is `fs_read`/`fs_write`/`fs_edit`/`grep`/`exec`/`fetch`/`ask_user`/`memory` and a
 ninth needs an ADR. Remaining measurement, not an open question: track `edit` retry
 rate in the scorecard per §5.6.2.
 
@@ -1497,7 +1498,7 @@ type Skill struct {
 1. **Always in context:** name + description, one line each. ~30 tokens per skill.
 2. **On demand:** the model calls `skill.open("pptx")` → full `SKILL.md` body.
 3. **Referenced:** body points at `reference.md`, `scripts/build.py` etc.; the model
-   reads them with `fs.read` or runs them with `exec`.
+   reads them with `fs_read` or runs them with `exec`.
 
 **Configuration.**
 
@@ -1863,7 +1864,7 @@ and it is why cross-platform support does not dilute the security claim. Only la
 varies, and it is defence-in-depth, never the primary control.
 
 The failure mode we are explicitly designing against: _"the model was told not to, but
-did."_ Under this design, a model that emits `fs.write /etc/passwd` produces a
+did."_ Under this design, a model that emits `fs_write /etc/passwd` produces a
 `PolicyDenied` event and a tool error string. The `openat(2)` never happens.
 
 #### 5.12.2 Default profiles
@@ -2119,7 +2120,7 @@ default_isolation = "scratch_copy"
 [[swarm.agents]]
 name = "researcher"
 provider = "local"
-tools = ["fetch", "fs.read", "grep"]
+tools = ["fetch", "fs_read", "grep"]
 max_cost = 0.10
 ```
 
@@ -2273,7 +2274,7 @@ and buys back autonomy with four mechanisms that are _not_ prompts.
 
 **1. Reversibility is the currency, not permission.** An action that can be undone
 does not need approval; it needs an undo. Every write goes through a **change
-journal** in `session`: before any `fs.write`/`fs.edit`, the broker snapshots the
+journal** in `session`: before any `fs_write`/`fs_edit`, the broker snapshots the
 prior bytes (content-addressed, in the state dir), so `/undo` restores any turn's file
 state and the TUI can offer `[u] undo` on any completed tool card. Combined with
 `Reversible bool` on tools, the rule becomes:
@@ -2296,7 +2297,7 @@ vague "trust me" flag; it writes a **scoped, inspectable rule**:
 ```toml
 # .travis/decisions.toml   — appended by the UI, editable, reviewable in git
 [[rule]]
-tool = "fs.edit"; scope = "internal/**"; decision = "auto"; ttl = "session"
+tool = "fs_edit"; scope = "internal/**"; decision = "auto"; ttl = "session"
 source = "user approved 2026-08-26T14:02Z"
 ```
 
@@ -2357,7 +2358,7 @@ intake still escalates approval by one level (§5.12.4) — and that escalation 
 must not apply to a step that just ingested a web page.
 
 **`exec` is irreversible, and that is a classification rather than a default (D-27).**
-The journal snapshots `fs.write`/`fs.edit`; it cannot see what a subprocess writes. So
+The journal snapshots `fs_write`/`fs_edit`; it cannot see what a subprocess writes. So
 nothing `exec` changes can be restored, and `exec` **always asks — no decision rule and
 no profile may relax it to `auto`.** §5.5 already defaults `"exec" = "ask"`, but a
 *default* is changeable and this section only forbids `[a] always` on actions marked
@@ -2368,13 +2369,13 @@ a **read-only** filesystem view has no writable effect and may be treated as rev
 which is what buys back autonomy on `git status`, `ls` and `go test` without classifying
 by argv, a fight §5.6.1 already declined for `curl`.
 
-**Decision rules are written by the broker, never by `fs.write` (D-30).** `[R-26]`
+**Decision rules are written by the broker, never by `fs_write` (D-30).** `[R-26]`
 `.travis/decisions.toml` sits inside the workspace, so a normal `fs.write` grant reaches
 it — meaning the model, or injected content, could write itself blanket auto-approval.
 Rules cannot *widen* capabilities, but flipping `ask`→`auto` removes the human gate on
 everything already granted, which is enough. So: `.travis/**` is on the write-deny list;
 the broker exposes a dedicated `AddDecisionRule` call that fires **only** from a real
-keypress in the approval modal and writes the file itself, outside the `fs.write` path.
+keypress in the approval modal and writes the file itself, outside the `fs_write` path.
 `**/.git/hooks/**` joins write-deny under the same reasoning — a file written there
 executes on the next `git commit`, with no `exec` capability involved at all.
 
@@ -2579,12 +2580,12 @@ MCP install step, showing the provenance card required by §5.7:
 │  The comparison uses `>` where it should be `>=`, so a token expiring exactly    │
 │  now is still accepted. One line in `token.go:88`.                               │
 │                                                                                  │
-│  ┌─ fs.edit ─ internal/auth/token.go ───────────────────────────── 0.0s ── ✓ ─┐  │
+│  ┌─ fs_edit ─ internal/auth/token.go ───────────────────────────── 0.0s ── ✓ ─┐  │
 │  │ 88 - if time.Now().Before(t.ExpiresAt) {                                   │  │
 │  │ 88 + if !time.Now().Before(t.ExpiresAt) || t.ExpiresAt.Equal(now) {        │  │
 │  │                                                                            │  │
 │  │ reversible · journalled · in workspace → applied without asking            │  │
-│  │ [ u ] undo   [ d ] full diff   [ ! ] always ask for fs.edit here           │  │
+│  │ [ u ] undo   [ d ] full diff   [ ! ] always ask for fs_edit here           │  │
 │  └────────────────────────────────────────────────────────────────────────────┘  │
 │                                                                                  │
 │  ┌─ exec ─ ⏸ approval needed ──────────────────────────────── irreversible ⚠ ─┐  │
@@ -2612,7 +2613,7 @@ because it differs per OS), and voice state. Footer: active capability counts, s
 budget, remaining autonomy grant (§6.4), keybind hints. Every one of these is driven
 by a bus event (§4.5).
 
-Note what the two tool cards demonstrate. The `fs.edit` ran **without a prompt** —
+Note what the two tool cards demonstrate. The `fs_edit` ran **without a prompt** —
 it is reversible, journalled, and inside the workspace — and offers `[u] undo` after
 the fact. The `git push --force` **stops and asks**, offers no "always", and says why.
 That contrast is the whole of §6.4 in one screen.
@@ -2638,7 +2639,7 @@ mode to avoid.
   ◑ speaking ⏹ esc to interrupt       TTS playing, barge-in available
   ⟳ compacting context 24k → 9k       summarising, explains a pause
   ⚠ github mcp reconnecting (2/3)     degraded, not fatal
-  ⛔ denied: fs.write /etc/hosts       policy blocked — shown in full, never hidden
+  ⛔ denied: fs_write /etc/hosts       policy blocked — shown in full, never hidden
   ↺ undone: 3 files restored          after /undo, says exactly what changed back
 ```
 
@@ -2777,7 +2778,7 @@ handful of rules are followed from M0 rather than retrofitted in M4.
   feature may exist on one OS only without a documented degradation on the others.
 - **No path literals.** `filepath.Join`, never `"a/b"`; `config.BuildCurrentPathSet()`, never `~`.
   A grep for `"/"` in a path context is part of the review checklist.
-- **Line endings:** `.gitattributes` normalises to LF in the repo; `fs.write`
+- **Line endings:** `.gitattributes` normalises to LF in the repo; `fs_write`
   preserves the file's existing convention and defaults to the OS convention for new
   files. Golden-file tests normalise before comparing, or they will fail only on
   Windows and only for one developer.
@@ -3057,7 +3058,7 @@ semantics across interleaved tool calls) and it is now on the M2 critical path. 
 slips, the fallback is _more prompting_, not less safety — and the scorecard's
 `prompts_per_task` will make that visible immediately.
 
-**C6b — the honest counter-argument, recorded.** Reversibility is not binary. `fs.edit`
+**C6b — the honest counter-argument, recorded.** Reversibility is not binary. `fs_edit`
 in a dirty git tree is less reversible than in a clean one; `exec go build` writes
 caches we do not journal; an `fetch` that POSTs cannot be undone at all. The rule
 therefore uses a **conservative classifier**: reversible means _we hold a snapshot we
@@ -3146,7 +3147,7 @@ first as skipped Windows CI jobs. Treat a red Windows job exactly like a red Lin
 | OQ-05     | Cold-context retrieval: grep or embeddings                                                                       |       | M2                                                                    |
 | OQ-06     | Cross-session memory: built-in or skill                                                                          |       | M3                                                                    |
 | OQ-07     | Surface tool pruning in the UI                                                                                   |       | M3                                                                    |
-| ~~OQ-08~~ | ~~Ship `fs.patch` alongside `fs.edit`~~                                                                          | —     | **CLOSED → D-08: no; 8 core tools, no `glob`**                        |
+| ~~OQ-08~~ | ~~Ship `fs_patch` alongside `fs_edit`~~                                                                          | —     | **CLOSED → D-08: no; 8 core tools, no `glob`**                        |
 | OQ-09     | Support MCP sampling requests                                                                                    |       | M3                                                                    |
 | OQ-10     | MCP roots and resource subscriptions                                                                             |       | M3                                                                    |
 | OQ-11     | Skill capability grants                                                                                          |       | M3                                                                    |
@@ -3199,7 +3200,7 @@ first as skipped Windows CI jobs. Treat a red Windows job exactly like a red Lin
 | R-23 | **A swapped `travis-broker` binary defeats every other control.** A malicious MCP server runs as the user and can overwrite it on disk; the next launch hands it everything, with the UI still showing a normal security profile | High | resolve the broker via `os.Executable()`, never `PATH`; verify an embedded hash before exec; red-team case for a swapped binary (D-12) | 4.4, 5.12 |
 | R-24 | **Untrusted content is laundered into trusted context.** §5.12.4's escalation is step-scoped, but a summariser turns an injected web page into travis's own prose, and the marker is gone. Same path via `memory` | High | untrusted messages are **dropped, not summarised**; `history.search` must not return them unmarked; `memory` keeps them in a separate delimited section (D-26) | 5.4.2, 5.12.4 |
 | R-25 | **`/undo` under-restores after a crash.** If the snapshot is not durable before the write, a crash between the two leaves an unrestorable file — and D-09's whole autonomy argument rests on undo working | High | snapshot → `fsync` the blob *and* its parent directory → journal entry → *only then* the write; crash-injection test (`kill -9` between the two) | 5.15, 6.4 |
-| R-26 | **The model grants itself auto-approval.** `.travis/decisions.toml` holds learned "always allow" rules and sits inside the workspace, so `fs.write` reaches it. Rules cannot widen capabilities, but they can flip `ask`→`auto`, removing the human gate | High | `.travis/**` and `**/.git/hooks/**` on write-deny; rule creation is a dedicated broker call fired only by a real keypress, never a file write (D-30) | 6.4, 5.12 |
+| R-26 | **The model grants itself auto-approval.** `.travis/decisions.toml` holds learned "always allow" rules and sits inside the workspace, so `fs_write` reaches it. Rules cannot widen capabilities, but they can flip `ask`→`auto`, removing the human gate | High | `.travis/**` and `**/.git/hooks/**` on write-deny; rule creation is a dedicated broker call fired only by a real keypress, never a file write (D-30) | 6.4, 5.12 |
 | R-27 | **A cloned repo's workspace config steals the shared credential.** `ResolveProviderAPIKey()` sends one credential as a Bearer token to whatever `base_url` the active provider profile has (§5.2); before 1E hardened this, `.travis/config.toml` — read automatically, no user action beyond `cd` + `travis chat` — could set `provider.active`/`base_url` and redirect that credential to an attacker-controlled host | High | workspace config decodes into a restricted type with no `Provider` field at all, so it cannot set `[provider]`, regardless of file content; system/user config and explicit extra paths are unaffected, since reaching those needs prior access to the user's own machine. Interim only — superseded once the broker (Phase 2, 2B) binds credentials to their destination via `auth.ref` instead of trusting whichever layer set `base_url` | 5.2, 5.3.1 |
 
 ---

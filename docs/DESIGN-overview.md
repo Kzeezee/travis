@@ -54,8 +54,8 @@ rest.
 | **D-20** | **User-supplied hooks are rejected.** Internal lifecycle *hook points* are not — we need one at compaction. |
 | **D-26** | **Untrusted content is never summarised — it is dropped.** A summariser would launder it into trusted prose. |
 | **D-27** | **`exec` is irreversible** and always asks. Unrelaxable, because the journal cannot see what a subprocess writes. |
-| **D-30** | **Decision rules are written by the broker**, never by `fs.write` — otherwise the model can grant itself auto-approval. |
-| **D-31** | Tool names are **namespaced**: `fs.read`, not `read`. They are model-facing *and* config keys. |
+| **D-30** | **Decision rules are written by the broker**, never by `fs_write` — otherwise the model can grant itself auto-approval. |
+| **D-31** | Tool names are **namespaced** with underscores: `fs_read`, not `read`; MCP tools are `mcp__<server>__<tool>`. They are model-facing *and* config keys, and match `^[a-zA-Z0-9_-]{1,64}$` because providers reject dots. |
 
 ---
 
@@ -95,7 +95,7 @@ Built-in tools, MCP tools, skills, and subagents are **the same thing** to the a
 
 ```go
 type Tool interface {
-    Name() string                  // "fs.read", "mcp.github.create_issue"
+    Name() string                  // "fs_read", "mcp__github__create_issue"
     Schema() json.RawMessage       // JSON Schema draft-2020-12
     Describe() Description
     Requires() []Capability        // what it needs; the broker verifies independently
@@ -140,10 +140,10 @@ travis/
 
 ## 5. The eight core tools
 
-`fs.read` · `fs.write` · `fs.edit` · `grep` · `exec` · `fetch` · `ask_user` · `memory`
+`fs_read` · `fs_write` · `fs_edit` · `grep` · `exec` · `fetch` · `ask_user` · `memory`
 
 Names are **namespaced** (D-31) — these strings are model-facing *and* config keys, so
-`read` and `fs.read` being used interchangeably was a real bug, not a style nit.
+`read` and `fs_read` being used interchangeably was a real bug, not a style nit.
 
 Every tool is a permanent tax: schema tokens on every step, a contract test, red-team
 cases, and one more thing a 7B model can pick wrongly. Adding one needs an ADR.
@@ -346,7 +346,7 @@ that never asked Job 1 in the first place.
 
 The broker governs the *conversation* between model and broker. But **MCP servers and
 `exec` children are processes with their own hands** — they never ask the broker, they call
-the OS directly. So: a *model* reading `~/.ssh/id_rsa` emits `fs.read`, gets checked, and
+the OS directly. So: a *model* reading `~/.ssh/id_rsa` emits `fs_read`, gets checked, and
 is denied. A *compromised MCP server* reading the same file just calls `open()` and
 succeeds. Only the sandbox stops the second. This is why §9.1 rates "malicious MCP server"
 as merely **Partial**.
