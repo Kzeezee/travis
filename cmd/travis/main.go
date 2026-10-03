@@ -94,9 +94,13 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		return err
 	}
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
-	if err := toolRegistry.Register(registry.SourceBuiltin,
-		builtin.BuildFileReadTool(paths.WorkspaceDir, defaultMaxReadBytes)); err != nil {
-		return err
+	for _, tool := range []core.Tool{
+		builtin.BuildFileReadTool(paths.WorkspaceDir, defaultMaxReadBytes),
+		builtin.BuildGrepTool(paths.WorkspaceDir),
+	} {
+		if err := toolRegistry.Register(registry.SourceBuiltin, tool); err != nil {
+			return err
+		}
 	}
 
 	bus := core.BuildEventBus(log.BuildTextLogger(os.Stderr, log.LevelWarn), subscriberEventCapacity)
