@@ -25,7 +25,7 @@ const shortRevLen = 12
 
 const (
 	subscriberEventCapacity = 1024
-	// defaultMaxReadBytes is fs.read's own cap. It isn't a key in DESIGN.md 5.5's
+	// defaultMaxReadBytes is fs_read's own cap. It isn't a key in DESIGN.md 5.5's
 	// [tools] example, so it stays a compiled constant rather than a Config field.
 	defaultMaxReadBytes = 256 << 10
 )

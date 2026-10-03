@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	fileReadToolName    = "fs.read"
+	fileReadToolName    = "fs_read"
 	fileReadDescription = "Read a UTF-8 text file inside the workspace. Paths are relative to the workspace root. " +
 		"Optionally restrict output to a 1-based inclusive line range. " +
 		"Each output line is prefixed with its line number and a tab; the prefix is not part of the file."

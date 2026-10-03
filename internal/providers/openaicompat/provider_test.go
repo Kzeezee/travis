@@ -128,7 +128,7 @@ func TestChatSerializesTools(t *testing.T) {
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model: "gpt-5",
 		Tools: []core.ToolSpec{{
-			Name:        "fs.read",
+			Name:        "fs_read",
 			Description: "Read a file",
 			InputSchema: json.RawMessage(`{
 				"type":"object",
@@ -151,8 +151,8 @@ func TestChatSerializesTools(t *testing.T) {
 		t.Fatalf("got tool type %v, want function", tool["type"])
 	}
 	function, _ := tool["function"].(map[string]any)
-	if function["name"] != "fs.read" || function["description"] != "Read a file" {
-		t.Fatalf("got function %v, want fs.read with description", function)
+	if function["name"] != "fs_read" || function["description"] != "Read a file" {
+		t.Fatalf("got function %v, want fs_read with description", function)
 	}
 	parameters, _ := function["parameters"].(map[string]any)
 	if parameters["type"] != "object" {
@@ -181,7 +181,7 @@ func TestChatSerializesToolCallAndToolResultMessages(t *testing.T) {
 					core.TextPart{Text: "reading file"},
 					core.ToolCallPart{ToolCall: core.ToolCall{
 						ID:        core.ID("call_123"),
-						Name:      "fs.read",
+						Name:      "fs_read",
 						Arguments: toolCallArguments,
 					}},
 				},
@@ -191,7 +191,7 @@ func TestChatSerializesToolCallAndToolResultMessages(t *testing.T) {
 				Parts: []core.Part{
 					core.ToolResultPart{ToolResult: core.ToolResult{
 						CallID:  core.ID("call_123"),
-						Name:    "fs.read",
+						Name:    "fs_read",
 						Content: "file contents",
 					}},
 				},
@@ -221,8 +221,8 @@ func TestChatSerializesToolCallAndToolResultMessages(t *testing.T) {
 		t.Fatalf("got tool call %v, want call_123 function", toolCall)
 	}
 	function, _ := toolCall["function"].(map[string]any)
-	if function["name"] != "fs.read" || function["arguments"] != string(toolCallArguments) {
-		t.Fatalf("got tool call function %v, want fs.read arguments", function)
+	if function["name"] != "fs_read" || function["arguments"] != string(toolCallArguments) {
+		t.Fatalf("got tool call function %v, want fs_read arguments", function)
 	}
 
 	toolMessage, _ := messages[1].(map[string]any)
@@ -243,7 +243,7 @@ func TestChatAlwaysSendsContentUnlessTheMessageIsOnlyToolCalls(t *testing.T) {
 		Model: "gpt-5",
 		Messages: []core.Message{
 			{Role: core.RoleAssistant, Parts: []core.Part{core.ToolCallPart{ToolCall: core.ToolCall{
-				ID: core.ID("call_1"), Name: "fs.read", Arguments: json.RawMessage(`{}`),
+				ID: core.ID("call_1"), Name: "fs_read", Arguments: json.RawMessage(`{}`),
 			}}}},
 			{Role: core.RoleTool, Parts: []core.Part{core.ToolResultPart{ToolResult: core.ToolResult{CallID: core.ID("call_1")}}}},
 			{Role: core.RoleAssistant},
@@ -322,7 +322,7 @@ func TestStreamDecodesTextFinishReasonAndUsage(t *testing.T) {
 func TestStreamAssemblesToolCallsOnTheFinishFrame(t *testing.T) {
 	server := startEndpoint(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeStream(w,
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"fs.read","arguments":""}}]},"finish_reason":null}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"fs_read","arguments":""}}]},"finish_reason":null}]}`,
 			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\""}},{"index":1,"id":"call_456","type":"function","function":{"name":"clock.now"}}]},"finish_reason":null}]}`,
 			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"README.md\"}"}}]},"finish_reason":null}]}`,
 			`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
@@ -348,7 +348,7 @@ func TestStreamAssemblesToolCallsOnTheFinishFrame(t *testing.T) {
 		t.Fatalf("got finish %q, want %q", final.Finish, core.StopToolCalls)
 	}
 	want := []core.ToolCall{
-		{ID: "call_123", Name: "fs.read", Arguments: json.RawMessage(`{"path":"README.md"}`)},
+		{ID: "call_123", Name: "fs_read", Arguments: json.RawMessage(`{"path":"README.md"}`)},
 		{ID: "call_456", Name: "clock.now", Arguments: json.RawMessage(`{}`)},
 	}
 	if len(final.ToolCalls) != len(want) {

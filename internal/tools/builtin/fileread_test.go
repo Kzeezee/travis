@@ -248,7 +248,7 @@ func TestDescribeReportsTheReadCapability(t *testing.T) {
 	tool := builtin.BuildFileReadTool(root, testMaxBytes)
 	spec := tool.Describe()
 
-	if spec.Name != "fs.read" {
+	if spec.Name != "fs_read" {
 		t.Fatalf("Describe().Name = %q", spec.Name)
 	}
 	if len(spec.Capabilities) != 1 || spec.Capabilities[0].Kind != core.CapabilityFSRead ||
