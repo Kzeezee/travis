@@ -318,7 +318,7 @@ func TestRunGivesEveryEventAnID(t *testing.T) {
 
 	seen := make(map[core.ID]bool)
 	for _, event := range sink.events {
-		id := reportEventID(t, event)
+		id := reportEventHeader(t, event).ID
 		if id == "" {
 			t.Fatalf("got %T with an empty ID", event)
 		}
@@ -326,6 +326,36 @@ func TestRunGivesEveryEventAnID(t *testing.T) {
 			t.Fatalf("got duplicate event ID %q", id)
 		}
 		seen[id] = true
+	}
+}
+
+func TestRunStampsEveryEventWithItsTurnID(t *testing.T) {
+	provider := &fakeProvider{streams: []*fakeStream{
+		buildToolCallStream(core.ToolCall{ID: "call-1", Name: "echo", Arguments: json.RawMessage(`{"text":"a"}`)}),
+		buildTextStream(core.Chunk{Text: "done"}),
+		buildTextStream(core.Chunk{Text: "again"}),
+	}}
+	sink := &recordingSink{}
+	assistantConversation := buildAssistantConversation(t, provider, &fakeToolLookup{tools: []core.Tool{&echoTool{}}}, sink)
+
+	for _, prompt := range []string{"first", "second"} {
+		if err := assistantConversation.RunAssistantTurn(context.Background(), prompt); err != nil {
+			t.Fatalf("RunAssistantTurn(%q) returned %v, want nil", prompt, err)
+		}
+	}
+
+	var turnIDs []core.ID
+	for _, event := range sink.events {
+		header := reportEventHeader(t, event)
+		if header.TurnID == "" {
+			t.Fatalf("got %T with no turn ID", event)
+		}
+		if len(turnIDs) == 0 || turnIDs[len(turnIDs)-1] != header.TurnID {
+			turnIDs = append(turnIDs, header.TurnID)
+		}
+	}
+	if len(turnIDs) != 2 || turnIDs[0] == turnIDs[1] {
+		t.Fatalf("got turn IDs %v in event order, want two distinct contiguous turns", turnIDs)
 	}
 }
 
@@ -519,22 +549,22 @@ func assertSingleErrorResult(t *testing.T, sink *recordingSink, content string) 
 	}
 }
 
-func reportEventID(t *testing.T, event core.Event) core.ID {
+func reportEventHeader(t *testing.T, event core.Event) core.EventHeader {
 	t.Helper()
 	switch fact := event.(type) {
 	case core.UserMessageSubmitted:
-		return fact.ID
+		return fact.EventHeader
 	case core.AssistantTextStreamed:
-		return fact.ID
+		return fact.EventHeader
 	case core.ToolCallStarted:
-		return fact.ID
+		return fact.EventHeader
 	case core.ToolCallFinished:
-		return fact.ID
+		return fact.EventHeader
 	case core.TurnCompleted:
-		return fact.ID
+		return fact.EventHeader
 	default:
 		t.Fatalf("got unexpected event %T", event)
-		return ""
+		return core.EventHeader{}
 	}
 }
 

@@ -55,6 +55,8 @@ type AssistantConversation struct {
 	maxSteps int
 
 	history []core.Message
+	// turnID is minted when a turn starts and stamped on every event it publishes.
+	turnID core.ID
 }
 
 // BuildAssistantConversation returns a conversation that sends every turn to the given
@@ -84,6 +86,7 @@ type stepReply struct {
 // error reports required work that failed while the caller waited; the assistant's own
 // text arrives through the event sink, not the return value.
 func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt string) error {
+	c.turnID = c.ids.GenerateID()
 	userMessage := core.Message{Role: core.RoleUser, Parts: []core.Part{core.TextPart{Text: prompt}}}
 	c.history = append(c.history, userMessage)
 	c.events.Publish(ctx, core.UserMessageSubmitted{EventHeader: c.buildEventHeader(), Message: userMessage})
@@ -252,5 +255,5 @@ func (c *AssistantConversation) completeTurn(ctx context.Context, reason core.St
 }
 
 func (c *AssistantConversation) buildEventHeader() core.EventHeader {
-	return core.EventHeader{ID: c.ids.GenerateID(), At: c.clock.ReportCurrentTime()}
+	return core.EventHeader{ID: c.ids.GenerateID(), TurnID: c.turnID, At: c.clock.ReportCurrentTime()}
 }
