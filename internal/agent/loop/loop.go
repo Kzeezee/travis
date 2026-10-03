@@ -118,7 +118,13 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 
 // runStep makes exactly one provider call; it exists so the stream closes every step.
 func (c *AssistantConversation) runStep(ctx context.Context, hint string) (stepReply, error) {
-	request := core.ProviderRequest{Model: c.model, Messages: c.history, Tools: c.buildToolSpecs(ctx, hint)}
+	tools := c.buildToolSpecs(ctx, hint)
+	request := core.ProviderRequest{
+		Model:    c.model,
+		System:   buildSystemPrompt(c.clock.ReportCurrentTime(), len(tools) > 0),
+		Messages: c.history,
+		Tools:    tools,
+	}
 	stream, err := c.provider.Chat(ctx, request)
 	if err != nil {
 		return stepReply{}, err

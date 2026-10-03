@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -534,5 +535,45 @@ func reportEventID(t *testing.T, event core.Event) core.ID {
 	default:
 		t.Fatalf("got unexpected event %T", event)
 		return ""
+	}
+}
+
+func TestRunSendsTheSystemPromptOnEveryStepWithoutStoringIt(t *testing.T) {
+	provider := &fakeProvider{streams: []*fakeStream{
+		buildToolCallStream(core.ToolCall{ID: "call-1", Name: "echo", Arguments: json.RawMessage(`{"text":"x"}`)}),
+		buildTextStream(core.Chunk{Text: "done"}),
+	}}
+
+	err := buildAssistantConversation(t, provider, &fakeToolLookup{tools: []core.Tool{&echoTool{}}}, &recordingSink{}).
+		RunAssistantTurn(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("RunAssistantTurn returned %v, want nil", err)
+	}
+
+	for i, request := range provider.requests {
+		if !strings.Contains(request.System, "Today is Thursday 2026-09-10.") {
+			t.Fatalf("request %d system prompt lacks the date: %q", i, request.System)
+		}
+		if !strings.Contains(request.System, "relative to the workspace root") {
+			t.Fatalf("request %d system prompt lacks tool guidance: %q", i, request.System)
+		}
+		for _, message := range request.Messages {
+			if message.Role == core.RoleSystem {
+				t.Fatalf("request %d carries a system message in history", i)
+			}
+		}
+	}
+}
+
+func TestRunLeavesToolGuidanceOutWhenNoToolsAreOffered(t *testing.T) {
+	provider := &fakeProvider{streams: []*fakeStream{buildTextStream(core.Chunk{Text: "hi"})}}
+
+	if err := buildAssistantConversation(t, provider, nil, &recordingSink{}).RunAssistantTurn(context.Background(), "hi"); err != nil {
+		t.Fatalf("RunAssistantTurn returned %v, want nil", err)
+	}
+
+	system := provider.requests[0].System
+	if !strings.HasPrefix(system, "You are Travis") || strings.Contains(system, "tool") {
+		t.Fatalf("got system prompt %q, want identity without tool guidance", system)
 	}
 }

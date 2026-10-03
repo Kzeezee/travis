@@ -88,6 +88,35 @@ func TestChatSendsAStreamingRequestWithTheCredential(t *testing.T) {
 	}
 }
 
+func TestChatLeadsWithTheSystemInstruction(t *testing.T) {
+	var capturedRequestBody map[string]any
+	server := startEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedRequestBody)
+		writeStream(w, "[DONE]")
+	})
+
+	provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
+		Model:    "gpt-5",
+		System:   "be brief",
+		Messages: []core.Message{{Role: core.RoleUser, Parts: []core.Part{core.TextPart{Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned %v, want nil", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	messages, _ := capturedRequestBody["messages"].([]any)
+	if len(messages) != 2 {
+		t.Fatalf("got messages %v, want system then user", capturedRequestBody["messages"])
+	}
+	first, _ := messages[0].(map[string]any)
+	second, _ := messages[1].(map[string]any)
+	if first["role"] != "system" || first["content"] != "be brief" || second["role"] != "user" {
+		t.Fatalf("got messages %v, want the system instruction first", messages)
+	}
+}
+
 func TestChatSerializesTools(t *testing.T) {
 	var capturedRequestBody map[string]any
 	server := startEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
