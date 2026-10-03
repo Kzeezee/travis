@@ -1,4 +1,4 @@
-package openai_test
+package openaicompat_test
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/Kzeezee/travis/internal/core"
-	"github.com/Kzeezee/travis/internal/providers/openai"
+	"github.com/Kzeezee/travis/internal/providers/openaicompat"
 )
 
 const testAPIKey = "sk-test-secret-value"
@@ -56,7 +56,7 @@ func TestChatSendsAStreamingRequestWithTheCredential(t *testing.T) {
 		writeStream(w, `{"choices":[{"delta":{"content":"ok"}}]}`, "[DONE]")
 	})
 
-	provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model:    "gpt-5",
 		Messages: []core.Message{{Role: core.RoleUser, Parts: []core.Part{core.TextPart{Text: "hi"}}}},
@@ -95,7 +95,7 @@ func TestChatLeadsWithTheSystemInstruction(t *testing.T) {
 		writeStream(w, "[DONE]")
 	})
 
-	provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model:    "gpt-5",
 		System:   "be brief",
@@ -124,7 +124,7 @@ func TestChatSerializesTools(t *testing.T) {
 		writeStream(w, "[DONE]")
 	})
 
-	provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model: "gpt-5",
 		Tools: []core.ToolSpec{{
@@ -171,7 +171,7 @@ func TestChatSerializesToolCallAndToolResultMessages(t *testing.T) {
 	})
 
 	toolCallArguments := json.RawMessage(`{"path":"README.md"}`)
-	provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model: "gpt-5",
 		Messages: []core.Message{
@@ -238,7 +238,7 @@ func TestChatAlwaysSendsContentUnlessTheMessageIsOnlyToolCalls(t *testing.T) {
 		writeStream(w, "[DONE]")
 	})
 
-	provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model: "gpt-5",
 		Messages: []core.Message{
@@ -277,7 +277,7 @@ func TestChatOmitsTheCredentialWhenNoKeyIsConfigured(t *testing.T) {
 		writeStream(w, "[DONE]")
 	})
 
-	provider := openai.BuildProvider(server.URL+"/v1", "", server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", "", server.Client())
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{Model: "qwen3:14b"})
 	if err != nil {
 		t.Fatalf("Chat returned %v, want nil", err)
@@ -418,7 +418,7 @@ func TestChatTranslatesStatusCodes(t *testing.T) {
 				_, _ = io.WriteString(w, errorBody)
 			})
 
-			provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+			provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
 			_, err := provider.Chat(context.Background(), core.ProviderRequest{Model: "gpt-5"})
 
 			if !errors.Is(err, testCase.want) {
@@ -437,7 +437,7 @@ func TestChatTranslatesStatusCodes(t *testing.T) {
 
 func openChat(t *testing.T, server *httptest.Server, apiKey string) core.Stream {
 	t.Helper()
-	provider := openai.BuildProvider(server.URL+"/v1", apiKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", apiKey, server.Client())
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{Model: "gpt-5"})
 	if err != nil {
 		t.Fatalf("Chat returned %v, want nil", err)

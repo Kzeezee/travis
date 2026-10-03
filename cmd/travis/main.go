@@ -16,7 +16,7 @@ import (
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
 	"github.com/Kzeezee/travis/internal/id"
 	"github.com/Kzeezee/travis/internal/log"
-	"github.com/Kzeezee/travis/internal/providers/openai"
+	"github.com/Kzeezee/travis/internal/providers/openaicompat"
 	"github.com/Kzeezee/travis/internal/tools/builtin"
 	"github.com/Kzeezee/travis/internal/tools/registry"
 )
@@ -106,7 +106,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	bus := core.BuildEventBus(log.BuildTextLogger(os.Stderr, log.LevelWarn), subscriberEventCapacity)
 	defer bus.Close()
 
-	provider := openai.BuildProvider(profile.BaseURL, config.ResolveProviderAPIKey(), nil)
+	provider := openaicompat.BuildProvider(profile.BaseURL, config.ResolveProviderAPIKey(), nil)
 	clock := core.SystemClock{}
 	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: bus, Clock: clock, IDs: id.BuildULIDGenerator(clock)}
 	assistantConversation := loop.BuildAssistantConversation(deps, profile.Model, cfg.Brain.MaxSteps)

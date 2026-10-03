@@ -1,6 +1,6 @@
-// Package openai adapts an OpenAI-compatible chat-completions endpoint to core.Provider.
+// Package openaicompat adapts an OpenAI-compatible chat-completions endpoint to core.Provider.
 // Any endpoint speaking that dialect works, including local servers such as Ollama.
-package openai
+package openaicompat
 
 import (
 	"bytes"
@@ -14,7 +14,7 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 )
 
-const providerName = "openai"
+const providerName = "openai_compatible"
 
 // Provider calls one OpenAI-compatible endpoint. The credential is held here rather than
 // resolved per call because the broker that will own secrets does not exist yet; see the
