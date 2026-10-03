@@ -17,7 +17,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"regexp/syntax"
+	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/bmatcuk/doublestar/v4"
 
@@ -28,10 +31,11 @@ const (
 	grepToolName    = "grep"
 	grepDescription = "Search the workspace; this is also how to find and list files. " +
 		"mode=content (default): pattern is an RE2 regular expression matched against file contents, " +
-		"and matching lines come back as path:line:text; start it with (?i) to ignore case. " +
+		"and matching lines come back as path:line:text. " +
 		"mode=files: pattern matches file names, not contents, and matching paths come back one per line; " +
-		"a word without wildcards matches names containing it (confirm finds clinic-confirmation.md), " +
+		"words without wildcards match names containing them in order (clinic confirm finds clinic-confirmation.md), " +
 		"a glob such as **/*.md works too, and an empty pattern lists every file under path. " +
+		"Both modes ignore case unless pattern contains an uppercase letter. " +
 		"path narrows either mode to a folder or file relative to the workspace root. " +
 		"include is an extra glob that file paths must match, such as *.md. " +
 		"Globs are relative to path; one without a slash matches names at any depth. " +
@@ -75,7 +79,13 @@ type grepQuery struct {
 	// contentMatcher is set only in content mode.
 	contentMatcher *regexp.Regexp
 	// pathGlobs must all match a file's path relative to the search path; none means every file.
-	pathGlobs []string
+	pathGlobs []pathGlob
+}
+
+type pathGlob struct {
+	glob string
+	// isCaseInsensitive is set by smart case: the glob was written without uppercase letters.
+	isCaseInsensitive bool
 }
 
 type grepMatch struct {
@@ -160,16 +170,17 @@ func decodeGrepArgs(arguments json.RawMessage) (grepArgs, grepQuery, error) {
 	case args.Mode == grepModeContent && args.Pattern == "":
 		return grepArgs{}, grepQuery{}, errors.New("pattern is required in content mode; use mode=files to list files")
 	case args.Mode == grepModeContent:
-		matcher, err := regexp.Compile(args.Pattern)
+		matcher, err := compileSmartCaseRegexp(args.Pattern)
 		if err != nil {
 			return grepArgs{}, grepQuery{}, fmt.Errorf("pattern is not a valid RE2 regular expression: %w", err)
 		}
 		query.contentMatcher = matcher
 	case strings.TrimSpace(args.Pattern) != "":
-		// A bare word is a substring of the name, as in fd, because that is how models ask for files.
+		// Bare words are substrings of the name in order, as in fd, because that is how models ask
+		// for files: "clinic confirmation" has to find clinic-confirmation.md.
 		namePattern := strings.TrimSpace(args.Pattern)
 		if !strings.ContainsAny(namePattern, "*?[{") {
-			namePattern = "*" + namePattern + "*"
+			namePattern = "*" + strings.Join(strings.Fields(namePattern), "*") + "*"
 		}
 		glob, err := normalizePathGlob(namePattern)
 		if err != nil {
@@ -188,16 +199,63 @@ func decodeGrepArgs(arguments json.RawMessage) (grepArgs, grepQuery, error) {
 	return args, query, nil
 }
 
-// normalizePathGlob widens a slash-free glob to any depth, as in ripgrep and .gitignore.
-func normalizePathGlob(raw string) (string, error) {
+// normalizePathGlob widens a slash-free glob to any depth, as in ripgrep and .gitignore,
+// and applies smart case.
+func normalizePathGlob(raw string) (pathGlob, error) {
 	glob := strings.TrimPrefix(strings.TrimSpace(raw), "./")
 	if !strings.Contains(glob, "/") {
 		glob = "**/" + glob
 	}
 	if !doublestar.ValidatePattern(glob) {
-		return "", fmt.Errorf("%q is not a valid glob", raw)
+		return pathGlob{}, fmt.Errorf("%q is not a valid glob", raw)
 	}
-	return glob, nil
+	return pathGlob{glob: glob, isCaseInsensitive: strings.ToLower(glob) == glob}, nil
+}
+
+// compileSmartCaseRegexp ignores case unless a literal in the pattern is uppercase, as ripgrep's
+// --smart-case does; escapes such as \S or \W name classes, not letters, so they do not count.
+func compileSmartCaseRegexp(pattern string) (*regexp.Regexp, error) {
+	parsed, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return nil, err
+	}
+	if !hasUppercaseLiteral(parsed) {
+		pattern = "(?i)" + pattern
+	}
+	return regexp.Compile(pattern)
+}
+
+func hasUppercaseLiteral(node *syntax.Regexp) bool {
+	if node.Op == syntax.OpLiteral && slices.ContainsFunc(node.Rune, unicode.IsUpper) {
+		return true
+	}
+	// [A-Z] or \p{Lu} asks for case; \S, \W and \D expand to ranges spanning both cases, so they don't.
+	if node.Op == syntax.OpCharClass {
+		for i := 0; i+1 < len(node.Rune); i += 2 {
+			if isUppercaseOnlyRange(node.Rune[i], node.Rune[i+1]) {
+				return true
+			}
+		}
+	}
+	for _, sub := range node.Sub {
+		if hasUppercaseLiteral(sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// isUppercaseOnlyRange reports whether lo..hi holds uppercase letters and no lowercase ones;
+// wide ranges stop at their first lowercase letter, which comes early in practice.
+func isUppercaseOnlyRange(lo, hi rune) bool {
+	hasUpper := false
+	for r := lo; r <= hi; r++ {
+		if unicode.IsLower(r) {
+			return false
+		}
+		hasUpper = hasUpper || unicode.IsUpper(r)
+	}
+	return hasUpper
 }
 
 // searchTree returns a Go error only when the context ends; a file it cannot read is skipped.
@@ -251,7 +309,7 @@ func (t *GrepTool) isSearchableFile(path string, entry fs.DirEntry) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-func matchesPathGlobs(globs []string, start, path string) bool {
+func matchesPathGlobs(globs []pathGlob, start, path string) bool {
 	if len(globs) == 0 {
 		return true
 	}
@@ -265,7 +323,11 @@ func matchesPathGlobs(globs []string, start, path string) bool {
 	}
 	rel = filepath.ToSlash(rel)
 	for _, glob := range globs {
-		if isMatch, err := doublestar.Match(glob, rel); err != nil || !isMatch {
+		name := rel
+		if glob.isCaseInsensitive {
+			name = strings.ToLower(rel)
+		}
+		if isMatch, err := doublestar.Match(glob.glob, name); err != nil || !isMatch {
 			return false
 		}
 	}

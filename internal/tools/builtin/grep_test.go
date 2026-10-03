@@ -263,3 +263,47 @@ func TestGrepDescribeReportsTheReadCapability(t *testing.T) {
 		t.Fatalf("Capabilities = %+v", spec.Capabilities)
 	}
 }
+
+func TestGrepContentSearchUsesSmartCase(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "confirmation.txt", "Appointment: Tuesday\nappointment reminder\nAPPOINTMENT\n")
+	tool := builtin.BuildGrepTool(root)
+
+	for _, tc := range []struct {
+		name, pattern, want string
+	}{
+		{"lowercase ignores case", "appointment",
+			"confirmation.txt:1:Appointment: Tuesday\nconfirmation.txt:2:appointment reminder\nconfirmation.txt:3:APPOINTMENT"},
+		{"an uppercase letter makes it exact", "Appointment", "confirmation.txt:1:Appointment: Tuesday"},
+		{"uppercase escapes are not letters", `\Sppointment\W`, "confirmation.txt:1:Appointment: Tuesday\nconfirmation.txt:2:appointment reminder"},
+		{"an uppercase class asks for case", "[A-Z]ppointment", "confirmation.txt:1:Appointment: Tuesday"},
+		{"(?-i) forces exact case", "(?-i)appointment", "confirmation.txt:2:appointment reminder"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arguments, err := json.Marshal(map[string]string{"pattern": tc.pattern})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertContent(t, invokeGrep(t, tool, string(arguments)), tc.want)
+		})
+	}
+}
+
+func TestGrepFilesSearchMatchesSpacedWordsWithSmartCase(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "admin/Clinic-Confirmation.md", "x")
+	writeFixture(t, root, "admin/confirmation-clinic.md", "x")
+	tool := builtin.BuildGrepTool(root)
+
+	for _, tc := range []struct {
+		name, arguments, want string
+	}{
+		{"spaced words match in order, ignoring case", `{"mode":"files","pattern":"clinic confirmation"}`, "admin/Clinic-Confirmation.md"},
+		{"an uppercase letter makes it exact", `{"mode":"files","pattern":"clinic Confirmation"}`, "[no files found]"},
+		{"a lowercase glob ignores case", `{"mode":"files","pattern":"**/clinic-*.md"}`, "admin/Clinic-Confirmation.md"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertContent(t, invokeGrep(t, tool, tc.arguments), tc.want)
+		})
+	}
+}
