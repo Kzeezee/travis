@@ -13,6 +13,18 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 )
 
+func TestRunChatRefusesNonTerminalIO(t *testing.T) {
+	runTurn := func(context.Context, string) error {
+		t.Fatal("a refused chat must not run a turn")
+		return nil
+	}
+	opts := Options{Input: strings.NewReader("hello\r"), Output: &strings.Builder{}}
+
+	if err := RunChat(context.Background(), nil, runTurn, opts); !errors.Is(err, ErrNotInteractive) {
+		t.Fatalf("got error %v, want %v", err, ErrNotInteractive)
+	}
+}
+
 func TestCollectEventBatchGathersEventsWithinTheWindow(t *testing.T) {
 	events := make(chan core.Event, 3)
 	events <- core.AssistantTextStreamed{Text: "a"}
