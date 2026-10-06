@@ -594,16 +594,3 @@ func TestRunSendsTheSystemPromptOnEveryStepWithoutStoringIt(t *testing.T) {
 		}
 	}
 }
-
-func TestRunLeavesToolGuidanceOutWhenNoToolsAreOffered(t *testing.T) {
-	provider := &fakeProvider{streams: []*fakeStream{buildTextStream(core.Chunk{Text: "hi"})}}
-
-	if err := buildAssistantConversation(t, provider, nil, &recordingSink{}).RunAssistantTurn(context.Background(), "hi"); err != nil {
-		t.Fatalf("RunAssistantTurn returned %v, want nil", err)
-	}
-
-	system := provider.requests[0].System
-	if !strings.HasPrefix(system, "You are Travis") || strings.Contains(system, "tool") {
-		t.Fatalf("got system prompt %q, want identity without tool guidance", system)
-	}
-}

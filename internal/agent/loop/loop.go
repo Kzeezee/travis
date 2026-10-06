@@ -124,7 +124,7 @@ func (c *AssistantConversation) runStep(ctx context.Context, hint string) (stepR
 	tools := c.buildToolSpecs(ctx, hint)
 	request := core.ProviderRequest{
 		Model:    c.model,
-		System:   buildSystemPrompt(c.clock.ReportCurrentTime(), len(tools) > 0),
+		System:   buildSystemPrompt(c.clock.ReportCurrentTime()),
 		Messages: c.history,
 		Tools:    tools,
 	}

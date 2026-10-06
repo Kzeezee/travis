@@ -22,14 +22,8 @@ const (
 	stylePrompt = "Answer concisely in plain text; the terminal does not render Markdown."
 )
 
-// buildSystemPrompt gives the date so relative dates ("last week's notes") resolve, and
-// leaves out tool guidance on steps that offer no tools so the model is never told to use
-// something it cannot call.
-func buildSystemPrompt(now time.Time, hasTools bool) string {
-	sections := []string{identityPrompt + " Today is " + now.Format("Monday 2006-01-02") + "."}
-	if hasTools {
-		sections = append(sections, toolUsePrompt)
-	}
-	sections = append(sections, stylePrompt)
-	return strings.Join(sections, "\n\n")
+// buildSystemPrompt gives the date so relative dates ("last week's notes") resolve.
+func buildSystemPrompt(now time.Time) string {
+	identity := identityPrompt + " Today is " + now.Format("Monday 2006-01-02") + "."
+	return strings.Join([]string{identity, toolUsePrompt, stylePrompt}, "\n\n")
 }
