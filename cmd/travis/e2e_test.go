@@ -4,10 +4,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -298,9 +296,7 @@ func TestNotesTaskReplaysARecordedModel(t *testing.T) {
 		}
 		profile := cfg.Provider.Profiles[cfg.Provider.Active]
 		baseURL, model = profile.BaseURL, profile.Model
-	} else if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
-		// Remove this skip once notes-task.jsonl is committed, so a lost cassette fails loudly.
-		t.Skip("no recording yet: go test ./cmd/travis -run Recorded -record-cassettes against a real model")
+		t.Logf("recording against %s, model %s (provider profile %q)", baseURL, model, cfg.Provider.Active)
 	}
 	provider := openaicompat.BuildProvider(baseURL, config.ResolveProviderAPIKey(), cassette.BuildClient(t, path), core.SystemClock{})
 
