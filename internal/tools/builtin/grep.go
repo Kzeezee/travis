@@ -55,13 +55,6 @@ const (
 	maxGrepLineBytes = 300
 )
 
-var expectedGrepArgs = map[string]string{
-	"pattern": "string (content mode: RE2 regex, required; files mode: name word or glob)",
-	"path":    `string (folder or file, default ".")`,
-	"include": "string (glob, e.g. **/*.md)",
-	"mode":    `"content" (default) or "files"`,
-}
-
 type GrepTool struct {
 	workspace workspaceRoot
 }
@@ -124,13 +117,10 @@ func (t *GrepTool) Invoke(ctx context.Context, arguments json.RawMessage) (core.
 
 	args, query, err := decodeGrepArgs(arguments)
 	if err != nil {
-		return buildErrorOutput(errorInvalidArguments, map[string]any{
-			"detail":   err.Error(),
-			"expected": expectedGrepArgs,
-		}), nil
+		return buildErrorOutput(errorInvalidArguments, map[string]any{"detail": err.Error()}), nil
 	}
 
-	start, rejection, isAllowed := t.workspace.resolvePath(args.Path, expectedGrepArgs)
+	start, rejection, isAllowed := t.workspace.resolvePath(args.Path)
 	if !isAllowed {
 		return rejection, nil
 	}

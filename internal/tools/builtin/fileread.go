@@ -36,12 +36,6 @@ const (
 	readBufferBytes = 64 << 10
 )
 
-var expectedFileReadArgs = map[string]string{
-	"path":       "string (required)",
-	"start_line": "int",
-	"end_line":   "int",
-}
-
 type FileReadTool struct {
 	workspace workspaceRoot
 	maxBytes  int64
@@ -86,13 +80,10 @@ func (t *FileReadTool) Invoke(ctx context.Context, arguments json.RawMessage) (c
 
 	args, err := decodeFileReadArgs(arguments)
 	if err != nil {
-		return buildErrorOutput(errorInvalidArguments, map[string]any{
-			"detail":   err.Error(),
-			"expected": expectedFileReadArgs,
-		}), nil
+		return buildErrorOutput(errorInvalidArguments, map[string]any{"detail": err.Error()}), nil
 	}
 
-	target, rejection, isAllowed := t.workspace.resolvePath(args.Path, expectedFileReadArgs)
+	target, rejection, isAllowed := t.workspace.resolvePath(args.Path)
 	if !isAllowed {
 		return rejection, nil
 	}

@@ -28,9 +28,8 @@ func buildWorkspaceRoot(dir string) workspaceRoot {
 }
 
 // resolvePath turns the path the model asked for into a real path on disk, allowed only if
-// it stays inside the workspace once symlinks are followed. expectedArgs is echoed back when
-// the path itself is malformed, so the model sees the calling tool's argument shape.
-func (w workspaceRoot) resolvePath(requested string, expectedArgs map[string]string) (string, core.ToolOutput, bool) {
+// it stays inside the workspace once symlinks are followed.
+func (w workspaceRoot) resolvePath(requested string) (string, core.ToolOutput, bool) {
 	outside := buildErrorOutput(errorPathOutsideWorkspace, map[string]any{
 		"path":      requested,
 		"workspace": w.root,
@@ -38,10 +37,7 @@ func (w workspaceRoot) resolvePath(requested string, expectedArgs map[string]str
 
 	resolved, err := w.paths.Resolve(requested)
 	if err != nil {
-		return "", buildErrorOutput(errorInvalidArguments, map[string]any{
-			"detail":   err.Error(),
-			"expected": expectedArgs,
-		}), false
+		return "", buildErrorOutput(errorInvalidArguments, map[string]any{"detail": err.Error()}), false
 	}
 	if !filepath.IsAbs(resolved) || !isInsideRoot(w.root, resolved) {
 		return "", outside, false
