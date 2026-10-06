@@ -13,6 +13,18 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 )
 
+func TestRunChatRefusesNonTerminalIO(t *testing.T) {
+	runTurn := func(context.Context, string) error {
+		t.Fatal("a refused chat must not run a turn")
+		return nil
+	}
+	opts := Options{Input: strings.NewReader("hello\r"), Output: &strings.Builder{}}
+
+	if err := RunChat(context.Background(), nil, runTurn, opts); !errors.Is(err, ErrNotInteractive) {
+		t.Fatalf("got error %v, want %v", err, ErrNotInteractive)
+	}
+}
+
 func TestCollectEventBatchGathersEventsWithinTheWindow(t *testing.T) {
 	events := make(chan core.Event, 3)
 	events <- core.AssistantTextStreamed{Text: "a"}
@@ -85,6 +97,15 @@ func TestSubmittedPromptRunsATurnAndReportsItsOutcome(t *testing.T) {
 				t.Fatalf("got input %q, want it cleared after submit", m.input.Value())
 			}
 		})
+	}
+}
+
+func TestStartupWarningsShowInTheFirstFrame(t *testing.T) {
+	m := buildChatModel(context.Background(), make(chan core.Event), nil,
+		Options{ModelName: "test-model", StartupWarnings: []string{"config: unknown key brain.max_stepz"}})
+
+	if view := renderPlainView(m); !strings.Contains(view, "⚠ config: unknown key brain.max_stepz") {
+		t.Fatalf("got view\n%s\nwant the startup warning", view)
 	}
 }
 
@@ -206,7 +227,7 @@ func typedKeys(text string) []tea.Msg {
 }
 
 func buildTestModel(runTurn func(context.Context, string) error) chatModel {
-	return buildChatModel(context.Background(), make(chan core.Event), runTurn, "test-model")
+	return buildChatModel(context.Background(), make(chan core.Event), runTurn, Options{ModelName: "test-model"})
 }
 
 func updateModel(m chatModel, msg tea.Msg) (chatModel, tea.Cmd) {

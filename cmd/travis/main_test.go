@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Kzeezee/travis/internal/config"
+	"github.com/Kzeezee/travis/internal/frontends/terminal"
 )
 
 func TestVersionStringReportsPlatform(t *testing.T) {
@@ -53,14 +55,15 @@ func TestRun(t *testing.T) {
 }
 
 // The chat command wires a real provider, so this only proves the composition holds
-// together: input ends before a prompt is submitted, so nothing reaches the network.
+// together: the frontend refuses non-terminal I/O, so nothing reaches the network.
 func TestRunChatWiresTheSliceWithoutCallingTheProvider(t *testing.T) {
 	travisHome := t.TempDir()
 	t.Setenv("TRAVIS_HOME", travisHome)
 	var out bytes.Buffer
 
-	if err := run([]string{"chat", "--model", "test-model"}, strings.NewReader(""), &out); err != nil {
-		t.Fatalf("run(chat) error = %v, want nil", err)
+	err := run([]string{"chat", "--model", "test-model"}, strings.NewReader(""), &out)
+	if !errors.Is(err, terminal.ErrNotInteractive) {
+		t.Fatalf("run(chat) error = %v, want %v", err, terminal.ErrNotInteractive)
 	}
 
 	traces, err := filepath.Glob(filepath.Join(travisHome, "state", "traces", "*.jsonl"))

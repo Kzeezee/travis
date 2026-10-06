@@ -30,11 +30,15 @@ const (
 	chromeHeight = 4
 )
 
+// ErrNotInteractive is returned when stdin or stdout is not a terminal; the TUI cannot run there.
+var ErrNotInteractive = errors.New("chat needs an interactive terminal (non-interactive mode is not built yet)")
+
 // Options carries the runtime choices for one chat session.
 type Options struct {
-	ModelName string
-	Input     io.Reader
-	Output    io.Writer
+	ModelName       string
+	StartupWarnings []string
+	Input           io.Reader
+	Output          io.Writer
 }
 
 // RunChat runs the interactive chat until the user quits or input ends. runTurn is the
@@ -45,6 +49,9 @@ func RunChat(
 	runTurn func(ctx context.Context, prompt string) error,
 	opts Options,
 ) error {
+	if !isTerminal(opts.Input) || !isTerminal(opts.Output) {
+		return ErrNotInteractive
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel() // also stops a turn still running when the program exits
 
@@ -52,7 +59,7 @@ func RunChat(
 	// Bubble Tea recovers panics in View, Update, and Cmds, restores the terminal, and prints the
 	// trace (DESIGN.md §5.9); passing tea.WithoutCatchPanics would give that up.
 	program := tea.NewProgram(
-		buildChatModel(ctx, events, runTurn, opts.ModelName),
+		buildChatModel(ctx, events, runTurn, opts),
 		tea.WithInput(input),
 		tea.WithOutput(opts.Output),
 	)
@@ -74,11 +81,16 @@ func RunChat(
 // watchInputEnd reports when non-terminal input runs out, because Bubble Tea keeps running
 // after EOF. A terminal is returned untouched so Bubble Tea can still switch it to raw mode.
 func watchInputEnd(input io.Reader) (io.Reader, <-chan struct{}) {
-	if file, isFile := input.(term.File); isFile && term.IsTerminal(file.Fd()) {
+	if isTerminal(input) {
 		return input, nil
 	}
 	reader := &endReportingReader{reader: input, ended: make(chan struct{})}
 	return reader, reader.ended
+}
+
+func isTerminal(stream any) bool {
+	file, isFile := stream.(term.File)
+	return isFile && term.IsTerminal(file.Fd())
 }
 
 type endReportingReader struct {
@@ -163,14 +175,15 @@ func buildChatModel(
 	ctx context.Context,
 	events <-chan core.Event,
 	runTurn func(context.Context, string) error,
-	modelName string,
+	opts Options,
 ) chatModel {
 	input := textinput.New()
 	input.Prompt = " › "
 	input.SetVirtualCursor(false)
 	input.Focus()
 
-	m := chatModel{ctx: ctx, events: events, runTurn: runTurn, modelName: modelName, viewport: viewport.New(), input: input}
+	m := chatModel{ctx: ctx, events: events, runTurn: runTurn, modelName: opts.ModelName, viewport: viewport.New(), input: input}
+	m.transcript.warnings = opts.StartupWarnings
 	m.resize(defaultWidth, defaultHeight)
 	return m
 }
