@@ -6,15 +6,28 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Kzeezee/travis/internal/core"
 )
 
 const providerName = "openai_compatible"
+
+const (
+	maxRequestAttempts = 3
+	baseRetryDelay     = 250 * time.Millisecond
+	// maxRetryDelay caps a server-requested wait: asking for longer fails the turn now rather
+	// than stalling an interactive session in silence.
+	maxRetryDelay = 10 * time.Second
+)
 
 // Provider calls one OpenAI-compatible endpoint. The credential is held here rather than
 // resolved per call because the broker that will own secrets does not exist yet; see the
@@ -23,16 +36,17 @@ type Provider struct {
 	baseURL string
 	apiKey  string
 	client  *http.Client
+	clock   core.Clock
 }
 
 // BuildProvider returns a provider for the given endpoint. An empty apiKey sends no
 // Authorization header, which is what local endpoints expect. A nil client uses
-// http.DefaultClient.
-func BuildProvider(baseURL, apiKey string, client *http.Client) *Provider {
+// http.DefaultClient. The clock times the waits between retries.
+func BuildProvider(baseURL, apiKey string, client *http.Client, clock core.Clock) *Provider {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &Provider{baseURL: strings.TrimSuffix(baseURL, "/"), apiKey: apiKey, client: client}
+	return &Provider{baseURL: strings.TrimSuffix(baseURL, "/"), apiKey: apiKey, client: client, clock: clock}
 }
 
 type chatRequest struct {
@@ -78,8 +92,10 @@ type streamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
 }
 
-// Chat opens a streaming completion. The returned stream owns the response body and
-// closes it; callers must always close the stream.
+// Chat opens a streaming completion, retrying transient and rate-limit failures that happen
+// before the stream starts. Nothing is retried once a stream is returned, so no reply is ever
+// emitted twice. The returned stream owns the response body and closes it; callers must
+// always close the stream.
 func (p *Provider) Chat(ctx context.Context, request core.ProviderRequest) (core.Stream, error) {
 	body, err := json.Marshal(chatRequest{
 		Model:              request.Model,
@@ -99,9 +115,29 @@ func (p *Provider) Chat(ctx context.Context, request core.ProviderRequest) (core
 		return nil, &core.ProviderError{Provider: providerName, Kind: core.ErrInvalid, Cause: err}
 	}
 
+	for attempt := 1; ; attempt++ {
+		responseBody, retryAfter, err := p.openStream(ctx, endpoint, body)
+		if err == nil {
+			return buildStream(responseBody), nil
+		}
+		delay, shouldRetry := selectRetryDelay(err, retryAfter, attempt)
+		if !shouldRetry || ctx.Err() != nil {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-p.clock.After(delay):
+		}
+	}
+}
+
+// openStream makes one attempt and returns the body of a 200 response. A failed attempt
+// also reports the endpoint's Retry-After header, which only the retry decision reads.
+func (p *Provider) openStream(ctx context.Context, endpoint string, body []byte) (io.ReadCloser, string, error) {
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, &core.ProviderError{Provider: providerName, Kind: core.ErrInvalid, Cause: err}
+		return nil, "", &core.ProviderError{Provider: providerName, Kind: core.ErrInvalid, Cause: err}
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Accept", "text/event-stream")
@@ -109,18 +145,31 @@ func (p *Provider) Chat(ctx context.Context, request core.ProviderRequest) (core
 		httpRequest.Header.Set("Authorization", "Bearer "+p.apiKey)
 	}
 
-	// On success the body is handed to the stream, which closes it; every failure path
+	// On success the body goes to the caller's stream, which closes it; every failure path
 	// below closes it here.
 	response, err := p.client.Do(httpRequest)
 	if err != nil {
-		return nil, &core.ProviderError{Provider: providerName, Kind: core.ErrTransient, Cause: err}
+		return nil, "", &core.ProviderError{Provider: providerName, Kind: core.ErrTransient, Cause: err}
 	}
 	if response.StatusCode != http.StatusOK {
 		defer func() { _ = response.Body.Close() }()
-		return nil, translateStatusError(response.StatusCode, response.Body)
+		return nil, response.Header.Get("Retry-After"), translateStatusError(response.StatusCode, response.Body)
 	}
+	return response.Body, "", nil
+}
 
-	return buildStream(response.Body), nil
+// selectRetryDelay reports how long to wait before the next attempt, or false when the
+// failure is not worth retrying. Only transient and rate-limit failures retry (DESIGN.md 5.3).
+func selectRetryDelay(err error, retryAfter string, attempt int) (time.Duration, bool) {
+	isRetryable := errors.Is(err, core.ErrTransient) || errors.Is(err, core.ErrRateLimit)
+	if !isRetryable || attempt >= maxRequestAttempts {
+		return 0, false
+	}
+	// ponytail: Retry-After in seconds only; the HTTP-date form falls back to backoff.
+	if seconds, parseErr := strconv.Atoi(strings.TrimSpace(retryAfter)); parseErr == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second, seconds <= int(maxRetryDelay/time.Second)
+	}
+	return rand.N(baseRetryDelay << attempt), true //nolint:gosec // jitter spreads retries; it guards nothing
 }
 
 // buildChatMessages converts provider-neutral message content into OpenAI chat messages,
