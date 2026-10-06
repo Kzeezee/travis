@@ -13,3 +13,11 @@ func TestFixedClockReturnsConfiguredTime(t *testing.T) {
 		t.Fatalf("FixedClock.ReportCurrentTime() = %v, want %v", got, want)
 	}
 }
+
+func TestFixedClockAfterFiresImmediately(t *testing.T) {
+	select {
+	case <-FixedClock{}.After(time.Hour):
+	default:
+		t.Fatal("FixedClock.After(time.Hour) did not fire immediately")
+	}
+}
