@@ -145,13 +145,8 @@ func (t *GrepTool) Invoke(ctx context.Context, arguments json.RawMessage) (core.
 // decodeGrepArgs fills defaults into the returned args, so callers can describe the search as it ran.
 func decodeGrepArgs(arguments json.RawMessage) (grepArgs, grepQuery, error) {
 	var args grepArgs
-	decoder := json.NewDecoder(bytes.NewReader(arguments))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&args); err != nil {
+	if err := decodeStrictArgs(arguments, &args); err != nil {
 		return grepArgs{}, grepQuery{}, err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return grepArgs{}, grepQuery{}, errors.New("unexpected data after the arguments object")
 	}
 
 	if strings.TrimSpace(args.Path) == "" {
@@ -322,12 +317,8 @@ func searchFileContents(ctx context.Context, path, shown string, matcher *regexp
 	defer file.Close()
 
 	reader := bufio.NewReaderSize(file, readBufferBytes)
-	head, err := reader.Peek(binaryScanBytes)
-	if err != nil && !errors.Is(err, io.EOF) {
+	if isBinary, err := hasBinaryHead(reader); err != nil || isBinary {
 		return err
-	}
-	if bytes.IndexByte(head, 0) >= 0 {
-		return nil
 	}
 
 	for line := 1; ; line++ {

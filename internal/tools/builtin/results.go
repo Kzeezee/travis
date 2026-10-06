@@ -1,8 +1,11 @@
 package builtin
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 
 	"github.com/Kzeezee/travis/internal/core"
 )
@@ -16,6 +19,19 @@ const (
 	errorBinaryFile           = "binary_file"
 	errorReadFailed           = "read_failed"
 )
+
+// decodeStrictArgs rejects unknown fields and trailing data, so a malformed call errors instead of half-running.
+func decodeStrictArgs(arguments json.RawMessage, args any) error {
+	decoder := json.NewDecoder(bytes.NewReader(arguments))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(args); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("unexpected data after the arguments object")
+	}
+	return nil
+}
 
 func buildErrorOutput(code string, fields map[string]any) core.ToolOutput {
 	payload := map[string]any{"error": code}

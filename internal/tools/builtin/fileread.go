@@ -145,13 +145,8 @@ func describeEmptyRead(startLine, totalLines int) string {
 // only accepts valid path, start_line and end_line args
 func decodeFileReadArgs(arguments json.RawMessage) (fileReadArgs, error) {
 	var args fileReadArgs
-	decoder := json.NewDecoder(bytes.NewReader(arguments))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&args); err != nil {
+	if err := decodeStrictArgs(arguments, &args); err != nil {
 		return fileReadArgs{}, err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return fileReadArgs{}, errors.New("unexpected data after the arguments object")
 	}
 
 	if strings.TrimSpace(args.Path) == "" {
@@ -169,12 +164,8 @@ func decodeFileReadArgs(arguments json.RawMessage) (fileReadArgs, error) {
 // streams line fragments so memory stays bounded by maxBytes even for one huge line.
 func readLineRange(ctx context.Context, source io.Reader, startLine, endLine int, maxBytes int64) (lineRangeResult, error) {
 	reader := bufio.NewReaderSize(source, readBufferBytes)
-	head, err := reader.Peek(binaryScanBytes)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return lineRangeResult{}, err
-	}
-	if bytes.IndexByte(head, 0) >= 0 {
-		return lineRangeResult{isBinary: true}, nil
+	if isBinary, err := hasBinaryHead(reader); err != nil || isBinary {
+		return lineRangeResult{isBinary: isBinary}, err
 	}
 
 	if startLine == 0 {
@@ -215,6 +206,15 @@ func readLineRange(ctx context.Context, source io.Reader, startLine, endLine int
 		}
 	}
 	return lineRangeResult{text: output.String()}, nil
+}
+
+// hasBinaryHead reports a NUL in the first binaryScanBytes without consuming them.
+func hasBinaryHead(reader *bufio.Reader) (bool, error) {
+	head, err := reader.Peek(binaryScanBytes)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	return bytes.IndexByte(head, 0) >= 0, nil
 }
 
 // ensures cut does not splut multi-byte character
