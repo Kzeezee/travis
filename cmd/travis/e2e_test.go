@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +16,8 @@ import (
 
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
+	"github.com/Kzeezee/travis/internal/providers/cassette"
+	"github.com/Kzeezee/travis/internal/providers/openaicompat"
 )
 
 // notesTask is the TRA-17 exit task over testdata/fixtures/notes, written down so the 6A
@@ -187,10 +191,19 @@ func readTraceLines(t *testing.T, stateDir string) []traceLine {
 	return lines
 }
 
-// TestNotesTaskRunsEndToEndThroughTheRealWiring is the Phase 1 exit gate (TRA-17): the
-// real loop, registry, grep and fs_read over the fixture, bus and trace, with only the
-// model scripted.
-func TestNotesTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
+// notesTaskRun is what one notes-task turn produced.
+type notesTaskRun struct {
+	calls       []core.ID
+	answer      string
+	stateDir    string
+	diagnostics string
+}
+
+// runNotesTask runs the notes task through the real wiring with the given model and checks
+// what any model must do to pass: 3+ successful tool calls, each finished in order, then a
+// final-text end_turn.
+func runNotesTask(t *testing.T, provider core.Provider, model string) notesTaskRun {
+	t.Helper()
 	workspace, err := filepath.Abs(filepath.Join("..", "..", "testdata", "fixtures", "notes"))
 	if err != nil {
 		t.Fatal(err)
@@ -201,10 +214,8 @@ func TestNotesTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
 		Tools: config.ToolsCfg{MaxExposed: 60},
 		Eval:  config.EvalCfg{Traces: true},
 	}
-	provider := &scriptedProvider{t: t, steps: buildNotesTaskScript()}
-
 	var diagnostics strings.Builder
-	session, err := assembleChatSession(cfg, paths, provider, "scripted-model", &diagnostics)
+	session, err := assembleChatSession(cfg, paths, provider, model, &diagnostics)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,26 +251,63 @@ func TestNotesTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
 	if completed == nil || completed.Reason != core.StopEndTurn {
 		t.Fatalf("turn completed with %+v, want a final-text end_turn", completed)
 	}
+	return notesTaskRun{calls: started, answer: answer.String(), stateDir: paths.StateDir, diagnostics: diagnostics.String()}
+}
+
+// TestNotesTaskRunsEndToEndThroughTheRealWiring is the Phase 1 exit gate (TRA-17): the
+// real loop, registry, grep and fs_read over the fixture, bus and trace, with only the
+// model scripted.
+func TestNotesTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
+	provider := &scriptedProvider{t: t, steps: buildNotesTaskScript()}
+	run := runNotesTask(t, provider, "scripted-model")
+
 	if len(provider.requests) > e2eMaxSteps {
 		t.Fatalf("took %d provider calls, want at most brain.max_steps=%d", len(provider.requests), e2eMaxSteps)
 	}
 	wantAnswer := fmt.Sprintf("%s mentions the dentist appointment; it is on %s.", notesTask.answerNote, notesTask.answerDate)
-	if answer.String() != wantAnswer {
-		t.Fatalf("answer = %q, want %q", answer.String(), wantAnswer)
+	if run.answer != wantAnswer {
+		t.Fatalf("answer = %q, want %q", run.answer, wantAnswer)
 	}
 
 	var tracedCalls []core.ID
 	turnIDs := map[core.ID]bool{}
-	for _, line := range readTraceLines(t, paths.StateDir) {
+	for _, line := range readTraceLines(t, run.stateDir) {
 		turnIDs[line.Event.TurnID] = true
 		if line.Type == core.EventToolCallStarted {
 			tracedCalls = append(tracedCalls, line.Event.Call.ID)
 		}
 	}
-	if !slices.Equal(tracedCalls, started) || len(turnIDs) != 1 {
-		t.Fatalf("trace holds calls %v across %d turns, want %v in one turn", tracedCalls, len(turnIDs), started)
+	if !slices.Equal(tracedCalls, run.calls) || len(turnIDs) != 1 {
+		t.Fatalf("trace holds calls %v across %d turns, want %v in one turn", tracedCalls, len(turnIDs), run.calls)
 	}
-	if !strings.Contains(diagnostics.String(), "trace written to") {
-		t.Fatalf("diagnostics = %q, want the trace path reported", diagnostics.String())
+	if !strings.Contains(run.diagnostics, "trace written to") {
+		t.Fatalf("diagnostics = %q, want the trace path reported", run.diagnostics)
+	}
+}
+
+// TestNotesTaskReplaysARecordedModel is the scripted test's recorded twin (TRA-21): the same
+// task, but the replies are a real model's, replayed through the real provider adapter and its
+// stream parser. Re-record: go test ./cmd/travis -run Recorded -record-cassettes
+func TestNotesTaskReplaysARecordedModel(t *testing.T) {
+	path := filepath.Join("..", "..", "testdata", "cassettes", "notes-task.jsonl")
+	baseURL, model := "http://cassette.invalid/v1", "replayed-model"
+	if cassette.IsRecording() {
+		cfg, _, err := config.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		profile := cfg.Provider.Profiles[cfg.Provider.Active]
+		baseURL, model = profile.BaseURL, profile.Model
+	} else if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		// Remove this skip once notes-task.jsonl is committed, so a lost cassette fails loudly.
+		t.Skip("no recording yet: go test ./cmd/travis -run Recorded -record-cassettes against a real model")
+	}
+	provider := openaicompat.BuildProvider(baseURL, config.ResolveProviderAPIKey(), cassette.BuildClient(t, path), core.SystemClock{})
+
+	run := runNotesTask(t, provider, model)
+
+	// A re-record can word the answer differently, so only the date is pinned.
+	if !strings.Contains(run.answer, "13") || !strings.Contains(run.answer, "October") {
+		t.Fatalf("answer = %q, want it to give the appointment date, %s", run.answer, notesTask.answerDate)
 	}
 }
