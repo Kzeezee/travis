@@ -32,7 +32,7 @@ const (
 
 // Options carries the runtime choices for one chat session.
 type Options struct {
-	ModelName string
+	ModelName       string
 	StartupWarnings []string
 	Input           io.Reader
 	Output          io.Writer
