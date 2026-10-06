@@ -71,11 +71,16 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	flags.Visit(func(f *flag.Flag) { explicitFlags[f.Name] = true })
 
 	cfg, diags, err := config.Load()
-	for _, diag := range diags {
-		fmt.Fprintf(os.Stderr, "travis: config: %s\n", diag.Message)
-	}
 	if err != nil {
+		for _, diag := range diags {
+			fmt.Fprintf(os.Stderr, "travis: config: %s\n", diag.Message)
+		}
 		return err
+	}
+	// Load succeeded, so every remaining diagnostic is a warning the chat view can show.
+	startupWarnings := make([]string, 0, len(diags))
+	for _, diag := range diags {
+		startupWarnings = append(startupWarnings, "config: "+diag.Message)
 	}
 
 	// CLI flags are the highest layer in DESIGN.md 5.2's precedence, above config
@@ -111,7 +116,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	defer unsubscribe()
 
 	return terminal.RunChat(context.Background(), events, assistantConversation.RunAssistantTurn,
-		terminal.Options{ModelName: profile.Model, Input: in, Output: out})
+		terminal.Options{ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out})
 }
 
 func buildVersionString() string {

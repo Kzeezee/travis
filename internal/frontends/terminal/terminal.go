@@ -33,8 +33,9 @@ const (
 // Options carries the runtime choices for one chat session.
 type Options struct {
 	ModelName string
-	Input     io.Reader
-	Output    io.Writer
+	StartupWarnings []string
+	Input           io.Reader
+	Output          io.Writer
 }
 
 // RunChat runs the interactive chat until the user quits or input ends. runTurn is the
@@ -52,7 +53,7 @@ func RunChat(
 	// Bubble Tea recovers panics in View, Update, and Cmds, restores the terminal, and prints the
 	// trace (DESIGN.md §5.9); passing tea.WithoutCatchPanics would give that up.
 	program := tea.NewProgram(
-		buildChatModel(ctx, events, runTurn, opts.ModelName),
+		buildChatModel(ctx, events, runTurn, opts),
 		tea.WithInput(input),
 		tea.WithOutput(opts.Output),
 	)
@@ -163,14 +164,15 @@ func buildChatModel(
 	ctx context.Context,
 	events <-chan core.Event,
 	runTurn func(context.Context, string) error,
-	modelName string,
+	opts Options,
 ) chatModel {
 	input := textinput.New()
 	input.Prompt = " › "
 	input.SetVirtualCursor(false)
 	input.Focus()
 
-	m := chatModel{ctx: ctx, events: events, runTurn: runTurn, modelName: modelName, viewport: viewport.New(), input: input}
+	m := chatModel{ctx: ctx, events: events, runTurn: runTurn, modelName: opts.ModelName, viewport: viewport.New(), input: input}
+	m.transcript.warnings = opts.StartupWarnings
 	m.resize(defaultWidth, defaultHeight)
 	return m
 }

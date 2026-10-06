@@ -9,7 +9,8 @@ import (
 
 // transcript keeps chat history as source, never pre-wrapped, so resizing re-wraps it (DESIGN.md §5.9.1).
 type transcript struct {
-	turns []chatTurn
+	warnings []string
+	turns    []chatTurn
 	// observedTurns counts UserMessageSubmitted facts. Streamed events belong to that turn, so a
 	// chunk that arrives after its turn finished can never land in the next one.
 	observedTurns int

@@ -18,6 +18,7 @@ var (
 	assistantLabelStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
 	dimStyle            = lipgloss.NewStyle().Faint(true)
 	errorStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	warningStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 )
 
 func (m chatModel) View() tea.View {
@@ -66,11 +67,18 @@ func reportOutcome(outcome turnOutcome) string {
 }
 
 func renderTranscript(t transcript, width int) string {
-	turns := make([]string, 0, len(t.turns))
-	for _, turn := range t.turns {
-		turns = append(turns, renderTurn(turn, width))
+	sections := make([]string, 0, len(t.turns)+1)
+	if len(t.warnings) > 0 {
+		warnings := make([]string, 0, len(t.warnings))
+		for _, warning := range t.warnings {
+			warnings = append(warnings, wrapWithMargin(warningStyle.Render("⚠ "+warning), width))
+		}
+		sections = append(sections, strings.Join(warnings, "\n"))
 	}
-	return strings.Join(turns, "\n\n")
+	for _, turn := range t.turns {
+		sections = append(sections, renderTurn(turn, width))
+	}
+	return strings.Join(sections, "\n\n")
 }
 
 // renderTurn lays a turn out as the prompt, then assistant text and tool cards in arrival order.
