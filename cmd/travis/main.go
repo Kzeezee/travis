@@ -179,6 +179,9 @@ func startSessionTrace(bus *core.Bus, traceDir string, sessionID core.ID, diagno
 			return
 		}
 		fmt.Fprintf(diagnostics, "travis: trace written to %s\n", file.Name())
+		if dropped := bus.ReportDroppedEventCount(); dropped > 0 {
+			fmt.Fprintf(diagnostics, "travis: trace may be missing up to %d events; the bus dropped them\n", dropped)
+		}
 	}
 }
 

@@ -20,6 +20,8 @@ type Bus struct {
 	subscribers map[int]*subscription
 	nextID      int
 	closed      bool
+	// ponytail: one count across all subscribers, so a slow chat view also counts against the trace; per-subscriber counts if that misleads
+	droppedCount int
 }
 
 type subscription struct {
@@ -57,9 +59,17 @@ func (b *Bus) Publish(_ context.Context, event Event) {
 		select {
 		case subscriber.events <- event:
 		default:
+			b.droppedCount++
 			b.logger.LogWarnMsg("event dropped", "type", string(event.ReportEventType()))
 		}
 	}
+}
+
+// ReportDroppedEventCount reports how many deliveries were dropped because a subscriber was full.
+func (b *Bus) ReportDroppedEventCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.droppedCount
 }
 
 // Subscribe returns a channel of accepted events and a function that cancels the
