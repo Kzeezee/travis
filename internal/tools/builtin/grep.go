@@ -97,7 +97,6 @@ type grepMatch struct {
 
 type grepResults struct {
 	matches     []grepMatch
-	fileCount   int
 	isTruncated bool
 }
 
@@ -259,7 +258,7 @@ func (t *GrepTool) searchTree(ctx context.Context, start string, query grepQuery
 
 		shown := t.workspace.reportDisplayPath(path, path)
 		if query.mode == grepModeFiles {
-			results.addMatch(grepMatch{path: shown}, true)
+			results.addMatch(grepMatch{path: shown})
 		} else if err := searchFileContents(ctx, path, shown, query.contentMatcher, &results); err != nil && ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -331,7 +330,6 @@ func searchFileContents(ctx context.Context, path, shown string, matcher *regexp
 		return nil
 	}
 
-	isFirstMatch := true
 	for line := 1; ; line++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -341,10 +339,9 @@ func searchFileContents(ctx context.Context, path, shown string, matcher *regexp
 			return nil
 		}
 		if matcher.Match(text) {
-			if !results.addMatch(grepMatch{path: shown, line: line, text: buildShownLine(text)}, isFirstMatch) {
+			if !results.addMatch(grepMatch{path: shown, line: line, text: buildShownLine(text)}) {
 				return nil
 			}
-			isFirstMatch = false
 		}
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
@@ -375,15 +372,12 @@ func buildShownLine(text []byte) string {
 }
 
 // addMatch reports false once the result cap is exceeded, which ends the search.
-func (r *grepResults) addMatch(match grepMatch, isNewFile bool) bool {
+func (r *grepResults) addMatch(match grepMatch) bool {
 	if len(r.matches) == maxGrepResults {
 		r.isTruncated = true
 		return false
 	}
 	r.matches = append(r.matches, match)
-	if isNewFile {
-		r.fileCount++
-	}
 	return true
 }
 
@@ -412,8 +406,7 @@ func formatGrepResults(results grepResults, mode string) string {
 	return output.String()
 }
 
-// describeSearch is the card summary, e.g. `"TODO" in notes (*.md): 7 matches in 3 files`
-// or `files named "confirm" in admin: 1 file`.
+// describeSearch is the card summary, e.g. `"TODO" in notes (*.md): 7 results`.
 func describeSearch(args grepArgs, results grepResults) string {
 	var subject string
 	switch {
@@ -435,16 +428,5 @@ func describeSearch(args grepArgs, results grepResults) string {
 	if results.isTruncated {
 		more = "+"
 	}
-	if args.Mode == grepModeFiles {
-		return fmt.Sprintf("%s: %d%s %s", subject, results.fileCount, more, pluralize(results.fileCount, "file", "files"))
-	}
-	return fmt.Sprintf("%s: %d%s %s in %d %s", subject, len(results.matches), more,
-		pluralize(len(results.matches), "match", "matches"), results.fileCount, pluralize(results.fileCount, "file", "files"))
-}
-
-func pluralize(count int, singular, plural string) string {
-	if count == 1 {
-		return singular
-	}
-	return plural
+	return fmt.Sprintf("%s: %d%s results", subject, len(results.matches), more)
 }

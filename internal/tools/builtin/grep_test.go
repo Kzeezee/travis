@@ -42,7 +42,7 @@ func TestGrepReturnsMatchingLinesWithPathsAndLineNumbers(t *testing.T) {
 		"notes/2026-09-01-standup.md:2:TODO ship grep\n"+
 		"notes/2026-09-01-standup.md:4:TODO review trace\n"+
 		"notes/projects/travis.txt:1:TODO pick a logo")
-	if output.Display != `"TODO": 4 matches in 3 files` {
+	if output.Display != `"TODO": 4 results` {
 		t.Fatalf("Display = %q", output.Display)
 	}
 }
@@ -53,7 +53,7 @@ func TestGrepListsEveryFileWhenFilesModeHasNoPattern(t *testing.T) {
 	output := invokeGrep(t, tool, `{"mode":"files"}`)
 
 	assertContent(t, output, "inbox.md\nnotes/2026-09-01-standup.md\nnotes/projects/garden.md\nnotes/projects/travis.txt")
-	if output.Display != "files: 4 files" {
+	if output.Display != "files: 4 results" {
 		t.Fatalf("Display = %q", output.Display)
 	}
 }
@@ -78,7 +78,7 @@ func TestGrepFilesModeMatchesNamesNotContents(t *testing.T) {
 	}
 
 	output := invokeGrep(t, tool, `{"mode":"files","pattern":"standup","path":"notes"}`)
-	if output.Display != `files named "standup" in notes: 1 file` {
+	if output.Display != `files named "standup" in notes: 1 results` {
 		t.Fatalf("Display = %q", output.Display)
 	}
 }
@@ -109,7 +109,7 @@ func TestGrepSearchesASingleFileWhenPathIsAFile(t *testing.T) {
 	output := invokeGrep(t, tool, `{"pattern":"(?i)todo","path":"inbox.md","include":"*.md"}`)
 
 	assertContent(t, output, "inbox.md:2:TODO: call the plumber")
-	if output.Display != `"(?i)todo" in inbox.md (*.md): 1 match in 1 file` {
+	if output.Display != `"(?i)todo" in inbox.md (*.md): 1 results` {
 		t.Fatalf("Display = %q", output.Display)
 	}
 }
@@ -182,7 +182,7 @@ func TestGrepStopsAtTheResultCapAndSaysHowToNarrow(t *testing.T) {
 	if !strings.HasPrefix(lines[200], "[stopped after 200 results;") {
 		t.Fatalf("missing truncation note: %q", lines[200])
 	}
-	if output.Display != `"hit": 200+ matches in 1 file` {
+	if output.Display != `"hit": 200+ results` {
 		t.Fatalf("Display = %q", output.Display)
 	}
 }
@@ -199,7 +199,7 @@ func TestGrepCountsFilesAgainstTheCapInFilesMode(t *testing.T) {
 	if !strings.HasSuffix(output.Content, "f199.txt\n[stopped after 200 results; narrow pattern, path or include to see the rest]") {
 		t.Fatalf("unexpected tail: %q", output.Content[len(output.Content)-120:])
 	}
-	if output.Display != "files: 200+ files" {
+	if output.Display != "files: 200+ results" {
 		t.Fatalf("Display = %q", output.Display)
 	}
 }
