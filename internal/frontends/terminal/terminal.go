@@ -30,6 +30,9 @@ const (
 	chromeHeight = 4
 )
 
+// ErrNotInteractive is returned when stdin or stdout is not a terminal; the TUI cannot run there.
+var ErrNotInteractive = errors.New("chat needs an interactive terminal (non-interactive mode is not built yet)")
+
 // Options carries the runtime choices for one chat session.
 type Options struct {
 	ModelName string
@@ -45,6 +48,9 @@ func RunChat(
 	runTurn func(ctx context.Context, prompt string) error,
 	opts Options,
 ) error {
+	if !isTerminal(opts.Input) || !isTerminal(opts.Output) {
+		return ErrNotInteractive
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel() // also stops a turn still running when the program exits
 
@@ -74,11 +80,16 @@ func RunChat(
 // watchInputEnd reports when non-terminal input runs out, because Bubble Tea keeps running
 // after EOF. A terminal is returned untouched so Bubble Tea can still switch it to raw mode.
 func watchInputEnd(input io.Reader) (io.Reader, <-chan struct{}) {
-	if file, isFile := input.(term.File); isFile && term.IsTerminal(file.Fd()) {
+	if isTerminal(input) {
 		return input, nil
 	}
 	reader := &endReportingReader{reader: input, ended: make(chan struct{})}
 	return reader, reader.ended
+}
+
+func isTerminal(stream any) bool {
+	file, isFile := stream.(term.File)
+	return isFile && term.IsTerminal(file.Fd())
 }
 
 type endReportingReader struct {
