@@ -213,7 +213,7 @@ func normalizePathGlob(raw string) (pathGlob, error) {
 }
 
 // compileSmartCaseRegexp ignores case unless a literal in the pattern is uppercase, as ripgrep's
-// --smart-case does; escapes such as \S or \W name classes, not letters, so they do not count.
+// --smart-case does; classes such as [A-Z] or \S never count, since models search for words.
 func compileSmartCaseRegexp(pattern string) (*regexp.Regexp, error) {
 	parsed, err := syntax.Parse(pattern, syntax.Perl)
 	if err != nil {
@@ -229,33 +229,12 @@ func hasUppercaseLiteral(node *syntax.Regexp) bool {
 	if node.Op == syntax.OpLiteral && slices.ContainsFunc(node.Rune, unicode.IsUpper) {
 		return true
 	}
-	// [A-Z] or \p{Lu} asks for case; \S, \W and \D expand to ranges spanning both cases, so they don't.
-	if node.Op == syntax.OpCharClass {
-		for i := 0; i+1 < len(node.Rune); i += 2 {
-			if isUppercaseOnlyRange(node.Rune[i], node.Rune[i+1]) {
-				return true
-			}
-		}
-	}
 	for _, sub := range node.Sub {
 		if hasUppercaseLiteral(sub) {
 			return true
 		}
 	}
 	return false
-}
-
-// isUppercaseOnlyRange reports whether lo..hi holds uppercase letters and no lowercase ones;
-// wide ranges stop at their first lowercase letter, which comes early in practice.
-func isUppercaseOnlyRange(lo, hi rune) bool {
-	hasUpper := false
-	for r := lo; r <= hi; r++ {
-		if unicode.IsLower(r) {
-			return false
-		}
-		hasUpper = hasUpper || unicode.IsUpper(r)
-	}
-	return hasUpper
 }
 
 // searchTree returns a Go error only when the context ends; a file it cannot read is skipped.

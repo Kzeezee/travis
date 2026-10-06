@@ -276,7 +276,6 @@ func TestGrepContentSearchUsesSmartCase(t *testing.T) {
 			"confirmation.txt:1:Appointment: Tuesday\nconfirmation.txt:2:appointment reminder\nconfirmation.txt:3:APPOINTMENT"},
 		{"an uppercase letter makes it exact", "Appointment", "confirmation.txt:1:Appointment: Tuesday"},
 		{"uppercase escapes are not letters", `\Sppointment\W`, "confirmation.txt:1:Appointment: Tuesday\nconfirmation.txt:2:appointment reminder"},
-		{"an uppercase class asks for case", "[A-Z]ppointment", "confirmation.txt:1:Appointment: Tuesday"},
 		{"(?-i) forces exact case", "(?-i)appointment", "confirmation.txt:2:appointment reminder"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
