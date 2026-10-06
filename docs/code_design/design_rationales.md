@@ -185,14 +185,14 @@ internal/core
 internal/agent/loop
   depends on the Provider port while running the assistant turn
 
-internal/providers/openai
+internal/providers/openaicompat
   contains the OpenAI-compatible HTTP/SSE adapter
 
 internal/providers/ollama or internal/providers/cassette
   can be added as other Provider adapters
 ```
 
-If OpenAI-compatible HTTP changes, `internal/providers/openai` changes. If the
+If OpenAI-compatible HTTP changes, `internal/providers/openaicompat` changes. If the
 local model adapter changes, `internal/providers/ollama` changes. The agent loop
 should not change unless the `Provider` port itself was wrong.
 

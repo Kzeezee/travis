@@ -1,6 +1,6 @@
-// Package openai adapts an OpenAI-compatible chat-completions endpoint to core.Provider.
+// Package openaicompat adapts an OpenAI-compatible chat-completions endpoint to core.Provider.
 // Any endpoint speaking that dialect works, including local servers such as Ollama.
-package openai
+package openaicompat
 
 import (
 	"bytes"
@@ -14,7 +14,7 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 )
 
-const providerName = "openai"
+const providerName = "openai_compatible"
 
 // Provider calls one OpenAI-compatible endpoint. The credential is held here rather than
 // resolved per call because the broker that will own secrets does not exist yet; see the
@@ -83,7 +83,7 @@ type streamOptions struct {
 func (p *Provider) Chat(ctx context.Context, request core.ProviderRequest) (core.Stream, error) {
 	body, err := json.Marshal(chatRequest{
 		Model:              request.Model,
-		Messages:           buildChatMessages(request.Messages),
+		Messages:           buildChatMessages(request.System, request.Messages),
 		Tools:              buildChatTools(request.Tools),
 		ToolChoiceBehavior: selectToolChoiceBehavior(request.Tools),
 		Stream:             true,
@@ -123,9 +123,13 @@ func (p *Provider) Chat(ctx context.Context, request core.ProviderRequest) (core
 	return buildStream(response.Body), nil
 }
 
-// buildChatMessages converts provider-neutral message content into OpenAI chat messages.
-func buildChatMessages(messages []core.Message) []chatMessage {
-	chatMessages := make([]chatMessage, 0, len(messages))
+// buildChatMessages converts provider-neutral message content into OpenAI chat messages,
+// leading with the system instruction when there is one.
+func buildChatMessages(system string, messages []core.Message) []chatMessage {
+	chatMessages := make([]chatMessage, 0, 1+len(messages))
+	if system != "" {
+		chatMessages = append(chatMessages, chatMessage{Role: string(core.RoleSystem), Content: &system})
+	}
 	for _, message := range messages {
 		switch message.Role {
 		case core.RoleSystem, core.RoleUser, core.RoleAssistant:

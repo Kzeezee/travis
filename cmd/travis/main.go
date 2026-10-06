@@ -7,16 +7,18 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 
 	"github.com/Kzeezee/travis/internal/agent/loop"
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
+	"github.com/Kzeezee/travis/internal/eval/trace"
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
 	"github.com/Kzeezee/travis/internal/id"
 	"github.com/Kzeezee/travis/internal/log"
-	"github.com/Kzeezee/travis/internal/providers/openai"
+	"github.com/Kzeezee/travis/internal/providers/openaicompat"
 	"github.com/Kzeezee/travis/internal/tools/builtin"
 	"github.com/Kzeezee/travis/internal/tools/registry"
 )
@@ -25,7 +27,7 @@ const shortRevLen = 12
 
 const (
 	subscriberEventCapacity = 1024
-	// defaultMaxReadBytes is fs.read's own cap. It isn't a key in DESIGN.md 5.5's
+	// defaultMaxReadBytes is fs_read's own cap. It isn't a key in DESIGN.md 5.5's
 	// [tools] example, so it stays a compiled constant rather than a Config field.
 	defaultMaxReadBytes = 256 << 10
 )
@@ -98,25 +100,94 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
-	if err := toolRegistry.Register(registry.SourceBuiltin,
-		builtin.BuildFileReadTool(paths.WorkspaceDir, defaultMaxReadBytes)); err != nil {
+	provider := openaicompat.BuildProvider(profile.BaseURL, config.ResolveProviderAPIKey(), nil)
+	session, err := assembleChatSession(cfg, paths, provider, profile.Model, os.Stderr)
+	if err != nil {
 		return err
 	}
 
-	bus := core.BuildEventBus(log.BuildTextLogger(os.Stderr, log.LevelWarn), subscriberEventCapacity)
-	defer bus.Close()
-
-	provider := openai.BuildProvider(profile.BaseURL, config.ResolveProviderAPIKey(), nil)
-	clock := core.SystemClock{}
-	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: bus, Clock: clock, IDs: id.BuildULIDGenerator(clock)}
-	assistantConversation := loop.BuildAssistantConversation(deps, profile.Model, cfg.Brain.MaxSteps)
-
-	events, unsubscribe := bus.Subscribe(nil)
+	events, unsubscribe := session.bus.Subscribe(nil)
 	defer unsubscribe()
 
-	return terminal.RunChat(context.Background(), events, assistantConversation.RunAssistantTurn,
+	chatErr := terminal.RunChat(context.Background(), events, session.conversation.RunAssistantTurn,
 		terminal.Options{ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out})
+	session.close()
+	return chatErr
+}
+
+// chatSession is everything a chat runs on apart from its frontend: the conversation,
+// the bus it publishes to, and the trace recording that bus.
+type chatSession struct {
+	conversation *loop.AssistantConversation
+	bus          *core.Bus
+	waitForTrace func()
+}
+
+// assembleChatSession wires the registry, built-in tools, bus, trace and conversation for
+// one session. The provider is a parameter so the end-to-end test can script it while
+// everything else stays real; diagnostics receives bus warnings and trace status lines.
+func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core.Provider, model string, diagnostics io.Writer) (*chatSession, error) {
+	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
+	for _, tool := range []core.Tool{
+		builtin.BuildFileReadTool(paths.WorkspaceDir, defaultMaxReadBytes),
+		builtin.BuildGrepTool(paths.WorkspaceDir),
+	} {
+		if err := toolRegistry.Register(registry.SourceBuiltin, tool); err != nil {
+			return nil, err
+		}
+	}
+
+	bus := core.BuildEventBus(log.BuildTextLogger(diagnostics, log.LevelWarn), subscriberEventCapacity)
+	clock := core.SystemClock{}
+	ids := id.BuildULIDGenerator(clock)
+	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: bus, Clock: clock, IDs: ids}
+
+	session := &chatSession{
+		conversation: loop.BuildAssistantConversation(deps, model, cfg.Brain.MaxSteps),
+		bus:          bus,
+		waitForTrace: func() {},
+	}
+	if cfg.Eval.Traces {
+		session.waitForTrace = startSessionTrace(bus, filepath.Join(paths.StateDir, "traces"), ids.GenerateID(), diagnostics)
+	}
+	return session, nil
+}
+
+// close ends the session's event stream, which lets observers finish, then waits for the
+// trace to flush.
+func (s *chatSession) close() {
+	s.bus.Close()
+	s.waitForTrace()
+}
+
+// startSessionTrace records the bus to a per-session trace. Tracing only observes, so a
+// trace that cannot be opened or written is reported and the chat carries on without it.
+// The returned function waits, once the bus has closed, for the trace to be flushed.
+func startSessionTrace(bus *core.Bus, traceDir string, sessionID core.ID, diagnostics io.Writer) func() {
+	file, err := trace.CreateSessionFile(traceDir, sessionID)
+	if err != nil {
+		fmt.Fprintf(diagnostics, "travis: %v; continuing without a trace\n", err)
+		return func() {}
+	}
+
+	events, _ := bus.Subscribe(nil)
+	recorded := make(chan error, 1)
+	go func() { recorded <- trace.RecordEvents(events, file) }()
+
+	return func() {
+		err := <-recorded
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			fmt.Fprintf(diagnostics, "travis: trace %s is incomplete: %v\n", file.Name(), err)
+			return
+		}
+		fmt.Fprintf(diagnostics, "travis: trace written to %s\n", file.Name())
+		if dropped := bus.ReportDroppedEventCount(); dropped > 0 {
+			fmt.Fprintf(diagnostics, "travis: trace may be missing up to %d events; the bus dropped them\n", dropped)
+		}
+	}
 }
 
 func buildVersionString() string {

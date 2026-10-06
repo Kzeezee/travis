@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -56,10 +57,17 @@ func TestRun(t *testing.T) {
 // The chat command wires a real provider, so this only proves the composition holds
 // together: the frontend refuses non-terminal I/O, so nothing reaches the network.
 func TestRunChatWiresTheSliceWithoutCallingTheProvider(t *testing.T) {
+	travisHome := t.TempDir()
+	t.Setenv("TRAVIS_HOME", travisHome)
 	var out bytes.Buffer
 
 	err := run([]string{"chat", "--model", "test-model"}, strings.NewReader(""), &out)
 	if !errors.Is(err, terminal.ErrNotInteractive) {
 		t.Fatalf("run(chat) error = %v, want %v", err, terminal.ErrNotInteractive)
+	}
+
+	traces, err := filepath.Glob(filepath.Join(travisHome, "state", "traces", "*.jsonl"))
+	if err != nil || len(traces) != 1 {
+		t.Fatalf("got traces %v (%v), want one session trace", traces, err)
 	}
 }

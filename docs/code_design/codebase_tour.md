@@ -477,7 +477,7 @@ while Travis runs; they do not mean every package imports every package it point
 ```text
 cmd/travis/main.go
   wires concrete adapters and starts the process:
-    internal/providers/openai
+    internal/providers/openaicompat
     internal/providers/ollama
     internal/tools/registry
     internal/tools/builtin
@@ -528,7 +528,7 @@ type TurnRunner struct {
 ```
 
 The agent loop (`internal/agent/loop`) should hold the provider port. It should
-not hold an OpenAI HTTP client from `internal/providers/openai`.
+not hold an OpenAI HTTP client from `internal/providers/openaicompat`.
 
 One-way imports mean outward modules depend on inward modules:
 
@@ -544,15 +544,15 @@ Do it this way so changes in outward modules do not force inward modules to chan
 Examples:
 
 ```text
-internal/providers/openai
+internal/providers/openaicompat
   may import internal/core.Provider and adapt an OpenAI-compatible HTTP client to it
 
 internal/agent/loop
   should depend on internal/core.Provider,
-  not internal/providers/openai or the OpenAI HTTP client
+  not internal/providers/openaicompat or the OpenAI HTTP client
 
 If provider HTTP changes:
-  update internal/providers/openai
+  update internal/providers/openaicompat
   do not change internal/agent/loop unless the provider port itself was wrong
 -------------------------------------------------------------------------
 internal/frontends/terminal
@@ -592,7 +592,7 @@ internal/frontends/voiceout, internal/eval/traces, internal/eval/scorecard
 This keeps change local:
 
 ```text
-OpenAI-compatible stream format changes -> internal/providers/openai
+OpenAI-compatible stream format changes -> internal/providers/openaicompat
 Policy rules change                     -> internal/security/policy
 Broker IPC changes                      -> internal/security/broker
 Terminal UI changes                     -> internal/frontends/terminal
@@ -912,7 +912,7 @@ Test the branch where the logic lives:
 
 ```text
 internal/agent/loop          fake providers, fake registries, fake clocks
-internal/providers/openai    request conversion, stream parsing, error translation
+internal/providers/openaicompat    request conversion, stream parsing, error translation
 internal/tools/registry      lookup, pruning, schema/catalog behavior
 internal/tools/builtin       JSON parsing, preparation, policy facts, fake broker ports
 internal/security/policy     pure allow, ask, deny tests

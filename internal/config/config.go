@@ -24,6 +24,7 @@ type Config struct {
 	Provider ProviderCfg
 	Brain    BrainCfg
 	Tools    ToolsCfg
+	Eval     EvalCfg
 }
 
 // ProviderCfg selects which model profile is live and lists every profile a user has
@@ -66,6 +67,13 @@ type BrainCfg struct {
 type ToolsCfg struct {
 	ApprovalDefault string `toml:"approval_default"`
 	MaxExposed      int    `toml:"max_exposed"`
+}
+
+// EvalCfg controls what a session records about itself (DESIGN.md 5.13). The workspace
+// layer cannot set it: a cloned repo must not be able to switch off the record of what
+// the agent did inside it.
+type EvalCfg struct {
+	Traces bool
 }
 
 // workspaceLayerCfg is every field the workspace config file (.travis/config.toml) is
@@ -191,6 +199,7 @@ func buildDefaultConfig() Config {
 		},
 		Brain: BrainCfg{MaxSteps: 40},
 		Tools: ToolsCfg{ApprovalDefault: "ask", MaxExposed: 60},
+		Eval:  EvalCfg{Traces: true},
 	}
 }
 

@@ -26,10 +26,12 @@ type EventSink interface {
 	Publish(context.Context, Event)
 }
 
-// EventHeader carries metadata common to every event.
+// EventHeader carries metadata common to every event. TurnID groups the facts of one
+// assistant turn so a trace can be read back turn by turn (DESIGN.md §5.13).
 type EventHeader struct {
-	ID ID        `json:"id,omitempty"`
-	At time.Time `json:"at"`
+	ID     ID        `json:"id,omitempty"`
+	TurnID ID        `json:"turn_id,omitempty"`
+	At     time.Time `json:"at"`
 }
 
 // UserMessageSubmitted records that a user message entered the app.

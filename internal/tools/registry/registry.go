@@ -7,6 +7,7 @@ package registry
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -22,6 +23,10 @@ const (
 	SourceSkill   Source = "skill"
 	SourceSwarm   Source = "swarm"
 )
+
+// toolNamePattern is the strictest function-name rule among providers (D-31), so a
+// registered name reaches every model unchanged and no adapter has to translate it.
+var toolNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
 type Filter struct {
 	Source     Source
@@ -49,8 +54,8 @@ func BuildRegistry(maxExposed int) *Registry {
 // add tools to registry
 func (r *Registry) Register(source Source, tool core.Tool) error {
 	name := tool.Name()
-	if name == "" {
-		return fmt.Errorf("register tool from source %q: empty name", source)
+	if !toolNamePattern.MatchString(name) {
+		return fmt.Errorf("register tool %q from source %q: name must match %s (D-31)", name, source, toolNamePattern)
 	}
 	if specName := tool.Describe().Name; specName != name {
 		return fmt.Errorf("register tool %q from source %q: Describe().Name is %q", name, source, specName)

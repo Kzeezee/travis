@@ -1,4 +1,4 @@
-package openai_test
+package openaicompat_test
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/Kzeezee/travis/internal/core"
-	"github.com/Kzeezee/travis/internal/providers/openai"
+	"github.com/Kzeezee/travis/internal/providers/openaicompat"
 )
 
 const testAPIKey = "sk-test-secret-value"
@@ -56,7 +56,7 @@ func TestChatSendsAStreamingRequestWithTheCredential(t *testing.T) {
 		writeStream(w, `{"choices":[{"delta":{"content":"ok"}}]}`, "[DONE]")
 	})
 
-	provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model:    "gpt-5",
 		Messages: []core.Message{{Role: core.RoleUser, Parts: []core.Part{core.TextPart{Text: "hi"}}}},
@@ -88,6 +88,35 @@ func TestChatSendsAStreamingRequestWithTheCredential(t *testing.T) {
 	}
 }
 
+func TestChatLeadsWithTheSystemInstruction(t *testing.T) {
+	var capturedRequestBody map[string]any
+	server := startEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedRequestBody)
+		writeStream(w, "[DONE]")
+	})
+
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
+		Model:    "gpt-5",
+		System:   "be brief",
+		Messages: []core.Message{{Role: core.RoleUser, Parts: []core.Part{core.TextPart{Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned %v, want nil", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	messages, _ := capturedRequestBody["messages"].([]any)
+	if len(messages) != 2 {
+		t.Fatalf("got messages %v, want system then user", capturedRequestBody["messages"])
+	}
+	first, _ := messages[0].(map[string]any)
+	second, _ := messages[1].(map[string]any)
+	if first["role"] != "system" || first["content"] != "be brief" || second["role"] != "user" {
+		t.Fatalf("got messages %v, want the system instruction first", messages)
+	}
+}
+
 func TestChatSerializesTools(t *testing.T) {
 	var capturedRequestBody map[string]any
 	server := startEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
@@ -95,11 +124,11 @@ func TestChatSerializesTools(t *testing.T) {
 		writeStream(w, "[DONE]")
 	})
 
-	provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model: "gpt-5",
 		Tools: []core.ToolSpec{{
-			Name:        "fs.read",
+			Name:        "fs_read",
 			Description: "Read a file",
 			InputSchema: json.RawMessage(`{
 				"type":"object",
@@ -122,8 +151,8 @@ func TestChatSerializesTools(t *testing.T) {
 		t.Fatalf("got tool type %v, want function", tool["type"])
 	}
 	function, _ := tool["function"].(map[string]any)
-	if function["name"] != "fs.read" || function["description"] != "Read a file" {
-		t.Fatalf("got function %v, want fs.read with description", function)
+	if function["name"] != "fs_read" || function["description"] != "Read a file" {
+		t.Fatalf("got function %v, want fs_read with description", function)
 	}
 	parameters, _ := function["parameters"].(map[string]any)
 	if parameters["type"] != "object" {
@@ -142,7 +171,7 @@ func TestChatSerializesToolCallAndToolResultMessages(t *testing.T) {
 	})
 
 	toolCallArguments := json.RawMessage(`{"path":"README.md"}`)
-	provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model: "gpt-5",
 		Messages: []core.Message{
@@ -152,7 +181,7 @@ func TestChatSerializesToolCallAndToolResultMessages(t *testing.T) {
 					core.TextPart{Text: "reading file"},
 					core.ToolCallPart{ToolCall: core.ToolCall{
 						ID:        core.ID("call_123"),
-						Name:      "fs.read",
+						Name:      "fs_read",
 						Arguments: toolCallArguments,
 					}},
 				},
@@ -162,7 +191,7 @@ func TestChatSerializesToolCallAndToolResultMessages(t *testing.T) {
 				Parts: []core.Part{
 					core.ToolResultPart{ToolResult: core.ToolResult{
 						CallID:  core.ID("call_123"),
-						Name:    "fs.read",
+						Name:    "fs_read",
 						Content: "file contents",
 					}},
 				},
@@ -192,8 +221,8 @@ func TestChatSerializesToolCallAndToolResultMessages(t *testing.T) {
 		t.Fatalf("got tool call %v, want call_123 function", toolCall)
 	}
 	function, _ := toolCall["function"].(map[string]any)
-	if function["name"] != "fs.read" || function["arguments"] != string(toolCallArguments) {
-		t.Fatalf("got tool call function %v, want fs.read arguments", function)
+	if function["name"] != "fs_read" || function["arguments"] != string(toolCallArguments) {
+		t.Fatalf("got tool call function %v, want fs_read arguments", function)
 	}
 
 	toolMessage, _ := messages[1].(map[string]any)
@@ -209,12 +238,12 @@ func TestChatAlwaysSendsContentUnlessTheMessageIsOnlyToolCalls(t *testing.T) {
 		writeStream(w, "[DONE]")
 	})
 
-	provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model: "gpt-5",
 		Messages: []core.Message{
 			{Role: core.RoleAssistant, Parts: []core.Part{core.ToolCallPart{ToolCall: core.ToolCall{
-				ID: core.ID("call_1"), Name: "fs.read", Arguments: json.RawMessage(`{}`),
+				ID: core.ID("call_1"), Name: "fs_read", Arguments: json.RawMessage(`{}`),
 			}}}},
 			{Role: core.RoleTool, Parts: []core.Part{core.ToolResultPart{ToolResult: core.ToolResult{CallID: core.ID("call_1")}}}},
 			{Role: core.RoleAssistant},
@@ -248,7 +277,7 @@ func TestChatOmitsTheCredentialWhenNoKeyIsConfigured(t *testing.T) {
 		writeStream(w, "[DONE]")
 	})
 
-	provider := openai.BuildProvider(server.URL+"/v1", "", server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", "", server.Client())
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{Model: "qwen3:14b"})
 	if err != nil {
 		t.Fatalf("Chat returned %v, want nil", err)
@@ -293,7 +322,7 @@ func TestStreamDecodesTextFinishReasonAndUsage(t *testing.T) {
 func TestStreamAssemblesToolCallsOnTheFinishFrame(t *testing.T) {
 	server := startEndpoint(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeStream(w,
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"fs.read","arguments":""}}]},"finish_reason":null}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"fs_read","arguments":""}}]},"finish_reason":null}]}`,
 			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\""}},{"index":1,"id":"call_456","type":"function","function":{"name":"clock.now"}}]},"finish_reason":null}]}`,
 			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"README.md\"}"}}]},"finish_reason":null}]}`,
 			`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
@@ -319,7 +348,7 @@ func TestStreamAssemblesToolCallsOnTheFinishFrame(t *testing.T) {
 		t.Fatalf("got finish %q, want %q", final.Finish, core.StopToolCalls)
 	}
 	want := []core.ToolCall{
-		{ID: "call_123", Name: "fs.read", Arguments: json.RawMessage(`{"path":"README.md"}`)},
+		{ID: "call_123", Name: "fs_read", Arguments: json.RawMessage(`{"path":"README.md"}`)},
 		{ID: "call_456", Name: "clock.now", Arguments: json.RawMessage(`{}`)},
 	}
 	if len(final.ToolCalls) != len(want) {
@@ -389,7 +418,7 @@ func TestChatTranslatesStatusCodes(t *testing.T) {
 				_, _ = io.WriteString(w, errorBody)
 			})
 
-			provider := openai.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+			provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
 			_, err := provider.Chat(context.Background(), core.ProviderRequest{Model: "gpt-5"})
 
 			if !errors.Is(err, testCase.want) {
@@ -408,7 +437,7 @@ func TestChatTranslatesStatusCodes(t *testing.T) {
 
 func openChat(t *testing.T, server *httptest.Server, apiKey string) core.Stream {
 	t.Helper()
-	provider := openai.BuildProvider(server.URL+"/v1", apiKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", apiKey, server.Client())
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{Model: "gpt-5"})
 	if err != nil {
 		t.Fatalf("Chat returned %v, want nil", err)

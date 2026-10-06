@@ -7,7 +7,10 @@ type Provider interface {
 }
 
 type ProviderRequest struct {
-	Model     string     `json:"model"`
+	Model string `json:"model"`
+	// System is the standing instruction, kept out of Messages so each adapter can place
+	// it where its API expects (a leading message for OpenAI, a top-level field elsewhere).
+	System    string     `json:"system,omitempty"`
 	Messages  []Message  `json:"messages"`
 	Tools     []ToolSpec `json:"tools,omitempty"`
 	MaxTokens int        `json:"max_tokens,omitempty"`

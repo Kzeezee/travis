@@ -82,6 +82,9 @@ func TestBusPublishDropsAndLogsWhenSubscriberIsFull(t *testing.T) {
 	if !strings.Contains(logged.String(), "event dropped") {
 		t.Fatalf("got log %q, want a dropped-event warning", logged.String())
 	}
+	if dropped := bus.ReportDroppedEventCount(); dropped != 1 {
+		t.Fatalf("ReportDroppedEventCount() = %d, want 1", dropped)
+	}
 }
 
 func TestBusUnsubscribeClosesChannelAndStopsDelivery(t *testing.T) {
