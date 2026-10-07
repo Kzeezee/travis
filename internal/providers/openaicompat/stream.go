@@ -38,8 +38,9 @@ func buildStream(body io.ReadCloser) *stream {
 type streamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string                `json:"content"`
-			ToolCalls []streamToolCallDelta `json:"tool_calls"`
+			Content          string                `json:"content"`
+			ReasoningContent string                `json:"reasoning_content"`
+			ToolCalls        []streamToolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -110,6 +111,7 @@ func (s *stream) decodeChunk(payload string) (core.Chunk, error) {
 	if len(raw.Choices) > 0 {
 		choice := raw.Choices[0]
 		chunk.Text = choice.Delta.Content
+		chunk.Reasoning = choice.Delta.ReasoningContent
 		for _, delta := range choice.Delta.ToolCalls {
 			s.addToolCallDelta(delta)
 		}

@@ -164,6 +164,9 @@ func (c *AssistantConversation) consumeStream(ctx context.Context, stream core.S
 			return stepReply{}, err
 		}
 
+		if chunk.Reasoning != "" {
+			c.events.Publish(ctx, core.ThoughtStreamed{EventHeader: c.buildEventHeader(), Text: chunk.Reasoning})
+		}
 		if chunk.Text != "" {
 			text.WriteString(chunk.Text)
 			c.events.Publish(ctx, core.AssistantTextStreamed{EventHeader: c.buildEventHeader(), Text: chunk.Text})

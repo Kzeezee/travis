@@ -191,10 +191,11 @@ func readTraceLines(t *testing.T, stateDir string) []traceLine {
 
 // notesTaskRun is what one notes-task turn produced.
 type notesTaskRun struct {
-	calls       []core.ID
-	answer      string
-	stateDir    string
-	diagnostics string
+	calls         []core.ID
+	answer        string
+	finalThoughts string // reasoning streamed after the last tool call, alongside the answer
+	stateDir      string
+	diagnostics   string
 }
 
 // runNotesTask runs the notes task through the real wiring with the given model and checks
@@ -225,12 +226,15 @@ func runNotesTask(t *testing.T, provider core.Provider, model string) notesTaskR
 	}
 
 	var started, finished []core.ID
-	var answer strings.Builder
+	var answer, finalThoughts strings.Builder
 	var completed *core.TurnCompleted
 	for event := range events {
 		switch fact := event.(type) {
 		case core.ToolCallStarted:
 			started = append(started, fact.Call.ID)
+			finalThoughts.Reset()
+		case core.ThoughtStreamed:
+			finalThoughts.WriteString(fact.Text)
 		case core.ToolCallFinished:
 			if fact.Result.IsError {
 				t.Fatalf("tool %s failed: %s", fact.Result.Name, fact.Result.Content)
@@ -249,7 +253,7 @@ func runNotesTask(t *testing.T, provider core.Provider, model string) notesTaskR
 	if completed == nil || completed.Reason != core.StopEndTurn {
 		t.Fatalf("turn completed with %+v, want a final-text end_turn", completed)
 	}
-	return notesTaskRun{calls: started, answer: answer.String(), stateDir: paths.StateDir, diagnostics: diagnostics.String()}
+	return notesTaskRun{calls: started, answer: answer.String(), finalThoughts: finalThoughts.String(), stateDir: paths.StateDir, diagnostics: diagnostics.String()}
 }
 
 // TestNotesTaskRunsEndToEndThroughTheRealWiring is the Phase 1 exit gate (TRA-17): the
@@ -305,5 +309,9 @@ func TestNotesTaskReplaysARecordedModel(t *testing.T) {
 	// A re-record can word the answer differently, so only the date is pinned.
 	if !strings.Contains(run.answer, "13") || !strings.Contains(run.answer, "October") {
 		t.Fatalf("answer = %q, want it to give the appointment date, %s", run.answer, notesTask.answerDate)
+	}
+	// The cassette is a reasoning model's, so the last step thinks before it answers (TRA-33).
+	if run.finalThoughts == "" || strings.Contains(run.answer, run.finalThoughts) {
+		t.Fatalf("final thoughts = %q, answer = %q: want reasoning streamed apart from the answer", run.finalThoughts, run.answer)
 	}
 }
