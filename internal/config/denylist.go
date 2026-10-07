@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// DenyGlobs holds path patterns that are always denied for read/write, and overrides any grant 
+// DenyGlobs holds path patterns that are always denied for read/write, and overrides any grant
 type DenyGlobs struct {
 	Read  []string
 	Write []string
