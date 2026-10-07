@@ -3,12 +3,12 @@ package core
 type CapabilityKind string
 
 const (
-	CapabilityFSRead       CapabilityKind = "fs.read"
-	CapabilityFSWrite      CapabilityKind = "fs.write"
+	CapabilityFSRead       CapabilityKind = "fs_read"
+	CapabilityFSWrite      CapabilityKind = "fs_write"
 	CapabilityExec         CapabilityKind = "exec"
-	CapabilityNetworkHTTP  CapabilityKind = "net.http"
-	CapabilityAudioCapture CapabilityKind = "audio.capture"
-	CapabilityAudioPlay    CapabilityKind = "audio.play"
+	CapabilityNetworkHTTP  CapabilityKind = "net_http"
+	CapabilityAudioCapture CapabilityKind = "audio_capture"
+	CapabilityAudioPlay    CapabilityKind = "audio_play"
 	CapabilitySecret       CapabilityKind = "secret"
 )
 
