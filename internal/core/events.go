@@ -11,6 +11,7 @@ type EventType string
 const (
 	EventUserMessageSubmitted  EventType = "user_message.submitted"
 	EventAssistantTextStreamed EventType = "assistant_text.streamed"
+	EventThoughtStreamed       EventType = "thought.streamed"
 	EventToolCallStarted       EventType = "tool_call.started"
 	EventToolCallFinished      EventType = "tool_call.finished"
 	EventTurnCompleted         EventType = "turn.completed"
@@ -52,6 +53,16 @@ type AssistantTextStreamed struct {
 
 func (AssistantTextStreamed) ReportEventType() EventType {
 	return EventAssistantTextStreamed
+}
+
+// ThoughtStreamed records one streamed reasoning chunk; it is never part of the answer.
+type ThoughtStreamed struct {
+	EventHeader
+	Text string `json:"text"`
+}
+
+func (ThoughtStreamed) ReportEventType() EventType {
+	return EventThoughtStreamed
 }
 
 // ToolCallStarted records that a tool call began.

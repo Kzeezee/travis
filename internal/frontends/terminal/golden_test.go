@@ -15,6 +15,7 @@ import (
 func TestGoldenFrames(t *testing.T) {
 	script := []core.Event{
 		core.UserMessageSubmitted{},
+		core.ThoughtStreamed{Text: "The user wants their notes folder\nlisted, so list_dir comes first."},
 		core.AssistantTextStreamed{Text: "Let me look."},
 		core.ToolCallStarted{Call: core.ToolCall{ID: "1", Name: "list_dir"}},
 		core.ToolCallFinished{Result: core.ToolResult{CallID: "1", Name: "list_dir"}},

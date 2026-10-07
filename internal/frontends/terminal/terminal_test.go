@@ -255,3 +255,18 @@ func isQuitCmd(cmd tea.Cmd) bool {
 func renderPlainView(m chatModel) string {
 	return ansi.Strip(m.View().Content)
 }
+
+func TestRenderTurnLabelsOnlyRepliesNeverWorkOrBlankText(t *testing.T) {
+	turn := chatTurn{prompt: "q", parts: []turnPart{
+		{text: "Let me look."},
+		{tool: &toolCard{name: "grep", status: toolSucceeded}},
+		{text: "\n "},
+		{text: "read the note", isThought: true},
+		{text: "\nOn the 13th.\n"},
+	}}
+
+	got := ansi.Strip(renderTurn(turn, 80))
+	if strings.Count(got, "travis ›") != 2 || !strings.Contains(got, "travis › Let me look.") || !strings.Contains(got, "travis › On the 13th.") {
+		t.Fatalf("got\n%s\nwant a label on each reply only, none on the blank chunk, card, or thought", got)
+	}
+}

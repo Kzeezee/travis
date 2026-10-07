@@ -23,10 +23,12 @@ type chatTurn struct {
 	failure string
 }
 
-// turnPart is assistant text, or a tool card when tool is set; parts keep arrival order.
+// turnPart is assistant text, model reasoning when isThought, or a tool card when tool is set;
+// parts keep arrival order.
 type turnPart struct {
-	text string
-	tool *toolCard
+	text      string
+	isThought bool
+	tool      *toolCard
 }
 
 type toolCard struct {
@@ -76,7 +78,9 @@ func (t *transcript) applyEvent(event core.Event) {
 	turn := &t.turns[t.observedTurns-1]
 	switch fact := event.(type) {
 	case core.AssistantTextStreamed:
-		turn.appendText(fact.Text)
+		turn.appendStreamed(turnPart{text: fact.Text})
+	case core.ThoughtStreamed:
+		turn.appendStreamed(turnPart{text: fact.Text, isThought: true})
 	case core.ToolCallStarted:
 		turn.parts = append(turn.parts, turnPart{tool: &toolCard{callID: fact.Call.ID, name: fact.Call.Name}})
 	case core.ToolCallFinished:
@@ -84,12 +88,14 @@ func (t *transcript) applyEvent(event core.Event) {
 	}
 }
 
-func (turn *chatTurn) appendText(text string) {
-	if last := len(turn.parts) - 1; last >= 0 && turn.parts[last].tool == nil {
-		turn.parts[last].text += text
+// appendStreamed merges a chunk into the last part only when both are text of the same kind,
+// so reasoning never runs into the answer.
+func (turn *chatTurn) appendStreamed(part turnPart) {
+	if last := len(turn.parts) - 1; last >= 0 && turn.parts[last].tool == nil && turn.parts[last].isThought == part.isThought {
+		turn.parts[last].text += part.text
 		return
 	}
-	turn.parts = append(turn.parts, turnPart{text: text})
+	turn.parts = append(turn.parts, part)
 }
 
 // finishToolCard settles the running card with the result's call ID; a result without one
