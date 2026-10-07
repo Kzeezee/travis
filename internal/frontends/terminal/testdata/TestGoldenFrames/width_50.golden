@@ -1,12 +1,12 @@
  you › what's in my notes folder?                 
                                                   
- travis ›                                         
    ∴ thinking: The user wants their notes folder …
- Let me look.                                     
+ travis › Let me look.                            
    ✓ list_dir                                     
    ✗ read_file: permission denied: /home/kez/note…
- You have groceries.md, cs464.md and ideas.md     
- (which I couldn't open).                         
+ travis › You have groceries.md, cs464.md and     
+ ideas.md (which I couldn't open).                
+                                                  
                                                   
                                                   
                                                   

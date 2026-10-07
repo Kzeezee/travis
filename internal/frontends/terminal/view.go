@@ -81,30 +81,21 @@ func renderTranscript(t transcript, width int) string {
 	return strings.Join(sections, "\n\n")
 }
 
-// renderTurn lays a turn out as the prompt, then assistant text, thoughts, and tool cards in arrival order.
-// Thoughts and cards get their own faint line, so they never read as part of the answer.
+// renderTurn lays a turn out as the prompt, then replies, thoughts, and tool cards in arrival order.
+// Only replies carry the travis label; thoughts and cards stay faint so they never read as the answer.
 func renderTurn(turn chatTurn, width int) string {
 	lines := []string{wrapWithMargin(userLabelStyle.Render("you ›")+" "+turn.prompt, width), ""}
 
-	// The trailing space is trimmed on flush when a tool card follows the label directly.
-	text := assistantLabelStyle.Render("travis ›") + " "
 	for _, part := range turn.parts {
-		if part.tool == nil && !part.isThought {
-			text += part.text
-			continue
-		}
-		if text != "" {
-			lines = append(lines, wrapWithMargin(strings.TrimRight(text, " \n"), width))
-			text = ""
-		}
-		if part.isThought {
+		reply := strings.TrimSpace(part.text)
+		switch {
+		case part.tool != nil:
+			lines = append(lines, truncateWithMargin(renderToolCard(*part.tool), width))
+		case part.isThought:
 			lines = append(lines, truncateWithMargin(renderCollapsedThought(part.text), width))
-			continue
+		case reply != "": // a whitespace-only chunk before a tool call must not show a bare label
+			lines = append(lines, wrapWithMargin(assistantLabelStyle.Render("travis ›")+" "+reply, width))
 		}
-		lines = append(lines, truncateWithMargin(renderToolCard(*part.tool), width))
-	}
-	if text != "" {
-		lines = append(lines, wrapWithMargin(strings.TrimRight(text, " \n"), width))
 	}
 
 	switch turn.outcome {
