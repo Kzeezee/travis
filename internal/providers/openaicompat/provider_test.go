@@ -7,8 +7,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
@@ -56,7 +59,7 @@ func TestChatSendsAStreamingRequestWithTheCredential(t *testing.T) {
 		writeStream(w, `{"choices":[{"delta":{"content":"ok"}}]}`, "[DONE]")
 	})
 
-	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client(), core.FixedClock{})
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model:    "gpt-5",
 		Messages: []core.Message{{Role: core.RoleUser, Parts: []core.Part{core.TextPart{Text: "hi"}}}},
@@ -95,7 +98,7 @@ func TestChatLeadsWithTheSystemInstruction(t *testing.T) {
 		writeStream(w, "[DONE]")
 	})
 
-	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client(), core.FixedClock{})
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model:    "gpt-5",
 		System:   "be brief",
@@ -124,7 +127,7 @@ func TestChatSerializesTools(t *testing.T) {
 		writeStream(w, "[DONE]")
 	})
 
-	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client(), core.FixedClock{})
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model: "gpt-5",
 		Tools: []core.ToolSpec{{
@@ -171,7 +174,7 @@ func TestChatSerializesToolCallAndToolResultMessages(t *testing.T) {
 	})
 
 	toolCallArguments := json.RawMessage(`{"path":"README.md"}`)
-	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client(), core.FixedClock{})
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model: "gpt-5",
 		Messages: []core.Message{
@@ -238,7 +241,7 @@ func TestChatAlwaysSendsContentUnlessTheMessageIsOnlyToolCalls(t *testing.T) {
 		writeStream(w, "[DONE]")
 	})
 
-	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client(), core.FixedClock{})
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
 		Model: "gpt-5",
 		Messages: []core.Message{
@@ -277,7 +280,7 @@ func TestChatOmitsTheCredentialWhenNoKeyIsConfigured(t *testing.T) {
 		writeStream(w, "[DONE]")
 	})
 
-	provider := openaicompat.BuildProvider(server.URL+"/v1", "", server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", "", server.Client(), core.FixedClock{})
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{Model: "qwen3:14b"})
 	if err != nil {
 		t.Fatalf("Chat returned %v, want nil", err)
@@ -418,7 +421,7 @@ func TestChatTranslatesStatusCodes(t *testing.T) {
 				_, _ = io.WriteString(w, errorBody)
 			})
 
-			provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client())
+			provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client(), core.FixedClock{})
 			_, err := provider.Chat(context.Background(), core.ProviderRequest{Model: "gpt-5"})
 
 			if !errors.Is(err, testCase.want) {
@@ -435,9 +438,107 @@ func TestChatTranslatesStatusCodes(t *testing.T) {
 	}
 }
 
+// recordingClock fires immediately, like FixedClock, but remembers every wait it was asked for.
+type recordingClock struct {
+	core.FixedClock
+	waits []time.Duration
+}
+
+func (c *recordingClock) After(d time.Duration) <-chan time.Time {
+	c.waits = append(c.waits, d)
+	return c.FixedClock.After(d)
+}
+
+func TestChatRetriesOnlyTransientAndRateLimitFailuresBeforeTheStream(t *testing.T) {
+	cases := []struct {
+		name       string
+		statuses   []int // served in order; the last one repeats
+		retryAfter string
+		wantHits   int32
+		wantErr    error
+		wantWaits  []time.Duration
+	}{
+		{name: "server failure then success", statuses: []int{503, 200}, wantHits: 2},
+		{name: "rate limit honours retry-after", statuses: []int{429, 200}, retryAfter: "2", wantHits: 2, wantWaits: []time.Duration{2 * time.Second}},
+		{name: "gives up after three attempts", statuses: []int{500}, wantHits: 3, wantErr: core.ErrTransient},
+		{name: "retry-after past the cap fails now", statuses: []int{429}, retryAfter: "3600", wantHits: 1, wantErr: core.ErrRateLimit},
+		{name: "bad request is not retried", statuses: []int{400}, wantHits: 1, wantErr: core.ErrInvalid},
+		{name: "auth failure is not retried", statuses: []int{401}, wantHits: 1, wantErr: core.ErrAuth},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var hits atomic.Int32
+			server := startEndpoint(t, func(w http.ResponseWriter, _ *http.Request) {
+				hit := int(hits.Add(1))
+				status := testCase.statuses[min(hit, len(testCase.statuses))-1]
+				if status == http.StatusOK {
+					writeStream(w, `{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`)
+					return
+				}
+				if testCase.retryAfter != "" {
+					w.Header().Set("Retry-After", testCase.retryAfter)
+				}
+				w.WriteHeader(status)
+			})
+			clock := &recordingClock{}
+
+			provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client(), clock)
+			stream, err := provider.Chat(context.Background(), core.ProviderRequest{Model: "gpt-5"})
+
+			if got := hits.Load(); got != testCase.wantHits {
+				t.Fatalf("endpoint hit %d times, want %d", got, testCase.wantHits)
+			}
+			if testCase.wantErr != nil {
+				if !errors.Is(err, testCase.wantErr) {
+					t.Fatalf("got %v, want %v", err, testCase.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Chat returned %v, want a stream", err)
+			}
+			defer stream.Close()
+			if chunks, err := drain(t, stream); err != nil || len(chunks) != 1 || chunks[0].Text != "hi" {
+				t.Fatalf("stream gave %+v, %v; want the one reply", chunks, err)
+			}
+			if testCase.wantWaits != nil && !slices.Equal(clock.waits, testCase.wantWaits) {
+				t.Fatalf("waited %v, want %v", clock.waits, testCase.wantWaits)
+			}
+		})
+	}
+}
+
+// cancellingClock cancels the turn as soon as a retry starts waiting, and never fires.
+type cancellingClock struct {
+	core.FixedClock
+	cancel context.CancelFunc
+}
+
+func (c cancellingClock) After(time.Duration) <-chan time.Time {
+	c.cancel()
+	return nil
+}
+
+func TestChatStopsWaitingToRetryWhenCancelled(t *testing.T) {
+	var hits atomic.Int32
+	server := startEndpoint(t, func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client(), cancellingClock{cancel: cancel})
+	_, err := provider.Chat(ctx, core.ProviderRequest{Model: "gpt-5"})
+
+	if !errors.Is(err, context.Canceled) || hits.Load() != 1 {
+		t.Fatalf("got %v after %d hits, want context.Canceled after 1", err, hits.Load())
+	}
+}
+
 func openChat(t *testing.T, server *httptest.Server, apiKey string) core.Stream {
 	t.Helper()
-	provider := openaicompat.BuildProvider(server.URL+"/v1", apiKey, server.Client())
+	provider := openaicompat.BuildProvider(server.URL+"/v1", apiKey, server.Client(), core.FixedClock{})
 	stream, err := provider.Chat(context.Background(), core.ProviderRequest{Model: "gpt-5"})
 	if err != nil {
 		t.Fatalf("Chat returned %v, want nil", err)

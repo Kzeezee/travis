@@ -100,7 +100,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	provider := openaicompat.BuildProvider(profile.BaseURL, config.ResolveProviderAPIKey(), nil)
+	provider := openaicompat.BuildProvider(profile.BaseURL, config.ResolveProviderAPIKey(), nil, core.SystemClock{})
 	session, err := assembleChatSession(cfg, paths, provider, profile.Model, os.Stderr)
 	if err != nil {
 		return err
