@@ -14,8 +14,8 @@ func TestBuildDenyGlobsShape(t *testing.T) {
 	globs := buildDenyGlobsFromInputs(buildEnvLookupFromMap(nil), PathSet{StateDir: filepath.Join(home, "state")}, home)
 
 	for _, glob := range globs.Write {
-		if strings.ContainsAny(glob, `~\`) {
-			t.Errorf("glob %q contains ~ or a backslash", glob)
+		if strings.HasPrefix(glob, "~") || strings.Contains(glob, `\`) {
+			t.Errorf("glob %q starts with ~ or contains a backslash", glob)
 		}
 		if !strings.HasPrefix(glob, "**/") && !filepath.IsAbs(filepath.FromSlash(glob)) {
 			t.Errorf("glob %q is neither absolute nor **/-rooted", glob)
