@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/Kzeezee/travis/internal/core"
@@ -40,6 +41,26 @@ func TestTranscriptKeepsTextAndToolCardsInArrivalOrder(t *testing.T) {
 	}
 	if card := parts[3].tool; card.name != "fetch" || card.status != toolSucceeded {
 		t.Fatalf("got unmatched result %+v, want its own settled card", *card)
+	}
+}
+
+func TestTranscriptKeepsThoughtsApartFromAnswerText(t *testing.T) {
+	var history transcript
+	history.startTurn("when is the dentist?")
+
+	for _, event := range []core.Event{
+		core.UserMessageSubmitted{},
+		core.ThoughtStreamed{Text: "Search "},
+		core.ThoughtStreamed{Text: "notes."},
+		core.AssistantTextStreamed{Text: "On the 13th."},
+		core.ThoughtStreamed{Text: "Done."},
+	} {
+		history.applyEvent(event)
+	}
+
+	want := []turnPart{{text: "Search notes.", isThought: true}, {text: "On the 13th."}, {text: "Done.", isThought: true}}
+	if got := history.turns[0].parts; !slices.Equal(got, want) {
+		t.Fatalf("got parts %+v, want %+v: thoughts merged with each other, never with the answer", got, want)
 	}
 }
 

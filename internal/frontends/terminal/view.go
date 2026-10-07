@@ -81,20 +81,25 @@ func renderTranscript(t transcript, width int) string {
 	return strings.Join(sections, "\n\n")
 }
 
-// renderTurn lays a turn out as the prompt, then assistant text and tool cards in arrival order.
+// renderTurn lays a turn out as the prompt, then assistant text, thoughts, and tool cards in arrival order.
+// Thoughts and cards get their own faint line, so they never read as part of the answer.
 func renderTurn(turn chatTurn, width int) string {
 	lines := []string{wrapWithMargin(userLabelStyle.Render("you ›")+" "+turn.prompt, width), ""}
 
 	// The trailing space is trimmed on flush when a tool card follows the label directly.
 	text := assistantLabelStyle.Render("travis ›") + " "
 	for _, part := range turn.parts {
-		if part.tool == nil {
+		if part.tool == nil && !part.isThought {
 			text += part.text
 			continue
 		}
 		if text != "" {
 			lines = append(lines, wrapWithMargin(strings.TrimRight(text, " \n"), width))
 			text = ""
+		}
+		if part.isThought {
+			lines = append(lines, truncateWithMargin(renderCollapsedThought(part.text), width))
+			continue
 		}
 		lines = append(lines, truncateWithMargin(renderToolCard(*part.tool), width))
 	}
@@ -110,6 +115,11 @@ func renderTurn(turn chatTurn, width int) string {
 	case turnPending, turnSucceeded:
 	}
 	return strings.Join(lines, "\n")
+}
+
+// renderCollapsedThought flattens reasoning onto one line; the caller truncates it to fit (DESIGN.md §5.9 show_reasoning = "collapsed").
+func renderCollapsedThought(thought string) string {
+	return dimStyle.Render("  ∴ thinking: " + strings.Join(strings.Fields(thought), " "))
 }
 
 func renderToolCard(card toolCard) string {
