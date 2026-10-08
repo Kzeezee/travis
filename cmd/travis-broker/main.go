@@ -17,14 +17,15 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	if err := run(ctx, os.Args[1:], os.Stderr); err != nil {
+	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "travis-broker:", err)
 		stop()
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, args []string, diagnostics io.Writer) error {
+// run writes exactly one line to readiness, once it is listening; travis waits for it.
+func run(ctx context.Context, args []string, readiness, diagnostics io.Writer) error {
 	flags := flag.NewFlagSet("travis-broker", flag.ContinueOnError)
 	flags.SetOutput(diagnostics)
 	endpoint := flags.String("endpoint", "", "socket path or pipe name to listen on, chosen by travis")
@@ -50,5 +51,14 @@ func run(ctx context.Context, args []string, diagnostics io.Writer) error {
 		return err
 	}
 	effects := broker.BuildPolicyEnforcedBroker(paths.WorkspaceDir, sessionPolicy)
-	return broker.ServeSession(ctx, broker.SessionEndpoint{Address: *endpoint}, *clientPID, effects)
+
+	sessionListener, err := broker.ListenForSession(broker.SessionEndpoint{Address: *endpoint})
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(readiness, broker.BrokerReadyLine); err != nil {
+		_ = sessionListener.Close()
+		return err
+	}
+	return sessionListener.ServeOneClient(ctx, *clientPID, effects)
 }

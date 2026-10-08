@@ -11,19 +11,17 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 )
 
-// The per-OS transport files (transport_<os>.go) each provide the same four functions:
+// The per-OS transport files each provide the same four functions:
 //
-//	buildEndpointAddress(socketDir, nonce string) (string, error)
+//	createEndpointForOS(runtimeDir, nonce string) (SessionEndpoint, func(), error)
 //	listenOnEndpoint(endpoint SessionEndpoint) (net.Listener, error)
 //	dialEndpoint(ctx context.Context, endpoint SessionEndpoint) (net.Conn, error)
 //	verifyPeerProcess(conn net.Conn, wantPID int) error
 //
 // Everything above them (framing, policy, the client) is OS-independent (§5.12.5).
 
-const endpointNonceBytes = 16
-
-// errTransportNotBuilt is returned by an OS whose transport is still a stub (D-25).
-var errTransportNotBuilt = fmt.Errorf("the broker transport for this OS is not built yet: %w", core.ErrUnsupported)
+// endpointNonceBytes keeps names unguessable while leaving room under macOS's socket path limit.
+const endpointNonceBytes = 8
 
 // SessionEndpoint is where one session's broker listens: a Unix socket path or a Windows pipe
 // name, carrying a random nonce so another local process cannot guess it (D-12).
@@ -31,33 +29,39 @@ type SessionEndpoint struct {
 	Address string
 }
 
-// BuildSessionEndpoint names a fresh endpoint for one session. socketDir is where a Unix
-// socket is created; Windows pipes live in their own namespace and ignore it.
-func BuildSessionEndpoint(socketDir string) (SessionEndpoint, error) {
+// CreateSessionEndpoint makes a fresh endpoint for one session under runtimeDir. On Unix it
+// creates a private directory for the socket; removeEndpoint deletes whatever was created.
+func CreateSessionEndpoint(runtimeDir string) (endpoint SessionEndpoint, removeEndpoint func(), err error) {
 	nonce := make([]byte, endpointNonceBytes)
 	if _, err := rand.Read(nonce); err != nil {
-		return SessionEndpoint{}, fmt.Errorf("broker endpoint nonce: %w", err)
+		return SessionEndpoint{}, nil, fmt.Errorf("broker endpoint nonce: %w", err)
 	}
-	address, err := buildEndpointAddress(socketDir, hex.EncodeToString(nonce))
-	if err != nil {
-		return SessionEndpoint{}, err
-	}
-	return SessionEndpoint{Address: address}, nil
+	return createEndpointForOS(runtimeDir, hex.EncodeToString(nonce))
 }
 
-// ServeSession is the broker process's main loop: it accepts exactly one connection on
-// endpoint, refuses it unless it comes from clientPID, and serves it until it closes.
-func ServeSession(ctx context.Context, endpoint SessionEndpoint, clientPID int, effects core.Broker) error {
+// SessionListener is a broker endpoint that is open but has not accepted its client yet.
+type SessionListener struct {
+	endpoint SessionEndpoint
+	listener net.Listener
+}
+
+func ListenForSession(endpoint SessionEndpoint) (*SessionListener, error) {
 	listener, err := listenOnEndpoint(endpoint)
 	if err != nil {
-		return fmt.Errorf("broker listen on %q: %w", endpoint.Address, err)
+		return nil, fmt.Errorf("broker listen on %q: %w", endpoint.Address, err)
 	}
-	stopClosingOnCancel := context.AfterFunc(ctx, func() { _ = listener.Close() })
+	return &SessionListener{endpoint: endpoint, listener: listener}, nil
+}
+
+// ServeOneClient accepts exactly one connection, refuses it unless it comes from clientPID,
+// and serves it until it closes. The listener is closed either way.
+func (s *SessionListener) ServeOneClient(ctx context.Context, clientPID int, effects core.Broker) error {
+	stopClosingOnCancel := context.AfterFunc(ctx, func() { _ = s.listener.Close() })
 	defer stopClosingOnCancel()
 
-	conn, err := listener.Accept()
+	conn, err := s.listener.Accept()
 	// One client per session (D-12): nobody else gets to connect after the first.
-	closeErr := listener.Close()
+	closeErr := s.listener.Close()
 	if err != nil {
 		return reportServeEnd(ctx, err)
 	}
@@ -71,6 +75,11 @@ func ServeSession(ctx context.Context, endpoint SessionEndpoint, clientPID int, 
 	}
 	defer conn.Close()
 	return ServeConnection(ctx, conn, effects)
+}
+
+// Close stops listening without serving, for a broker that fails before its client arrives.
+func (s *SessionListener) Close() error {
+	return s.listener.Close()
 }
 
 // ConnectRemoteBroker dials the session's broker and refuses it unless it is brokerPID, so a
