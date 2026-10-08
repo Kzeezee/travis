@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Kzeezee/travis/internal/core"
+	"github.com/Kzeezee/travis/internal/security/broker"
 	"github.com/Kzeezee/travis/internal/tools/builtin"
 	"github.com/Kzeezee/travis/internal/tools/tooltest"
 )
@@ -25,6 +26,12 @@ func writeFixture(t *testing.T, root, name, content string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// buildConfinedFileReadTool runs the tool over a LocalBroker, so these tests cover the read
+// path end to end on a real temporary workspace.
+func buildConfinedFileReadTool(root string, maxBytes int64) *builtin.FileReadTool {
+	return builtin.BuildFileReadTool(broker.BuildLocalBroker(root), root, maxBytes)
 }
 
 func invokeRead(t *testing.T, tool *builtin.FileReadTool, arguments string) core.ToolOutput {
@@ -74,7 +81,7 @@ func assertErrorCode(t *testing.T, output core.ToolOutput, want string) {
 func TestReadReturnsANestedFile(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "docs/notes/todo.txt", "alpha\nbeta\n")
-	tool := builtin.BuildFileReadTool(root, testMaxBytes)
+	tool := buildConfinedFileReadTool(root, testMaxBytes)
 
 	output := invokeRead(t, tool, `{"path":"docs/notes/todo.txt"}`)
 
@@ -87,7 +94,7 @@ func TestReadReturnsANestedFile(t *testing.T) {
 func TestReadAcceptsTheWorkspacePrefix(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "a.txt", "hello")
-	tool := builtin.BuildFileReadTool(root, testMaxBytes)
+	tool := buildConfinedFileReadTool(root, testMaxBytes)
 
 	assertContent(t, invokeRead(t, tool, `{"path":"workspace:a.txt"}`), "1\thello")
 }
@@ -95,7 +102,7 @@ func TestReadAcceptsTheWorkspacePrefix(t *testing.T) {
 func TestReadSelectsLineRanges(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "lines.txt", "one\ntwo\nthree\nfour\n")
-	tool := builtin.BuildFileReadTool(root, testMaxBytes)
+	tool := buildConfinedFileReadTool(root, testMaxBytes)
 
 	cases := []struct {
 		arguments string
@@ -117,7 +124,7 @@ func TestReadSelectsLineRanges(t *testing.T) {
 func TestReadCountsAFinalLineWithoutANewline(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "lines.txt", "one\ntwo\nthree\nfour")
-	tool := builtin.BuildFileReadTool(root, testMaxBytes)
+	tool := buildConfinedFileReadTool(root, testMaxBytes)
 
 	assertContent(t, invokeRead(t, tool, `{"path":"lines.txt","start_line":9}`),
 		"[start_line 9 is past the end of the file; it has 4 lines]")
@@ -126,7 +133,7 @@ func TestReadCountsAFinalLineWithoutANewline(t *testing.T) {
 func TestReadExplainsAnEmptyFile(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "empty.txt", "")
-	tool := builtin.BuildFileReadTool(root, testMaxBytes)
+	tool := buildConfinedFileReadTool(root, testMaxBytes)
 
 	assertContent(t, invokeRead(t, tool, `{"path":"empty.txt"}`), "[file is empty]")
 	assertContent(t, invokeRead(t, tool, `{"path":"empty.txt","start_line":3}`), "[file is empty]")
@@ -135,7 +142,7 @@ func TestReadExplainsAnEmptyFile(t *testing.T) {
 func TestReadRejectsPathsOutsideTheWorkspace(t *testing.T) {
 	root := t.TempDir()
 	outside := writeFixture(t, t.TempDir(), "secret.txt", "secret")
-	tool := builtin.BuildFileReadTool(root, testMaxBytes)
+	tool := buildConfinedFileReadTool(root, testMaxBytes)
 
 	for _, arguments := range []string{
 		`{"path":"../secret.txt"}`,
@@ -154,7 +161,7 @@ func TestReadRejectsSymlinksThatEscapeTheWorkspace(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "link.txt")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	tool := builtin.BuildFileReadTool(root, testMaxBytes)
+	tool := buildConfinedFileReadTool(root, testMaxBytes)
 
 	assertErrorCode(t, invokeRead(t, tool, `{"path":"link.txt"}`), "path_outside_workspace")
 }
@@ -162,7 +169,7 @@ func TestReadRejectsSymlinksThatEscapeTheWorkspace(t *testing.T) {
 func TestReadReportsMissingFilesAndDirectories(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "dir/file.txt", "x")
-	tool := builtin.BuildFileReadTool(root, testMaxBytes)
+	tool := buildConfinedFileReadTool(root, testMaxBytes)
 
 	assertErrorCode(t, invokeRead(t, tool, `{"path":"missing.txt"}`), "file_not_found")
 	assertErrorCode(t, invokeRead(t, tool, `{"path":"dir"}`), "path_is_directory")
@@ -171,7 +178,7 @@ func TestReadReportsMissingFilesAndDirectories(t *testing.T) {
 func TestReadRejectsBinaryFiles(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "image.bin", "PNG\x00\x01\x02")
-	tool := builtin.BuildFileReadTool(root, testMaxBytes)
+	tool := buildConfinedFileReadTool(root, testMaxBytes)
 
 	assertErrorCode(t, invokeRead(t, tool, `{"path":"image.bin"}`), "binary_file")
 }
@@ -179,7 +186,7 @@ func TestReadRejectsBinaryFiles(t *testing.T) {
 func TestReadTruncatesOversizeFilesAndSaysWhereToContinue(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "big.txt", "aaaa\nbbbb\ncccc\ndddd\n")
-	tool := builtin.BuildFileReadTool(root, 17)
+	tool := buildConfinedFileReadTool(root, 17)
 
 	output := invokeRead(t, tool, `{"path":"big.txt"}`)
 
@@ -190,7 +197,7 @@ func TestReadTruncatesOversizeFilesAndSaysWhereToContinue(t *testing.T) {
 func TestReadDoesNotMarkAnExactFitAsTruncated(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "exact.txt", "0123456789")
-	tool := builtin.BuildFileReadTool(root, 12)
+	tool := buildConfinedFileReadTool(root, 12)
 
 	assertContent(t, invokeRead(t, tool, `{"path":"exact.txt"}`), "1\t0123456789")
 }
@@ -199,7 +206,7 @@ func TestReadNumbersALongLineOnce(t *testing.T) {
 	root := t.TempDir()
 	longLine := strings.Repeat("x", 100<<10)
 	writeFixture(t, root, "long.txt", longLine+"\nshort\n")
-	tool := builtin.BuildFileReadTool(root, 1<<20)
+	tool := buildConfinedFileReadTool(root, 1<<20)
 
 	assertContent(t, invokeRead(t, tool, `{"path":"long.txt"}`), "1\t"+longLine+"\n2\tshort\n")
 }
@@ -207,7 +214,7 @@ func TestReadNumbersALongLineOnce(t *testing.T) {
 func TestReadRejectsInvalidArguments(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "a.txt", "a")
-	tool := builtin.BuildFileReadTool(root, testMaxBytes)
+	tool := buildConfinedFileReadTool(root, testMaxBytes)
 
 	for _, arguments := range []string{
 		`{"pathh":"a.txt"}`,
@@ -230,7 +237,7 @@ func TestReadRejectsInvalidArguments(t *testing.T) {
 func TestReadReturnsAGoErrorWhenCancelled(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "a.txt", "a")
-	tool := builtin.BuildFileReadTool(root, testMaxBytes)
+	tool := buildConfinedFileReadTool(root, testMaxBytes)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -240,12 +247,12 @@ func TestReadReturnsAGoErrorWhenCancelled(t *testing.T) {
 }
 
 func TestFileReadToolMeetsTheToolContract(t *testing.T) {
-	tooltest.Run(t, builtin.BuildFileReadTool(t.TempDir(), testMaxBytes))
+	tooltest.Run(t, buildConfinedFileReadTool(t.TempDir(), testMaxBytes))
 }
 
 func TestDescribeReportsTheReadCapability(t *testing.T) {
 	root := t.TempDir()
-	tool := builtin.BuildFileReadTool(root, testMaxBytes)
+	tool := buildConfinedFileReadTool(root, testMaxBytes)
 	spec := tool.Describe()
 
 	if spec.Name != "fs_read" {

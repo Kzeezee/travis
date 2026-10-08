@@ -1,6 +1,7 @@
 // Search flow: Invoke → decodeGrepArgs (content: compiles the regex; files: turns pattern into a name glob) →
-// workspace.resolvePath → searchTree walks files in lexical order, skipping hidden entries, non-regular files and
-// escaping symlinks → each file is filtered by its globs, then listed (files) or scanned line by line (content) →
+// broker.DescribePath → searchTree walks broker.ListDirectory in lexical order, skipping hidden entries, non-regular
+// files and symlinks the broker refuses → each file is filtered by its globs, then listed (files) or scanned line by
+// line (content) →
 // results stop after maxGrepResults → formatGrepResults for the model, describeSearch for the person.
 
 package builtin
@@ -13,8 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"regexp"
 	"regexp/syntax"
@@ -56,7 +55,9 @@ const (
 )
 
 type GrepTool struct {
-	workspace workspaceRoot
+	broker core.Broker
+	// workspaceRoot is the scope this tool declares; the broker enforces it.
+	workspaceRoot string
 }
 
 type grepArgs struct {
@@ -93,8 +94,8 @@ type grepResults struct {
 	isTruncated bool
 }
 
-func BuildGrepTool(workspaceRoot string) *GrepTool {
-	return &GrepTool{workspace: buildWorkspaceRoot(workspaceRoot)}
+func BuildGrepTool(broker core.Broker, workspaceRoot string) *GrepTool {
+	return &GrepTool{broker: broker, workspaceRoot: workspaceRoot}
 }
 
 func (t *GrepTool) Name() string {
@@ -106,7 +107,7 @@ func (t *GrepTool) Describe() core.ToolSpec {
 		Name:         grepToolName,
 		Description:  grepDescription,
 		InputSchema:  json.RawMessage(grepSchema),
-		Capabilities: []core.Capability{{Kind: core.CapabilityFSRead, Scope: t.workspace.root}},
+		Capabilities: []core.Capability{{Kind: core.CapabilityFSRead, Scope: t.workspaceRoot}},
 	}
 }
 
@@ -120,9 +121,12 @@ func (t *GrepTool) Invoke(ctx context.Context, arguments json.RawMessage) (core.
 		return buildErrorOutput(errorInvalidArguments, map[string]any{"detail": err.Error()}), nil
 	}
 
-	start, rejection, isAllowed := t.workspace.resolvePath(args.Path)
-	if !isAllowed {
-		return rejection, nil
+	start, err := t.broker.DescribePath(ctx, args.Path)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return core.ToolOutput{}, ctxErr
+		}
+		return buildBrokerErrorOutput(args.Path, t.workspaceRoot, err), nil
 	}
 
 	results, err := t.searchTree(ctx, start, query)
@@ -222,54 +226,73 @@ func hasUppercaseLiteral(node *syntax.Regexp) bool {
 }
 
 // searchTree returns a Go error only when the context ends; a file it cannot read is skipped.
-func (t *GrepTool) searchTree(ctx context.Context, start string, query grepQuery) (grepResults, error) {
+func (t *GrepTool) searchTree(ctx context.Context, start core.PathInfo, query grepQuery) (grepResults, error) {
 	var results grepResults
-	err := filepath.WalkDir(start, func(path string, entry fs.DirEntry, walkErr error) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if walkErr != nil {
-			return nil
-		}
-		if path != start && strings.HasPrefix(entry.Name(), ".") {
-			if entry.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if entry.IsDir() || !t.isSearchableFile(path, entry) || !matchesPathGlobs(query.pathGlobs, start, path) {
-			return nil
-		}
-
-		shown := t.workspace.reportDisplayPath(path, path)
-		if query.mode == grepModeFiles {
-			results.addMatch(grepMatch{path: shown})
-		} else if err := searchFileContents(ctx, path, shown, query.contentMatcher, &results); err != nil && ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if results.isTruncated {
-			return fs.SkipAll
-		}
-		return nil
-	})
+	var err error
+	switch start.Kind {
+	case core.PathKindFile:
+		err = t.visitFile(ctx, start, start, query, &results)
+	case core.PathKindDirectory:
+		err = t.walkDirectory(ctx, start, start, query, &results)
+	case core.PathKindSymlink, core.PathKindOther:
+	}
 	if err != nil {
 		return grepResults{}, err
 	}
 	return results, nil
 }
 
-// isSearchableFile admits regular files, and symlinks to regular files inside the workspace;
-// symlinked folders are never entered, so a link cycle cannot trap the walk.
-func (t *GrepTool) isSearchableFile(path string, entry fs.DirEntry) bool {
-	if entry.Type()&fs.ModeSymlink == 0 {
-		return entry.Type().IsRegular()
+// walkDirectory visits entries in name order, skipping hidden ones. Symlinked files are searched
+// when the broker resolves them to a file; symlinked folders are never entered, so a link cycle
+// cannot trap the walk.
+func (t *GrepTool) walkDirectory(ctx context.Context, start, dir core.PathInfo, query grepQuery, results *grepResults) error {
+	entries, err := t.broker.ListDirectory(ctx, dir.Path)
+	if err != nil {
+		return ctx.Err()
 	}
-	target, err := filepath.EvalSymlinks(path)
-	if err != nil || !t.workspace.containsResolvedPath(target) {
-		return false
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if results.isTruncated {
+			return nil
+		}
+		if strings.HasPrefix(filepath.Base(entry.Path), ".") {
+			continue
+		}
+
+		switch entry.Kind {
+		case core.PathKindDirectory:
+			err = t.walkDirectory(ctx, start, entry, query, results)
+		case core.PathKindFile:
+			err = t.visitFile(ctx, start, entry, query, results)
+		case core.PathKindSymlink:
+			if target, describeErr := t.broker.DescribePath(ctx, entry.Path); describeErr == nil && target.Kind == core.PathKindFile {
+				err = t.visitFile(ctx, start, entry, query, results)
+			} else {
+				err = ctx.Err()
+			}
+		case core.PathKindOther:
+		}
+		if err != nil {
+			return err
+		}
 	}
-	info, err := os.Stat(target)
-	return err == nil && info.Mode().IsRegular()
+	return nil
+}
+
+func (t *GrepTool) visitFile(ctx context.Context, start, file core.PathInfo, query grepQuery, results *grepResults) error {
+	if !matchesPathGlobs(query.pathGlobs, start.Path, file.Path) {
+		return nil
+	}
+	if query.mode == grepModeFiles {
+		results.addMatch(grepMatch{path: file.WorkspacePath})
+		return nil
+	}
+	if err := t.searchFileContents(ctx, file, query.contentMatcher, results); err != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return nil
 }
 
 func matchesPathGlobs(globs []pathGlob, start, path string) bool {
@@ -298,15 +321,14 @@ func matchesPathGlobs(globs []pathGlob, start, path string) bool {
 }
 
 // searchFileContents adds this file's matching lines to results; binary files are skipped like unreadable ones.
-func searchFileContents(ctx context.Context, path, shown string, matcher *regexp.Regexp, results *grepResults) error {
-	// path is confined to the workspace by resolvePath and isSearchableFile; replaced by Broker in Phase 2
-	file, err := os.Open(path)
+func (t *GrepTool) searchFileContents(ctx context.Context, file core.PathInfo, matcher *regexp.Regexp, results *grepResults) error {
+	opened, err := t.broker.OpenFile(ctx, file.Path)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer opened.Content.Close()
 
-	reader := bufio.NewReaderSize(file, readBufferBytes)
+	reader := bufio.NewReaderSize(opened.Content, readBufferBytes)
 	if isBinary, err := hasBinaryHead(reader); err != nil || isBinary {
 		return err
 	}
@@ -320,7 +342,7 @@ func searchFileContents(ctx context.Context, path, shown string, matcher *regexp
 			return nil
 		}
 		if matcher.Match(text) {
-			if !results.addMatch(grepMatch{path: shown, line: line, text: buildShownLine(text)}) {
+			if !results.addMatch(grepMatch{path: file.WorkspacePath, line: line, text: buildShownLine(text)}) {
 				return nil
 			}
 		}

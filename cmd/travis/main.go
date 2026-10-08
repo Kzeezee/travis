@@ -19,6 +19,7 @@ import (
 	"github.com/Kzeezee/travis/internal/id"
 	"github.com/Kzeezee/travis/internal/log"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
+	"github.com/Kzeezee/travis/internal/security/broker"
 	"github.com/Kzeezee/travis/internal/tools/builtin"
 	"github.com/Kzeezee/travis/internal/tools/registry"
 )
@@ -128,9 +129,11 @@ type chatSession struct {
 // everything else stays real; diagnostics receives bus warnings and trace status lines.
 func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core.Provider, model string, diagnostics io.Writer) (*chatSession, error) {
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
+	// In-process and workspace-confined, with no policy until the broker process replaces it (D-18).
+	fileBroker := broker.BuildLocalBroker(paths.WorkspaceDir)
 	for _, tool := range []core.Tool{
-		builtin.BuildFileReadTool(paths.WorkspaceDir, defaultMaxReadBytes),
-		builtin.BuildGrepTool(paths.WorkspaceDir),
+		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes),
+		builtin.BuildGrepTool(fileBroker, paths.WorkspaceDir),
 	} {
 		if err := toolRegistry.Register(registry.SourceBuiltin, tool); err != nil {
 			return nil, err

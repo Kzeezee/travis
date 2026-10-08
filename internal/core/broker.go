@@ -1,0 +1,54 @@
+package core
+
+import (
+	"context"
+	"errors"
+	"io"
+)
+
+// Broker performs file effects on a tool's behalf (D-18). Tools never touch the filesystem
+// themselves: a broker resolves the requested path, decides whether the effect may happen,
+// and only then performs it. Paths may be relative to the workspace or absolute.
+//
+// Refusals and failures are errors wrapping ErrDenied, ErrNotFound, ErrIsDirectory or
+// ErrInvalid, so a tool can tell the model why without knowing which broker it talks to.
+type Broker interface {
+	// DescribePath follows symlinks and reports what the path resolves to.
+	DescribePath(ctx context.Context, path string) (PathInfo, error)
+	// ListDirectory reports a directory's entries sorted by name, without following symlinks.
+	ListDirectory(ctx context.Context, path string) ([]PathInfo, error)
+	// OpenFile opens a regular file for reading; the caller closes Content.
+	OpenFile(ctx context.Context, path string) (OpenedFile, error)
+}
+
+type PathKind string
+
+const (
+	PathKindFile      PathKind = "file"
+	PathKindDirectory PathKind = "directory"
+	PathKindSymlink   PathKind = "symlink"
+	PathKindOther     PathKind = "other"
+)
+
+type PathInfo struct {
+	// Path is absolute; it is symlink-resolved except for symlink entries from ListDirectory.
+	Path string
+	// WorkspacePath is Path relative to the workspace root with forward slashes, so it reads the
+	// same on every OS and can be passed straight back as a path argument.
+	WorkspacePath string
+	Kind          PathKind
+}
+
+type OpenedFile struct {
+	Info    PathInfo
+	Content io.ReadCloser
+}
+
+var (
+	// ErrDenied means the broker refused the effect.
+	ErrDenied = errors.New("denied")
+	// ErrNotFound means the path does not exist.
+	ErrNotFound = errors.New("not_found")
+	// ErrIsDirectory means a file operation was asked of a directory.
+	ErrIsDirectory = errors.New("is_directory")
+)

@@ -1,6 +1,5 @@
-// Package builtin holds the core tools.
-// Phase 1 tools perform their own IO; D-18's broker swap happens in Phase 2A.
-// Read flow: Invoke → decodeFileReadArgs → workspace.resolvePath → check it isn't a folder → open the file →
+// Package builtin holds the core tools; every file effect goes through the core.Broker port (D-18).
+// Read flow: Invoke → decodeFileReadArgs → broker.OpenFile (resolves, confines, refuses folders) →
 // readLineRange: file → 64 KiB read buffer (refills as it is used; first 8 KiB checked for NUL) → one line at a time,
 // lines before start_line dropped, the rest numbered into the output buffer (grows up to maxBytes, cut by cutAtRuneBoundary) →
 // describeRead if it worked, or buildErrorOutput at whichever step it failed.
@@ -14,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"unicode/utf8"
 
@@ -37,8 +35,10 @@ const (
 )
 
 type FileReadTool struct {
-	workspace workspaceRoot
-	maxBytes  int64
+	broker core.Broker
+	// workspaceRoot is the scope this tool declares; the broker enforces it.
+	workspaceRoot string
+	maxBytes      int64
 }
 
 type fileReadArgs struct {
@@ -56,8 +56,8 @@ type lineRangeResult struct {
 	totalLines int
 }
 
-func BuildFileReadTool(workspaceRoot string, maxBytes int64) *FileReadTool {
-	return &FileReadTool{workspace: buildWorkspaceRoot(workspaceRoot), maxBytes: maxBytes}
+func BuildFileReadTool(broker core.Broker, workspaceRoot string, maxBytes int64) *FileReadTool {
+	return &FileReadTool{broker: broker, workspaceRoot: workspaceRoot, maxBytes: maxBytes}
 }
 
 func (t *FileReadTool) Name() string {
@@ -69,7 +69,7 @@ func (t *FileReadTool) Describe() core.ToolSpec {
 		Name:         fileReadToolName,
 		Description:  fileReadDescription,
 		InputSchema:  json.RawMessage(fileReadSchema),
-		Capabilities: []core.Capability{{Kind: core.CapabilityFSRead, Scope: t.workspace.root}},
+		Capabilities: []core.Capability{{Kind: core.CapabilityFSRead, Scope: t.workspaceRoot}},
 	}
 }
 
@@ -83,27 +83,16 @@ func (t *FileReadTool) Invoke(ctx context.Context, arguments json.RawMessage) (c
 		return buildErrorOutput(errorInvalidArguments, map[string]any{"detail": err.Error()}), nil
 	}
 
-	target, rejection, isAllowed := t.workspace.resolvePath(args.Path)
-	if !isAllowed {
-		return rejection, nil
-	}
-
-	info, err := os.Stat(target)
+	file, err := t.broker.OpenFile(ctx, args.Path)
 	if err != nil {
-		return buildErrorOutput(errorReadFailed, map[string]any{"path": args.Path, "detail": err.Error()}), nil
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return core.ToolOutput{}, ctxErr
+		}
+		return buildBrokerErrorOutput(args.Path, t.workspaceRoot, err), nil
 	}
-	if info.IsDir() {
-		return buildErrorOutput(errorPathIsDirectory, map[string]any{"path": args.Path}), nil
-	}
+	defer file.Content.Close()
 
-	// path is confined to the workspace root by resolveWorkspacePath; replaced by Broker in Phase 2
-	file, err := os.Open(target)
-	if err != nil {
-		return buildErrorOutput(errorReadFailed, map[string]any{"path": args.Path, "detail": err.Error()}), nil
-	}
-	defer file.Close()
-
-	result, err := readLineRange(ctx, file, args.StartLine, args.EndLine, t.maxBytes)
+	result, err := readLineRange(ctx, file.Content, args.StartLine, args.EndLine, t.maxBytes)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return core.ToolOutput{}, ctxErr
@@ -122,7 +111,7 @@ func (t *FileReadTool) Invoke(ctx context.Context, arguments json.RawMessage) (c
 		content += fmt.Sprintf("\n[truncated at line %d: output exceeds %d bytes; continue with start_line=%d]",
 			result.truncatedAtLine, t.maxBytes, result.truncatedAtLine)
 	}
-	return core.ToolOutput{Content: content, Display: t.describeRead(target, args)}, nil
+	return core.ToolOutput{Content: content, Display: describeRead(file.Info, args)}, nil
 }
 
 // empty output is explained so the model can correct its range instead of guessing
@@ -217,8 +206,8 @@ func cutAtRuneBoundary(data []byte, limit int64) string {
 	return string(data[:cut])
 }
 
-func (t *FileReadTool) describeRead(target string, args fileReadArgs) string {
-	shown := t.workspace.reportDisplayPath(target, args.Path)
+func describeRead(file core.PathInfo, args fileReadArgs) string {
+	shown := file.WorkspacePath
 	if args.StartLine == 0 && args.EndLine == 0 {
 		return "read " + shown
 	}
