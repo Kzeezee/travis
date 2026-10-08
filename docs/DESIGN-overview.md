@@ -17,7 +17,7 @@ Three things make it different from the agentic CLIs you have used:
 
 1. **Not locked to one vendor.** Point it at Ollama, at OpenAI, or at your Claude
    subscription. Same interface, same everything.
-2. **Deny-by-default enforcement.** If `fs.write` is not granted, the write syscall
+2. **Deny-by-default enforcement.** If `fs_write` is not granted, the write syscall
    does not happen — no matter what the model emitted. A separate broker process owns
    every privileged effect.
 3. **It speaks selectively.** The model marks what is worth saying out loud; we speak
@@ -151,7 +151,7 @@ cases, and one more thing a 7B model can pick wrongly. Adding one needs an ADR.
 - **No `glob`** — `grep` takes `mode = "content" | "files"` and does file discovery.
 - **`edit` stays** — whole-file `write` costs O(file) tokens per change and is how
   models silently delete code. `edit` fails *loudly* on a missing or ambiguous anchor,
-  which is the feature. It needs no new capability (it is `fs.write`).
+  which is the feature. It needs no new capability (it is `fs_write`).
 - **`fetch` is not `exec curl`** — the broker enforces the host allowlist at `Dial`
   time, credentials never enter argv, and results carry an `untrusted: true` marker.
 
@@ -159,7 +159,7 @@ cases, and one more thing a 7B model can pick wrongly. Adding one needs an ADR.
 
 ## 6. Security in five sentences
 
-1. The session holds **capabilities** (`fs.write:/home/u/proj/**`); the model never
+1. The session holds **capabilities** (`fs_write:/home/u/proj/**`); the model never
    sees them.
 2. A separate **broker process** performs every privileged effect and re-evaluates
    policy against the *resolved* path/host, not the model's stated intent.
@@ -336,7 +336,7 @@ subagents. That last one is the design's central simplification: adding MCP is
 ### Enforcement is two jobs, not one (D-17)
 
 **Job 1 — what actually stops the model:** capabilities (permission slips like
-`fs.write:/proj/**`), policy (allow/ask/deny), glob matching (where bypasses hide), the
+`fs_write:/proj/**`), policy (allow/ask/deny), glob matching (where bypasses hide), the
 broker process, IPC, token derivation. Portable Go, identical on all three OSes, on the
 critical path. **Job 2 — the OS sandbox:** asking the kernel to physically forbid things.
 Different code per OS, specialist knowledge, and it only catches a bug in Job 1 — or code
