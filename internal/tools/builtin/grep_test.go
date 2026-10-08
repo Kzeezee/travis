@@ -10,9 +10,16 @@ import (
 	"testing"
 
 	"github.com/Kzeezee/travis/internal/core"
+	"github.com/Kzeezee/travis/internal/security/broker"
 	"github.com/Kzeezee/travis/internal/tools/builtin"
 	"github.com/Kzeezee/travis/internal/tools/tooltest"
 )
+
+// buildConfinedGrepTool runs the tool over a LocalBroker, so these tests cover the walk end to
+// end on a real temporary workspace.
+func buildConfinedGrepTool(root string) *builtin.GrepTool {
+	return builtin.BuildGrepTool(broker.BuildLocalBroker(root), root)
+}
 
 func invokeGrep(t *testing.T, tool *builtin.GrepTool, arguments string) core.ToolOutput {
 	t.Helper()
@@ -34,7 +41,7 @@ func writeNotesFixture(t *testing.T) string {
 }
 
 func TestGrepReturnsMatchingLinesWithPathsAndLineNumbers(t *testing.T) {
-	tool := builtin.BuildGrepTool(writeNotesFixture(t))
+	tool := buildConfinedGrepTool(writeNotesFixture(t))
 
 	output := invokeGrep(t, tool, `{"pattern":"TODO"}`)
 
@@ -48,7 +55,7 @@ func TestGrepReturnsMatchingLinesWithPathsAndLineNumbers(t *testing.T) {
 }
 
 func TestGrepListsEveryFileWhenFilesModeHasNoPattern(t *testing.T) {
-	tool := builtin.BuildGrepTool(writeNotesFixture(t))
+	tool := buildConfinedGrepTool(writeNotesFixture(t))
 
 	output := invokeGrep(t, tool, `{"mode":"files"}`)
 
@@ -59,7 +66,7 @@ func TestGrepListsEveryFileWhenFilesModeHasNoPattern(t *testing.T) {
 }
 
 func TestGrepFilesModeMatchesNamesNotContents(t *testing.T) {
-	tool := builtin.BuildGrepTool(writeNotesFixture(t))
+	tool := buildConfinedGrepTool(writeNotesFixture(t))
 
 	for _, tc := range []struct {
 		name, arguments, want string
@@ -84,7 +91,7 @@ func TestGrepFilesModeMatchesNamesNotContents(t *testing.T) {
 }
 
 func TestGrepFiltersByIncludeGlob(t *testing.T) {
-	tool := builtin.BuildGrepTool(writeNotesFixture(t))
+	tool := buildConfinedGrepTool(writeNotesFixture(t))
 
 	for _, tc := range []struct {
 		name, arguments, want string
@@ -104,7 +111,7 @@ func TestGrepFiltersByIncludeGlob(t *testing.T) {
 }
 
 func TestGrepSearchesASingleFileWhenPathIsAFile(t *testing.T) {
-	tool := builtin.BuildGrepTool(writeNotesFixture(t))
+	tool := buildConfinedGrepTool(writeNotesFixture(t))
 
 	output := invokeGrep(t, tool, `{"pattern":"(?i)todo","path":"inbox.md","include":"*.md"}`)
 
@@ -115,7 +122,7 @@ func TestGrepSearchesASingleFileWhenPathIsAFile(t *testing.T) {
 }
 
 func TestGrepReportsNoMatchesAsAResultNotAnError(t *testing.T) {
-	tool := builtin.BuildGrepTool(writeNotesFixture(t))
+	tool := buildConfinedGrepTool(writeNotesFixture(t))
 
 	assertContent(t, invokeGrep(t, tool, `{"pattern":"nothing-here"}`), "[no matches]")
 	assertContent(t, invokeGrep(t, tool, `{"mode":"files","include":"*.go"}`), "[no files found]")
@@ -127,7 +134,7 @@ func TestGrepSkipsHiddenEntriesUnlessSearchedDirectly(t *testing.T) {
 	writeFixture(t, root, ".env", "needle")
 	writeFixture(t, root, "notes/.draft.md", "needle")
 	writeFixture(t, root, "notes/visible.md", "needle")
-	tool := builtin.BuildGrepTool(root)
+	tool := buildConfinedGrepTool(root)
 
 	assertContent(t, invokeGrep(t, tool, `{"mode":"files"}`), "notes/visible.md")
 	assertContent(t, invokeGrep(t, tool, `{"pattern":"needle","path":".git"}`), ".git/config:1:needle")
@@ -137,7 +144,7 @@ func TestGrepSkipsBinaryFiles(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "image.bin", "needle\x00\x01")
 	writeFixture(t, root, "text.txt", "needle")
-	tool := builtin.BuildGrepTool(root)
+	tool := buildConfinedGrepTool(root)
 
 	assertContent(t, invokeGrep(t, tool, `{"pattern":"needle"}`), "text.txt:1:needle")
 }
@@ -155,14 +162,14 @@ func TestGrepFollowsSymlinkedFilesOnlyInsideTheWorkspace(t *testing.T) {
 	if err := os.Symlink(root, filepath.Join(root, "real/loop")); err != nil {
 		t.Fatal(err)
 	}
-	tool := builtin.BuildGrepTool(root)
+	tool := buildConfinedGrepTool(root)
 
 	assertContent(t, invokeGrep(t, tool, `{"mode":"files"}`), "alias.txt\nreal/inside.txt")
 }
 
 func TestGrepRejectsPathsOutsideTheWorkspace(t *testing.T) {
 	root := t.TempDir()
-	tool := builtin.BuildGrepTool(root)
+	tool := buildConfinedGrepTool(root)
 
 	assertErrorCode(t, invokeGrep(t, tool, `{"pattern":"x","path":"../"}`), "path_outside_workspace")
 	assertErrorCode(t, invokeGrep(t, tool, `{"pattern":"x","path":"missing"}`), "file_not_found")
@@ -171,7 +178,7 @@ func TestGrepRejectsPathsOutsideTheWorkspace(t *testing.T) {
 func TestGrepStopsAtTheResultCapAndSaysHowToNarrow(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "many.txt", strings.Repeat("hit\n", 250))
-	tool := builtin.BuildGrepTool(root)
+	tool := buildConfinedGrepTool(root)
 
 	output := invokeGrep(t, tool, `{"pattern":"hit"}`)
 
@@ -192,7 +199,7 @@ func TestGrepCountsFilesAgainstTheCapInFilesMode(t *testing.T) {
 	for i := range 201 {
 		writeFixture(t, root, fmt.Sprintf("f%03d.txt", i), "x")
 	}
-	tool := builtin.BuildGrepTool(root)
+	tool := buildConfinedGrepTool(root)
 
 	output := invokeGrep(t, tool, `{"mode":"files"}`)
 
@@ -208,7 +215,7 @@ func TestGrepShortensLongLinesAndKeepsCountingPastOversizeOnes(t *testing.T) {
 	root := t.TempDir()
 	oversize := "needle" + strings.Repeat("x", 100<<10)
 	writeFixture(t, root, "long.txt", oversize+"\r\nneedle again\r\n")
-	tool := builtin.BuildGrepTool(root)
+	tool := buildConfinedGrepTool(root)
 
 	output := invokeGrep(t, tool, `{"pattern":"needle"}`)
 
@@ -216,7 +223,7 @@ func TestGrepShortensLongLinesAndKeepsCountingPastOversizeOnes(t *testing.T) {
 }
 
 func TestGrepRejectsInvalidArguments(t *testing.T) {
-	tool := builtin.BuildGrepTool(t.TempDir())
+	tool := buildConfinedGrepTool(t.TempDir())
 
 	for _, arguments := range []string{
 		`{}`,
@@ -238,7 +245,7 @@ func TestGrepRejectsInvalidArguments(t *testing.T) {
 }
 
 func TestGrepReturnsAGoErrorWhenCancelled(t *testing.T) {
-	tool := builtin.BuildGrepTool(writeNotesFixture(t))
+	tool := buildConfinedGrepTool(writeNotesFixture(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -248,12 +255,12 @@ func TestGrepReturnsAGoErrorWhenCancelled(t *testing.T) {
 }
 
 func TestGrepToolMeetsTheToolContract(t *testing.T) {
-	tooltest.Run(t, builtin.BuildGrepTool(t.TempDir()))
+	tooltest.Run(t, buildConfinedGrepTool(t.TempDir()))
 }
 
 func TestGrepDescribeReportsTheReadCapability(t *testing.T) {
 	root := t.TempDir()
-	spec := builtin.BuildGrepTool(root).Describe()
+	spec := buildConfinedGrepTool(root).Describe()
 
 	if spec.Name != "grep" {
 		t.Fatalf("Describe().Name = %q", spec.Name)
@@ -267,7 +274,7 @@ func TestGrepDescribeReportsTheReadCapability(t *testing.T) {
 func TestGrepContentSearchUsesSmartCase(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "confirmation.txt", "Appointment: Tuesday\nappointment reminder\nAPPOINTMENT\n")
-	tool := builtin.BuildGrepTool(root)
+	tool := buildConfinedGrepTool(root)
 
 	for _, tc := range []struct {
 		name, pattern, want string
@@ -292,7 +299,7 @@ func TestGrepFilesSearchMatchesSpacedWordsWithSmartCase(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "admin/Clinic-Confirmation.md", "x")
 	writeFixture(t, root, "admin/confirmation-clinic.md", "x")
-	tool := builtin.BuildGrepTool(root)
+	tool := buildConfinedGrepTool(root)
 
 	for _, tc := range []struct {
 		name, arguments, want string

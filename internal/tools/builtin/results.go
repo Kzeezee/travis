@@ -45,3 +45,20 @@ func buildErrorOutput(code string, fields map[string]any) core.ToolOutput {
 	// The frontend already labels the card with the tool name, so Display carries only the cause.
 	return core.ToolOutput{Content: string(content), Display: code, IsError: true}
 }
+
+// buildBrokerErrorOutput tells the model why the broker refused or failed a path, in the
+// stable codes above, whichever broker is behind the port.
+func buildBrokerErrorOutput(requested, workspaceRoot string, err error) core.ToolOutput {
+	switch {
+	case errors.Is(err, core.ErrDenied):
+		return buildErrorOutput(errorPathOutsideWorkspace, map[string]any{"path": requested, "workspace": workspaceRoot})
+	case errors.Is(err, core.ErrNotFound):
+		return buildErrorOutput(errorFileNotFound, map[string]any{"path": requested})
+	case errors.Is(err, core.ErrIsDirectory):
+		return buildErrorOutput(errorPathIsDirectory, map[string]any{"path": requested})
+	case errors.Is(err, core.ErrInvalid):
+		return buildErrorOutput(errorInvalidArguments, map[string]any{"detail": err.Error()})
+	default:
+		return buildErrorOutput(errorReadFailed, map[string]any{"path": requested, "detail": err.Error()})
+	}
+}
