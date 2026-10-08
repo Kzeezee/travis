@@ -173,16 +173,17 @@ on.
 | PR                                       | Work                                                                                        | Depends on |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------- | ---------- |
 | **2A - Capabilities and policy**         | `internal/security/capabilities`, `internal/security/policy`; pure allow/ask/deny decisions | 1F         |
-| **2B - Broker process**                  | `cmd/travis-broker`, broker protocol, local broker adapter, remote broker adapter           | 2A         |
-| **2C - Journal and undo**                | `internal/state/session`, `internal/state/journal`, snapshot-before-write, `/undo`          | 2A         |
+| **2A-seam - Broker port and wire**       | `core.Broker` port, `LocalBroker`, frozen msgpack wire protocol; tools stop doing IO (D-18, D-19) | 2A         |
+| **2B - Broker process**                  | `cmd/travis-broker`, remote broker adapter speaking the 2A-seam wire, policy in the broker  | 2A-seam    |
+| **2C - Journal and undo**                | `internal/state/session`, `internal/state/journal`, snapshot-before-write, `/undo`          | 2A-seam    |
 | **2D - Approvals, deny-list, redaction** | Approval modal, durable approval rules, deny-list, secret/PII redaction                     | 2A         |
 | **2E - Red-team gate**                   | Attack cases and assertions that policy denies the right thing for the right reason         | 2B, 2C, 2D |
 
 Phase 2 parallelism:
 
 ```text
-Do 2A first.
-After 2A merges, 2B, 2C, and 2D can run in parallel.
+Do 2A first. After 2A merges, 2A-seam and 2D can run in parallel.
+After 2A-seam merges, 2B and 2C can run in parallel.
 Then 2E integrates them.
 ```
 
