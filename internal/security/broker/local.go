@@ -1,5 +1,6 @@
 // Package broker performs effects on behalf of tools and owns the frozen wire protocol the
-// broker process speaks. LocalBroker is the in-process Phase 1 broker (D-18).
+// broker process speaks. LocalBroker performs effects in the calling process; RemoteBroker
+// forwards them to a broker process, which enforces policy before acting (D-18).
 package broker
 
 import (
@@ -15,18 +16,34 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 )
 
-// LocalBroker does direct IO confined to one workspace, with no IPC and no policy (D-18).
-// Confinement is checked on the symlink-resolved path, so a link cannot lead outside.
+// LocalBroker does direct IO in the calling process, on paths its access rule allows. The rule
+// is checked on the path as written and again once symlinks are followed, so a link cannot
+// lead somewhere the rule refuses.
 type LocalBroker struct {
 	paths config.PathSet
 	root  string
 	// resolvedRoot is root with symlinks evaluated, so confinement compares like with like.
 	resolvedRoot string
+	// authorizeRead returns an error wrapping core.ErrDenied to refuse reading an absolute path.
+	authorizeRead func(path string) error
 }
 
 var _ core.Broker = (*LocalBroker)(nil)
 
+// BuildLocalBroker is the Phase 1 broker: confined to one workspace, with no policy (D-18).
 func BuildLocalBroker(workspaceDir string) *LocalBroker {
+	b := buildLocalBrokerForWorkspace(workspaceDir)
+	b.authorizeRead = func(path string) error {
+		// Either form of the root is accepted, since paths this broker reported back are resolved.
+		if isInsideRoot(b.root, path) || isInsideRoot(b.resolvedRoot, path) {
+			return nil
+		}
+		return fmt.Errorf("%q is outside the workspace %q: %w", path, b.root, core.ErrDenied)
+	}
+	return b
+}
+
+func buildLocalBrokerForWorkspace(workspaceDir string) *LocalBroker {
 	root := filepath.Clean(workspaceDir)
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -39,7 +56,7 @@ func (b *LocalBroker) DescribePath(ctx context.Context, path string) (core.PathI
 	if err := ctx.Err(); err != nil {
 		return core.PathInfo{}, err
 	}
-	resolved, err := b.resolveInsideWorkspace(path)
+	resolved, err := b.resolveReadablePath(path)
 	if err != nil {
 		return core.PathInfo{}, err
 	}
@@ -54,7 +71,7 @@ func (b *LocalBroker) ListDirectory(ctx context.Context, path string) ([]core.Pa
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	resolved, err := b.resolveInsideWorkspace(path)
+	resolved, err := b.resolveReadablePath(path)
 	if err != nil {
 		return nil, err
 	}
@@ -88,31 +105,28 @@ func (b *LocalBroker) OpenFile(ctx context.Context, path string) (core.OpenedFil
 	return core.OpenedFile{Info: info, Content: file}, nil
 }
 
-// resolveInsideWorkspace turns a requested path into a real path on disk, allowed only if it
-// stays inside the workspace both as written and once symlinks are followed.
-func (b *LocalBroker) resolveInsideWorkspace(requested string) (string, error) {
+// resolveReadablePath turns a requested path into a real path on disk, allowed only if the
+// access rule accepts it both as written and once symlinks are followed.
+func (b *LocalBroker) resolveReadablePath(requested string) (string, error) {
 	resolved, err := b.paths.Resolve(requested)
 	if err != nil {
 		return "", err
 	}
-	// Checking before symlinks are followed keeps a path outside from revealing whether it exists;
-	// either form of the root is accepted, since paths this broker reported back are resolved.
-	isWrittenInside := isInsideRoot(b.root, resolved) || isInsideRoot(b.resolvedRoot, resolved)
-	if !filepath.IsAbs(resolved) || !isWrittenInside {
-		return "", b.reportOutsideWorkspace(requested)
+	if !filepath.IsAbs(resolved) {
+		return "", fmt.Errorf("%q does not resolve to an absolute path: %w", requested, core.ErrDenied)
+	}
+	// Checking before symlinks are followed keeps a refused path from revealing whether it exists.
+	if err := b.authorizeRead(resolved); err != nil {
+		return "", err
 	}
 	evaluated, err := filepath.EvalSymlinks(resolved)
 	if err != nil {
 		return "", translatePathError(requested, err)
 	}
-	if !isInsideRoot(b.resolvedRoot, evaluated) {
-		return "", b.reportOutsideWorkspace(requested)
+	if err := b.authorizeRead(evaluated); err != nil {
+		return "", err
 	}
 	return evaluated, nil
-}
-
-func (b *LocalBroker) reportOutsideWorkspace(requested string) error {
-	return fmt.Errorf("%q is outside the workspace %q: %w", requested, b.root, core.ErrDenied)
 }
 
 func (b *LocalBroker) describeResolvedPath(path string, mode fs.FileMode) core.PathInfo {
