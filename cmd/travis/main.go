@@ -101,8 +101,18 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	sessionBroker, err := startSessionBroker(paths, os.Stderr)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := sessionBroker.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "travis: %v\n", closeErr)
+		}
+	}()
+
 	provider := openaicompat.BuildProvider(profile.BaseURL, config.ResolveProviderAPIKey(), nil, core.SystemClock{})
-	session, err := assembleChatSession(cfg, paths, provider, profile.Model, os.Stderr)
+	session, err := assembleChatSession(cfg, paths, provider, sessionBroker.Remote, profile.Model, os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -124,13 +134,34 @@ type chatSession struct {
 	waitForTrace func()
 }
 
+// startSessionBroker launches this session's travis-broker and connects to it. A chat never
+// runs without one: there is no unenforced fallback (§5.12.5).
+func startSessionBroker(paths config.PathSet, diagnostics io.Writer) (*broker.SessionBroker, error) {
+	brokerExecutable, err := broker.ResolveBrokerExecutable()
+	if err != nil {
+		return nil, fmt.Errorf("start the security broker: %w", err)
+	}
+	sessionBroker, err := broker.StartSessionBroker(context.Background(), broker.SessionLaunch{
+		Executable:   brokerExecutable,
+		WorkspaceDir: paths.WorkspaceDir,
+		RuntimeDir:   paths.RuntimeDir,
+		// Not cfg.Profile: the workspace config layer can set that, and a cloned repo must not
+		// choose its own security profile. Selectable once [security] config exists.
+		Profile:     "default",
+		Diagnostics: diagnostics,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("start the security broker: %w", err)
+	}
+	return sessionBroker, nil
+}
+
 // assembleChatSession wires the registry, built-in tools, bus, trace and conversation for
-// one session. The provider is a parameter so the end-to-end test can script it while
-// everything else stays real; diagnostics receives bus warnings and trace status lines.
-func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core.Provider, model string, diagnostics io.Writer) (*chatSession, error) {
+// one session. The provider and file broker are parameters so the end-to-end test can script
+// the model while everything else stays real; diagnostics receives bus warnings and trace
+// status lines.
+func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core.Provider, fileBroker core.Broker, model string, diagnostics io.Writer) (*chatSession, error) {
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
-	// In-process and workspace-confined, with no policy until the broker process replaces it (D-18).
-	fileBroker := broker.BuildLocalBroker(paths.WorkspaceDir)
 	for _, tool := range []core.Tool{
 		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes),
 		builtin.BuildGrepTool(fileBroker, paths.WorkspaceDir),

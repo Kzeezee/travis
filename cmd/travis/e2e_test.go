@@ -207,14 +207,15 @@ func runNotesTask(t *testing.T, provider core.Provider, model string) notesTaskR
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths := config.PathSet{WorkspaceDir: workspace, StateDir: t.TempDir()}
+	paths := config.PathSet{WorkspaceDir: workspace, StateDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t)}
 	cfg := &config.Config{
 		Brain: config.BrainCfg{MaxSteps: e2eMaxSteps},
 		Tools: config.ToolsCfg{MaxExposed: 60},
 		Eval:  config.EvalCfg{Traces: true},
 	}
 	var diagnostics strings.Builder
-	session, err := assembleChatSession(cfg, paths, provider, model, &diagnostics)
+	fileBroker := startTestSessionBroker(t, paths, &diagnostics)
+	session, err := assembleChatSession(cfg, paths, provider, fileBroker, model, &diagnostics)
 	if err != nil {
 		t.Fatal(err)
 	}
