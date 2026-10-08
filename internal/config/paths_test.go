@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Kzeezee/travis/internal/core"
@@ -31,6 +32,19 @@ func TestBuildPathSetFromInputsUsesTravisHome(t *testing.T) {
 	}
 	if want := filepath.Join(workspace, ".travis", "config.toml"); got.WorkspaceConfigFile != want {
 		t.Fatalf("WorkspaceConfigFile = %q, want %q", got.WorkspaceConfigFile, want)
+	}
+}
+
+func TestBuildPathSetFromInputsKeepsTheRuntimeDirOutOfTravisHome(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "workspace")
+
+	got, err := buildPathSetFromInputs(buildEnvLookupFromMap(map[string]string{"TRAVIS_HOME": root}), filepath.Join(t.TempDir(), "home"), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(got.RuntimeDir) || strings.HasPrefix(got.RuntimeDir, root) {
+		t.Fatalf("RuntimeDir = %q, want an absolute OS directory outside TRAVIS_HOME %q", got.RuntimeDir, root)
 	}
 }
 

@@ -10,9 +10,12 @@ import (
 )
 
 type PathSet struct {
-	ConfigDir           string
-	StateDir            string
-	CacheDir            string
+	ConfigDir string
+	StateDir  string
+	CacheDir  string
+	// RuntimeDir holds per-session broker sockets. It is OS-chosen and short, even under
+	// TRAVIS_HOME, because Unix socket paths are limited to about 104 bytes.
+	RuntimeDir          string
 	SystemConfigFile    string
 	WorkspaceDir        string
 	WorkspaceConfigFile string
@@ -40,6 +43,17 @@ func BuildCurrentPathSet() (PathSet, error) {
 }
 
 func buildPathSetFromInputs(lookup envLookup, home, cwd string) (PathSet, error) {
+	paths, err := buildPersistentPathSet(lookup, home, cwd)
+	if err != nil {
+		return PathSet{}, err
+	}
+	if paths.RuntimeDir, err = cleanAbsolutePath("runtime directory", selectRuntimeDirForOS(lookup)); err != nil {
+		return PathSet{}, err
+	}
+	return paths, nil
+}
+
+func buildPersistentPathSet(lookup envLookup, home, cwd string) (PathSet, error) {
 	workspaceDir, err := cleanAbsolutePath("workspace directory", cwd)
 	if err != nil {
 		return PathSet{}, err
