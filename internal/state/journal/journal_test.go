@@ -350,7 +350,7 @@ func TestCrashBetweenSnapshotAndWrite(t *testing.T) {
 
 func runCrashHelperUntilKilled(t *testing.T, dir, target, killAfter string) {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestCrashHelper$")
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCrashHelper$")
 	cmd.Env = append(os.Environ(), crashHelperEnv+"=1", "JOURNAL_DIR="+dir, "TARGET="+target, "KILL_AFTER="+killAfter)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
