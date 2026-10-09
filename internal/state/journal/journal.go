@@ -1,6 +1,8 @@
 // Package journal snapshots files into a content-addressed blob store and logs each change per session, so a turn's writes can be undone (DESIGN.md §5.15).
 package journal
 
+// ponytail: no retention, blobs and logs grow until a retention config and GC of unreferenced blobs land
+
 import (
 	"bytes"
 	"context"
@@ -11,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/Kzeezee/travis/internal/core"
@@ -111,9 +114,12 @@ func (j *Journal) Snapshot(ctx context.Context, path string) (BlobRef, error) {
 
 // writeBlob stores data at blobs/<ref[:2]>/<ref> via temp+rename; an existing blob is a dedup hit (D-32 rule 2).
 func (j *Journal) writeBlob(ref BlobRef, data []byte) error {
+	blob, err := j.buildBlobPath(ref)
+	if err != nil {
+		return err
+	}
 	blobs := filepath.Join(j.dir, "blobs")
-	shard := filepath.Clean(filepath.Join(blobs, string(ref[:2])))
-	blob := filepath.Clean(filepath.Join(shard, string(ref)))
+	shard := filepath.Dir(blob)
 	if _, err := os.Stat(blob); err == nil {
 		return nil
 	}
@@ -147,6 +153,139 @@ func (j *Journal) writeBlob(ref BlobRef, data []byte) error {
 	}
 	if err := syncDir(blobs); err != nil {
 		return fmt.Errorf("journal: sync blobs: %w", err)
+	}
+	return nil
+}
+
+// Record appends one change to the session log and syncs it.
+func (j *Journal) Record(turn, call core.ID, path string, before, after BlobRef) error {
+	if turn == "" {
+		return errors.New("journal: empty turn id")
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("journal: path must be absolute, got %q", path)
+	}
+	change := Change{Turn: turn, Call: call, Path: path, Before: before, After: after}
+	line, err := json.Marshal(change)
+	if err != nil {
+		return fmt.Errorf("journal: encode change: %w", err)
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if _, err := j.log.Write(append(line, '\n')); err != nil {
+		return fmt.Errorf("journal: append change: %w", err)
+	}
+	if err := j.log.Sync(); err != nil {
+		return fmt.Errorf("journal: sync log: %w", err)
+	}
+	j.changes = append(j.changes, change)
+	return nil
+}
+
+// Changes returns a copy of turn's changes in recorded order.
+func (j *Journal) Changes(turn core.ID) []Change {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var matched []Change
+	for _, change := range j.changes {
+		if change.Turn == turn {
+			matched = append(matched, change)
+		}
+	}
+	return matched
+}
+
+// Restore puts back each selected change's Before, newest first, and reports the restored
+// paths once each in restore order; on error it returns the paths restored so far.
+func (j *Journal) Restore(ctx context.Context, sel Selector) ([]string, error) {
+	changes := j.Changes(sel.Turn)
+	var restored []string
+	seen := make(map[string]bool)
+	for _, change := range slices.Backward(changes) {
+		if err := ctx.Err(); err != nil {
+			return restored, err
+		}
+		if err := j.restoreChange(change); err != nil {
+			return restored, err
+		}
+		if !seen[change.Path] {
+			seen[change.Path] = true
+			restored = append(restored, change.Path)
+		}
+	}
+	return restored, nil
+}
+
+func (j *Journal) restoreChange(change Change) error {
+	if change.Before == "" {
+		if err := os.Remove(change.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("journal: remove %s: %w", change.Path, err)
+		}
+		return nil
+	}
+	data, err := j.readVerifiedBlob(change.Before)
+	if err != nil {
+		return err
+	}
+	return writeFileDurably(change.Path, data)
+}
+
+// readVerifiedBlob rereads a blob and rejects it unless its bytes still hash to ref.
+func (j *Journal) readVerifiedBlob(ref BlobRef) ([]byte, error) {
+	blob, err := j.buildBlobPath(ref)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(blob)
+	if err != nil {
+		return nil, fmt.Errorf("journal: read blob %s: %w", ref, err)
+	}
+	sum := sha256.Sum256(data)
+	if hex.EncodeToString(sum[:]) != string(ref) {
+		return nil, fmt.Errorf("journal: blob %s is corrupt", ref)
+	}
+	return data, nil
+}
+
+// buildBlobPath validates ref as a SHA-256 hex digest, since refs replayed from disk are untrusted.
+func (j *Journal) buildBlobPath(ref BlobRef) (string, error) {
+	if digest, err := hex.DecodeString(string(ref)); err != nil || len(digest) != sha256.Size {
+		return "", fmt.Errorf("journal: invalid blob ref %q", ref)
+	}
+	return filepath.Join(j.dir, "blobs", string(ref[:2]), string(ref)), nil
+}
+
+// writeFileDurably replaces path via temp+rename in its own dir, keeping the current mode.
+func writeFileDurably(path string, data []byte) error {
+	mode := os.FileMode(journalFileMode) // ponytail: recreated files get 0600, record mode in Change if users notice
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".travis-restore-*")
+	if err != nil {
+		return fmt.Errorf("journal: create temp for %s: %w", path, err)
+	}
+	tmpName := tmp.Name()
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Chmod(mode)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmpName, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("journal: restore %s: %w", path, err)
+	}
+	if err := syncDir(dir); err != nil {
+		return fmt.Errorf("journal: sync %s: %w", dir, err)
 	}
 	return nil
 }
