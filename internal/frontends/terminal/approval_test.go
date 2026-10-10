@@ -137,6 +137,28 @@ func TestViewShowsThePendingApprovalInPlaceOfTheInput(t *testing.T) {
 	}
 }
 
+// TestViewKeepsTheLegendWholeEvenWithALongExplanation guards against truncating the whole
+// modal line as one block: a long policy.Explain trace must not eat into, or hide, the
+// [y]/[a]/[n] legend the keyboard actually depends on.
+func TestViewKeepsTheLegendWholeEvenWithALongExplanation(t *testing.T) {
+	m := buildTestModel(func(context.Context, string) error { return nil })
+	m.pendingApproval = &core.ApprovalRequest{
+		Operation: core.Operation{
+			Kind:   core.CapabilityFSWrite,
+			Target: "/workspace/notes/today.md",
+			Explanation: "pass: fs_write \"/workspace/notes/today.md\" is resolved\n" +
+				"pass: fs_write \"/workspace/notes/today.md\" matches no deny rule\n" +
+				"deny: no fs_write grant covers \"/workspace/notes/today.md\"",
+		},
+		Respond: func(core.ApprovalDecision) {},
+	}
+
+	view := renderPlainView(m)
+	if !strings.Contains(view, "[y] once · [a] always · [n] deny") {
+		t.Fatalf("got view\n%s\nwant the full legend kept intact despite the long explanation", view)
+	}
+}
+
 func TestChannelApproverReturnsOnContextCancellation(t *testing.T) {
 	requests := make(chan core.ApprovalRequest) // unbuffered and never drained
 	approver := BuildApprover(requests)
