@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -40,7 +39,7 @@ func (b *LocalBroker) AddDecisionRule(ctx context.Context, rule core.DecisionRul
 		return err
 	}
 	if rule.AddedAt.IsZero() {
-		rule.AddedAt = time.Now().UTC()
+		rule.AddedAt = b.clock.ReportCurrentTime().UTC()
 	}
 
 	path := filepath.Join(b.root, filepath.FromSlash(decisionsRelPath))
@@ -60,7 +59,7 @@ func (b *LocalBroker) AddDecisionRule(ctx context.Context, rule core.DecisionRul
 	if err := lockExclusive(file); err != nil {
 		return fmt.Errorf("decisions: lock: %w", err)
 	}
-	defer unlockExclusive(file)
+	defer func() { _ = unlockExclusive(file) }()
 
 	if _, err := file.Seek(0, io.SeekEnd); err != nil {
 		return fmt.Errorf("decisions: seek: %w", err)

@@ -21,6 +21,8 @@ const (
 
 func (d ApprovalDecision) String() string {
 	switch d {
+	case ApprovalDenied:
+		return "denied"
 	case ApprovalOnce:
 		return "once"
 	case ApprovalAlways:

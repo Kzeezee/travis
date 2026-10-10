@@ -22,17 +22,19 @@ type LocalBroker struct {
 	root  string
 	// resolvedRoot is root with symlinks evaluated, so confinement compares like with like.
 	resolvedRoot string
+	// clock stamps AddDecisionRule's AddedAt; injected so tests can use a FixedClock.
+	clock core.Clock
 }
 
 var _ core.Broker = (*LocalBroker)(nil)
 
-func BuildLocalBroker(workspaceDir string) *LocalBroker {
+func BuildLocalBroker(workspaceDir string, clock core.Clock) *LocalBroker {
 	root := filepath.Clean(workspaceDir)
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		resolvedRoot = root
 	}
-	return &LocalBroker{paths: config.PathSet{WorkspaceDir: root}, root: root, resolvedRoot: resolvedRoot}
+	return &LocalBroker{paths: config.PathSet{WorkspaceDir: root}, root: root, resolvedRoot: resolvedRoot, clock: clock}
 }
 
 func (b *LocalBroker) DescribePath(ctx context.Context, path string) (core.PathInfo, error) {
