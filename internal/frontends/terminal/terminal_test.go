@@ -20,7 +20,7 @@ func TestRunChatRefusesNonTerminalIO(t *testing.T) {
 	}
 	opts := Options{Input: strings.NewReader("hello\r"), Output: &strings.Builder{}}
 
-	if err := RunChat(context.Background(), nil, runTurn, opts); !errors.Is(err, ErrNotInteractive) {
+	if err := RunChat(context.Background(), nil, nil, runTurn, opts); !errors.Is(err, ErrNotInteractive) {
 		t.Fatalf("got error %v, want %v", err, ErrNotInteractive)
 	}
 }
@@ -101,7 +101,7 @@ func TestSubmittedPromptRunsATurnAndReportsItsOutcome(t *testing.T) {
 }
 
 func TestStartupWarningsShowInTheFirstFrame(t *testing.T) {
-	m := buildChatModel(context.Background(), make(chan core.Event), nil,
+	m := buildChatModel(context.Background(), make(chan core.Event), nil, nil,
 		Options{ModelName: "test-model", StartupWarnings: []string{"config: unknown key brain.max_stepz"}})
 
 	if view := renderPlainView(m); !strings.Contains(view, "⚠ config: unknown key brain.max_stepz") {
@@ -227,7 +227,7 @@ func typedKeys(text string) []tea.Msg {
 }
 
 func buildTestModel(runTurn func(context.Context, string) error) chatModel {
-	return buildChatModel(context.Background(), make(chan core.Event), runTurn, Options{ModelName: "test-model"})
+	return buildChatModel(context.Background(), make(chan core.Event), nil, runTurn, Options{ModelName: "test-model"})
 }
 
 func updateModel(m chatModel, msg tea.Msg) (chatModel, tea.Cmd) {

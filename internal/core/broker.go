@@ -19,6 +19,10 @@ type Broker interface {
 	ListDirectory(ctx context.Context, path string) ([]PathInfo, error)
 	// OpenFile opens a regular file for reading; the caller closes Content.
 	OpenFile(ctx context.Context, path string) (OpenedFile, error)
+	// AddDecisionRule durably narrows one future Ask verdict to Allow (D-30). Callers must
+	// reach this only through a real keypress in the approval modal — see
+	// internal/security/rules for why nothing else may construct a DecisionRule.
+	AddDecisionRule(ctx context.Context, rule DecisionRule) error
 }
 
 type PathKind string

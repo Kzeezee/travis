@@ -17,7 +17,8 @@ import (
 )
 
 // ProtocolVersion is carried on every request; a broker refuses any version it does not speak.
-const ProtocolVersion uint16 = 1
+// v2 adds OpAddDecisionRule and its Rule* fields; v1's ops, fields, and bytes are untouched.
+const ProtocolVersion uint16 = 2
 
 const (
 	// MaxFrameBytes bounds what either side allocates for one message.
@@ -36,6 +37,8 @@ const (
 	OpOpenFile  Op = "open_file"
 	OpReadFile  Op = "read_file"
 	OpCloseFile Op = "close_file"
+	// OpAddDecisionRule durably narrows one future Ask verdict to Allow (D-30); added in v2.
+	OpAddDecisionRule Op = "add_decision_rule"
 )
 
 type Request struct {
@@ -46,6 +49,11 @@ type Request struct {
 	Path     string `msgpack:"path,omitempty"`
 	Handle   uint64 `msgpack:"handle,omitempty"`
 	MaxBytes uint32 `msgpack:"max_bytes,omitempty"`
+	// Rule* are set only for OpAddDecisionRule; the broker stamps AddedAt itself, never the client.
+	RuleKind     string `msgpack:"rule_kind,omitempty"`
+	RuleScope    string `msgpack:"rule_scope,omitempty"`
+	RuleDecision string `msgpack:"rule_decision,omitempty"`
+	RuleSource   string `msgpack:"rule_source,omitempty"`
 }
 
 type Response struct {
@@ -130,6 +138,10 @@ func validateRequest(req Request) error {
 		if req.Handle == 0 {
 			return fmt.Errorf("%s needs a handle: %w", req.Op, core.ErrInvalid)
 		}
+	case OpAddDecisionRule:
+		if req.RuleKind == "" || req.RuleScope == "" || req.RuleDecision == "" {
+			return fmt.Errorf("%s needs rule_kind, rule_scope and rule_decision: %w", req.Op, core.ErrInvalid)
+		}
 	default:
 		return fmt.Errorf("unknown op %q: %w", req.Op, core.ErrInvalid)
 	}
@@ -150,6 +162,34 @@ func ConvertPathInfoMessage(msg PathInfo) (core.PathInfo, error) {
 		return core.PathInfo{}, fmt.Errorf("unknown path kind %q: %w", msg.Kind, core.ErrInvalid)
 	}
 	return core.PathInfo{Path: msg.Path, WorkspacePath: msg.WorkspacePath, Kind: kind}, nil
+}
+
+// BuildDecisionRuleRequest converts a decision rule into the wire's flat Rule* fields.
+func BuildDecisionRuleRequest(id uint64, rule core.DecisionRule) Request {
+	return Request{
+		Version:      ProtocolVersion,
+		ID:           id,
+		Op:           OpAddDecisionRule,
+		RuleKind:     string(rule.Kind),
+		RuleScope:    rule.Scope,
+		RuleDecision: string(rule.Decision),
+		RuleSource:   rule.Source,
+	}
+}
+
+// ConvertDecisionRuleRequest validates a wire request's Rule* fields into a core decision
+// rule; the broker stamps AddedAt itself.
+func ConvertDecisionRuleRequest(req Request) (core.DecisionRule, error) {
+	decision := core.DecisionOutcome(req.RuleDecision)
+	if decision != core.DecisionAllow {
+		return core.DecisionRule{}, fmt.Errorf("unknown rule_decision %q: %w", req.RuleDecision, core.ErrInvalid)
+	}
+	return core.DecisionRule{
+		Kind:     core.CapabilityKind(req.RuleKind),
+		Scope:    req.RuleScope,
+		Decision: decision,
+		Source:   req.RuleSource,
+	}, nil
 }
 
 // BuildErrorBody classifies a broker error for the wire; the cause's text travels as Message.

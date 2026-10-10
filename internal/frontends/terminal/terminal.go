@@ -43,9 +43,11 @@ type Options struct {
 
 // RunChat runs the interactive chat until the user quits or input ends. runTurn is the
 // assistant-turn operation; the frontend calls it without knowing what implements it.
+// approvals delivers pending Ask decisions for the modal to answer (D-10).
 func RunChat(
 	ctx context.Context,
 	events <-chan core.Event,
+	approvals <-chan core.ApprovalRequest,
 	runTurn func(ctx context.Context, prompt string) error,
 	opts Options,
 ) error {
@@ -59,7 +61,7 @@ func RunChat(
 	// Bubble Tea recovers panics in View, Update, and Cmds, restores the terminal, and prints the
 	// trace (DESIGN.md §5.9); passing tea.WithoutCatchPanics would give that up.
 	program := tea.NewProgram(
-		buildChatModel(ctx, events, runTurn, opts),
+		buildChatModel(ctx, events, approvals, runTurn, opts),
 		tea.WithInput(input),
 		tea.WithOutput(opts.Output),
 	)
@@ -119,8 +121,20 @@ type turnFinishedMsg struct {
 
 type inputEndedMsg struct{}
 
+type approvalRequestedMsg struct{ request core.ApprovalRequest }
+
 func listenForEvents(events <-chan core.Event) tea.Cmd {
 	return func() tea.Msg { return collectEventBatch(events, coalesceWindow) }
+}
+
+func listenForApprovals(approvals <-chan core.ApprovalRequest) tea.Cmd {
+	return func() tea.Msg {
+		request, isOpen := <-approvals
+		if !isOpen {
+			return nil
+		}
+		return approvalRequestedMsg{request: request}
+	}
 }
 
 // collectEventBatch waits for one event, then gathers whatever else arrives within the window.
@@ -157,13 +171,15 @@ func collectEventBatch(events <-chan core.Event, window time.Duration) eventBatc
 type chatModel struct {
 	ctx       context.Context
 	events    <-chan core.Event
+	approvals <-chan core.ApprovalRequest
 	runTurn   func(context.Context, string) error
 	modelName string
 
-	transcript transcript
-	viewport   viewport.Model
-	input      textinput.Model
-	width      int
+	transcript      transcript
+	viewport        viewport.Model
+	input           textinput.Model
+	width           int
+	pendingApproval *core.ApprovalRequest
 
 	cancelTurn        context.CancelFunc // set only while a turn runs
 	isCancelRequested bool
@@ -174,6 +190,7 @@ type chatModel struct {
 func buildChatModel(
 	ctx context.Context,
 	events <-chan core.Event,
+	approvals <-chan core.ApprovalRequest,
 	runTurn func(context.Context, string) error,
 	opts Options,
 ) chatModel {
@@ -182,14 +199,17 @@ func buildChatModel(
 	input.SetVirtualCursor(false)
 	input.Focus()
 
-	m := chatModel{ctx: ctx, events: events, runTurn: runTurn, modelName: opts.ModelName, viewport: viewport.New(), input: input}
+	m := chatModel{
+		ctx: ctx, events: events, approvals: approvals, runTurn: runTurn, modelName: opts.ModelName,
+		viewport: viewport.New(), input: input,
+	}
 	m.transcript.warnings = opts.StartupWarnings
 	m.resize(defaultWidth, defaultHeight)
 	return m
 }
 
 func (m chatModel) Init() tea.Cmd {
-	return listenForEvents(m.events)
+	return tea.Batch(listenForEvents(m.events), listenForApprovals(m.approvals))
 }
 
 func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -210,6 +230,10 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !msg.isChannelClosed {
 			return m, listenForEvents(m.events)
 		}
+	case approvalRequestedMsg:
+		m.pendingApproval = &msg.request
+		// Not re-armed here: only one modal at a time; handleApprovalKey re-arms it once answered.
+		return m, nil
 	case turnFinishedMsg:
 		return m.finishTurn(msg)
 	case inputEndedMsg:
@@ -222,7 +246,12 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // handleKey routes keys: only PgUp/PgDn reach the transcript, so typing never scrolls it.
+// A pending approval takes every key first, so nothing typed while the modal is up can
+// leak through to the input or the transcript.
 func (m chatModel) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.pendingApproval != nil {
+		return m.handleApprovalKey(key)
+	}
 	isTurnRunning := m.cancelTurn != nil
 	switch key.String() {
 	case "ctrl+c":
@@ -254,6 +283,31 @@ func (m chatModel) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(key)
 	return m, cmd
+}
+
+// handleApprovalKey answers the pending approval (D-10, keyboard-only): y/a/n are the
+// only decisions, anything else is swallowed. This is the one place in the program that
+// can produce ApprovalAlways, and it is reachable only from a real tea.KeyPressMsg the
+// terminal generated — never from model output.
+func (m chatModel) handleApprovalKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	var decision core.ApprovalDecision
+	switch key.String() {
+	case "y":
+		decision = core.ApprovalOnce
+	case "a":
+		decision = core.ApprovalAlways
+	case "n", "esc":
+		decision = core.ApprovalDenied
+	default:
+		return m, nil
+	}
+
+	respond := m.pendingApproval.Respond
+	m.pendingApproval = nil
+	return m, tea.Batch(
+		func() tea.Msg { respond(decision); return nil },
+		listenForApprovals(m.approvals),
+	)
 }
 
 func (m chatModel) submitPrompt() (tea.Model, tea.Cmd) {

@@ -8,6 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/Kzeezee/travis/internal/core"
 )
 
 const ellipsis = "…"
@@ -25,20 +27,42 @@ func (m chatModel) View() tea.View {
 	separator := dimStyle.Render(strings.Repeat("─", m.width))
 	statusBar := fmt.Sprintf(" %s · %s · last turn: %s", m.modelName, m.reportTurnState(), reportOutcome(m.lastTurnOutcome))
 
+	inputLine := m.input.View()
+	if m.pendingApproval != nil {
+		inputLine = renderApprovalModal(*m.pendingApproval, m.width)
+	}
 	view := tea.NewView(strings.Join([]string{
 		m.viewport.View(),
 		separator,
-		m.input.View(),
+		inputLine,
 		separator,
 		dimStyle.Render(ansi.Truncate(statusBar, m.width, ellipsis)),
 	}, "\n"))
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
-	if cursor := m.input.Cursor(); cursor != nil {
+	if cursor := m.input.Cursor(); cursor != nil && m.pendingApproval == nil {
 		cursor.Y += m.viewport.Height() + 1
 		view.Cursor = cursor
 	}
 	return view
+}
+
+// approvalLegend is the only three answers the keyboard accepts; it must always be fully
+// visible, so renderApprovalModal truncates the explanation around it rather than
+// truncating the whole line and risking cutting the legend off.
+const approvalLegend = "[y] once · [a] always · [n] deny"
+
+// renderApprovalModal replaces the input line while a decision is pending (D-10): it shows
+// what is being asked, why (policy.Explain's trace, flattened like a collapsed thought so
+// it still fits the one-line input row), and the legend, with the legend always kept whole.
+func renderApprovalModal(request core.ApprovalRequest, width int) string {
+	op := request.Operation
+	explanation := strings.Join(strings.Fields(op.Explanation), " ")
+	prefix := fmt.Sprintf(" %s %s — %s · ", op.Kind, op.Target, explanation)
+
+	available := max(width-1-lipgloss.Width(approvalLegend), lipgloss.Width(ellipsis))
+	line := ansi.Truncate(prefix, available, ellipsis) + approvalLegend
+	return assistantLabelStyle.Render(ansi.Truncate(line, max(width-1, 1), ellipsis))
 }
 
 func (m chatModel) reportTurnState() string {
