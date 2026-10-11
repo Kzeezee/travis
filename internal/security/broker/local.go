@@ -132,18 +132,17 @@ func replaceFileAtomically(dir, target string, content []byte, perm fs.FileMode)
 			_ = os.Remove(tempPath)
 		}
 	}()
-	if _, err := temp.Write(content); err != nil {
-		_ = temp.Close()
-		return err
+	_, err = temp.Write(content)
+	if err == nil {
+		err = temp.Chmod(perm)
 	}
-	if err := temp.Sync(); err != nil {
-		_ = temp.Close()
-		return err
+	if err == nil {
+		err = temp.Sync()
 	}
-	if err := temp.Close(); err != nil {
-		return err
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
 	}
-	if err := os.Chmod(tempPath, perm); err != nil {
+	if err != nil {
 		return err
 	}
 	if err := os.Rename(tempPath, target); err != nil {

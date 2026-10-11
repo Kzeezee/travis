@@ -342,7 +342,7 @@ func TestWriteTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
 				`{"path":"`+confirmation+`","old_string":"Tuesday 13 October 2026, 09:30\n","new_string":"Tuesday 13 October 2026, 10:15\n"}`)
 		},
 		func(t *testing.T, request core.ProviderRequest) []core.Chunk {
-			requireContains(t, "fs_edit", readLatestToolResult(t, request).Content, `"replacements":1`)
+			requireContains(t, "fs_edit", readLatestToolResult(t, request).Content, `"bytes_written"`)
 			return buildToolCallChunks("call-write", "fs_write", `{"path":"summary.md","content":"Dentist moved to 10:15.\nRoom 4.\n"}`)
 		},
 		func(t *testing.T, request core.ProviderRequest) []core.Chunk {

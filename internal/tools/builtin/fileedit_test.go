@@ -43,7 +43,7 @@ func TestEditReplacesASingleMatch(t *testing.T) {
 	if got := readDisk(t, path); got != "alpha\nBETA\ngamma\n" {
 		t.Fatalf("disk = %q", got)
 	}
-	if !strings.Contains(output.Content, `"replacements":1`) || !strings.Contains(output.Content, `"bytes_written":17`) {
+	if !strings.Contains(output.Content, `"bytes_written":17`) {
 		t.Fatalf("output = %s", output.Content)
 	}
 }

@@ -27,11 +27,7 @@ func detectLineEnding(data []byte) string {
 
 // applyLineEnding normalises text to LF, then converts every line break to eol.
 func applyLineEnding(text, eol string) string {
-	normalized := strings.ReplaceAll(text, "\r\n", "\n")
-	if eol == "\n" {
-		return normalized
-	}
-	return strings.ReplaceAll(normalized, "\n", eol)
+	return strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\n", eol)
 }
 
 // readWholeFileCapped reads a text file through the broker, failing with errContentTooLarge

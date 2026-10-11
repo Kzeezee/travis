@@ -69,13 +69,12 @@ func (t *FileEditTool) Invoke(ctx context.Context, arguments json.RawMessage) (c
 	data, err := readWholeFileCapped(ctx, t.broker, args.Path, t.maxBytes)
 	if err == nil {
 		eol := detectLineEnding(data)
-		edited, occurrences := spliceSingleOccurrence(applyLineEnding(string(data), "\n"),
-			applyLineEnding(args.OldString, "\n"), applyLineEnding(args.NewString, "\n"))
-		if occurrences != 1 {
+		file, old := applyLineEnding(string(data), "\n"), applyLineEnding(args.OldString, "\n")
+		if occurrences := strings.Count(file, old); occurrences != 1 {
 			return buildAnchorErrorOutput(args.Path, occurrences), nil
 		}
 		var info core.PathInfo
-		content := []byte(applyLineEnding(edited, eol))
+		content := []byte(applyLineEnding(strings.Replace(file, old, applyLineEnding(args.NewString, "\n"), 1), eol))
 		if info, err = t.broker.WriteFile(ctx, args.Path, content); err == nil {
 			return describeEdit(info, len(content)), nil
 		}
@@ -99,22 +98,12 @@ func (t *FileEditTool) validateArgs(args fileEditArgs) (core.ToolOutput, bool) {
 		return buildErrorOutput(errorInvalidArguments, map[string]any{"detail": "old_string must not be empty"}), true
 	case args.OldString == args.NewString:
 		return buildErrorOutput(errorInvalidArguments, map[string]any{"detail": "old_string and new_string are identical"}), true
-	case int64(len(args.OldString)) > t.maxBytes || int64(len(args.NewString)) > t.maxBytes:
+	case int64(len(args.NewString)) > t.maxBytes:
 		return buildErrorOutput(errorContentTooLarge, map[string]any{
-			"path": args.Path, "detail": fmt.Sprintf("old_string or new_string exceeds %d bytes", t.maxBytes),
+			"path": args.Path, "detail": fmt.Sprintf("new_string exceeds %d bytes", t.maxBytes),
 		}), true
 	}
 	return core.ToolOutput{}, false
-}
-
-// spliceSingleOccurrence replaces old with replacement only when old occurs exactly once,
-// returning the file unchanged otherwise, along with the occurrence count.
-func spliceSingleOccurrence(file, old, replacement string) (string, int) {
-	occurrences := strings.Count(file, old)
-	if occurrences != 1 {
-		return file, occurrences
-	}
-	return strings.Replace(file, old, replacement, 1), occurrences
 }
 
 func buildAnchorErrorOutput(path string, occurrences int) core.ToolOutput {
@@ -128,7 +117,7 @@ func buildAnchorErrorOutput(path string, occurrences int) core.ToolOutput {
 
 func describeEdit(info core.PathInfo, bytesWritten int) core.ToolOutput {
 	content, _ := json.Marshal(map[string]any{
-		"path": info.WorkspacePath, "bytes_written": bytesWritten, "replacements": 1,
+		"path": info.WorkspacePath, "bytes_written": bytesWritten,
 	})
 	return core.ToolOutput{Content: string(content), Display: "edited " + info.WorkspacePath}
 }
