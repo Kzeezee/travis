@@ -25,6 +25,7 @@ type Config struct {
 	Brain    BrainCfg
 	Tools    ToolsCfg
 	Eval     EvalCfg
+	Session  SessionCfg
 }
 
 // ProviderCfg selects which model profile is live and lists every profile a user has
@@ -74,6 +75,12 @@ type ToolsCfg struct {
 // the agent did inside it.
 type EvalCfg struct {
 	Traces bool
+}
+
+// SessionCfg bounds what the change journal stores (DESIGN.md 5.15). The workspace
+// layer cannot set it: a cloned repo must not be able to size the journal.
+type SessionCfg struct {
+	SnapshotMaxBytes int64 `toml:"snapshot_max_bytes"`
 }
 
 // workspaceLayerCfg is every field the workspace config file (.travis/config.toml) is
@@ -197,9 +204,10 @@ func buildDefaultConfig() Config {
 				},
 			},
 		},
-		Brain: BrainCfg{MaxSteps: 40},
-		Tools: ToolsCfg{ApprovalDefault: "ask", MaxExposed: 60},
-		Eval:  EvalCfg{Traces: true},
+		Brain:   BrainCfg{MaxSteps: 40},
+		Tools:   ToolsCfg{ApprovalDefault: "ask", MaxExposed: 60},
+		Eval:    EvalCfg{Traces: true},
+		Session: SessionCfg{SnapshotMaxBytes: 16 << 20},
 	}
 }
 
@@ -354,6 +362,10 @@ func (c *Config) Validate() Diagnostics {
 
 	if c.Brain.MaxSteps <= 0 {
 		diags = append(diags, Diagnostic{Severity: SeverityError, Message: "brain.max_steps must be positive"})
+	}
+
+	if c.Session.SnapshotMaxBytes <= 0 {
+		diags = append(diags, Diagnostic{Severity: SeverityError, Message: "session.snapshot_max_bytes must be positive"})
 	}
 
 	if c.Tools.MaxExposed <= 0 {
