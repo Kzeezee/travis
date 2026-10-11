@@ -88,18 +88,89 @@ func (b *LocalBroker) OpenFile(ctx context.Context, path string) (core.OpenedFil
 	return core.OpenedFile{Info: info, Content: file}, nil
 }
 
+func (b *LocalBroker) WriteFile(ctx context.Context, path string, content []byte) (core.PathInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return core.PathInfo{}, err
+	}
+	target, err := b.resolveWritableInsideWorkspace(path)
+	if err != nil {
+		return core.PathInfo{}, err
+	}
+	perm := fs.FileMode(0o644)
+	existing, err := os.Lstat(target)
+	switch {
+	case err == nil && existing.IsDir():
+		return core.PathInfo{}, fmt.Errorf("%q: %w", path, core.ErrIsDirectory)
+	case err == nil && !existing.Mode().IsRegular():
+		return core.PathInfo{}, fmt.Errorf("%q is not a regular file: %w", path, core.ErrInvalid)
+	case err == nil:
+		perm = existing.Mode().Perm()
+	case !errors.Is(err, fs.ErrNotExist):
+		return core.PathInfo{}, translatePathError(path, err)
+	}
+	parent := filepath.Dir(target)
+	if err := os.MkdirAll(parent, 0o750); err != nil {
+		return core.PathInfo{}, translatePathError(path, err)
+	}
+	if err := replaceFileAtomically(parent, target, content, perm); err != nil {
+		return core.PathInfo{}, translatePathError(path, err)
+	}
+	return b.describeResolvedPath(target, perm), nil
+}
+
+// replaceFileAtomically writes to a sibling temp file and renames it over target, so readers
+// see either the old bytes or the new ones, never a partial write.
+func replaceFileAtomically(dir, target string, content []byte, perm fs.FileMode) error {
+	temp, err := os.CreateTemp(dir, ".travis-write-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	isRenamed := false
+	defer func() {
+		if !isRenamed {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if _, err := temp.Write(content); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tempPath, perm); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, target); err != nil {
+		return err
+	}
+	isRenamed = true
+	syncDirectory(dir)
+	return nil
+}
+
+// syncDirectory persists the rename; some platforms (Windows) cannot sync a directory, and the
+// rename has already happened, so a failure here is not worth reporting.
+func syncDirectory(dir string) {
+	handle, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	_ = handle.Sync()
+	_ = handle.Close()
+}
+
 // resolveInsideWorkspace turns a requested path into a real path on disk, allowed only if it
 // stays inside the workspace both as written and once symlinks are followed.
 func (b *LocalBroker) resolveInsideWorkspace(requested string) (string, error) {
-	resolved, err := b.paths.Resolve(requested)
+	resolved, err := b.resolveWrittenInsideWorkspace(requested)
 	if err != nil {
 		return "", err
-	}
-	// Checking before symlinks are followed keeps a path outside from revealing whether it exists;
-	// either form of the root is accepted, since paths this broker reported back are resolved.
-	isWrittenInside := isInsideRoot(b.root, resolved) || isInsideRoot(b.resolvedRoot, resolved)
-	if !filepath.IsAbs(resolved) || !isWrittenInside {
-		return "", b.reportOutsideWorkspace(requested)
 	}
 	evaluated, err := filepath.EvalSymlinks(resolved)
 	if err != nil {
@@ -109,6 +180,53 @@ func (b *LocalBroker) resolveInsideWorkspace(requested string) (string, error) {
 		return "", b.reportOutsideWorkspace(requested)
 	}
 	return evaluated, nil
+}
+
+// resolveWrittenInsideWorkspace checks the path as written, before any symlink is followed, so a
+// path outside cannot reveal whether it exists; either form of the root is accepted, since
+// paths this broker reported back are resolved.
+func (b *LocalBroker) resolveWrittenInsideWorkspace(requested string) (string, error) {
+	resolved, err := b.paths.Resolve(requested)
+	if err != nil {
+		return "", err
+	}
+	isWrittenInside := isInsideRoot(b.root, resolved) || isInsideRoot(b.resolvedRoot, resolved)
+	if !filepath.IsAbs(resolved) || !isWrittenInside {
+		return "", b.reportOutsideWorkspace(requested)
+	}
+	return resolved, nil
+}
+
+// resolveWritableInsideWorkspace is resolveInsideWorkspace for a target that may not exist yet:
+// it follows symlinks only up to the nearest existing ancestor and never through the final name.
+func (b *LocalBroker) resolveWritableInsideWorkspace(requested string) (string, error) {
+	resolved, err := b.resolveWrittenInsideWorkspace(requested)
+	if err != nil {
+		return "", err
+	}
+	ancestor, missingTail := filepath.Dir(resolved), filepath.Base(resolved)
+	for {
+		if _, err := os.Lstat(ancestor); err == nil {
+			break
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return "", translatePathError(requested, err)
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return "", translatePathError(requested, fs.ErrNotExist)
+		}
+		missingTail = filepath.Join(filepath.Base(ancestor), missingTail)
+		ancestor = parent
+	}
+	evaluatedAncestor, err := filepath.EvalSymlinks(ancestor)
+	if err != nil {
+		return "", translatePathError(requested, err)
+	}
+	target := filepath.Join(evaluatedAncestor, missingTail)
+	if !isInsideRoot(b.resolvedRoot, target) {
+		return "", b.reportOutsideWorkspace(requested)
+	}
+	return target, nil
 }
 
 func (b *LocalBroker) reportOutsideWorkspace(requested string) error {
