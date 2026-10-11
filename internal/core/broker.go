@@ -19,6 +19,8 @@ type Broker interface {
 	ListDirectory(ctx context.Context, path string) ([]PathInfo, error)
 	// OpenFile opens a regular file for reading; the caller closes Content.
 	OpenFile(ctx context.Context, path string) (OpenedFile, error)
+	// WriteFile creates or atomically replaces a regular file inside the workspace, creating parent dirs; never follows a final symlink.
+	WriteFile(ctx context.Context, path string, content []byte) (PathInfo, error)
 }
 
 type PathKind string
