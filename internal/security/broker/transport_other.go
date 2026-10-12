@@ -15,7 +15,7 @@ import (
 var errTransportUnsupportedOS = fmt.Errorf("no broker transport exists for this OS: %w", core.ErrUnsupported)
 
 func createEndpointForOS(string, string) (SessionEndpoint, func(), error) {
-	return SessionEndpoint{}, nil, errTransportUnsupportedOS
+	return "", nil, errTransportUnsupportedOS
 }
 
 func listenOnEndpoint(SessionEndpoint) (net.Listener, error) {

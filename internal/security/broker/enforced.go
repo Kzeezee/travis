@@ -52,7 +52,7 @@ func resolveRootSymlinks(root string) string {
 
 // PolicyEnforcedBroker is the broker process's effect performer: every path is checked by the
 // session policy, as written and once symlinks are followed, before any IO touches it
-// (§5.12.1). Ask is answered with core.ErrNeedsApproval; the client puts it to the human and
+// (§5.12.1). Ask is answered with core.ApprovalRequiredError; the client puts it to the human and
 // reports back with ApproveOnce or AddDecisionRule before retrying.
 type PolicyEnforcedBroker struct {
 	*LocalBroker
@@ -183,7 +183,7 @@ func (l *approvalLedger) allowAlways(c core.Capability) {
 }
 
 func (l *approvalLedger) settleOnce(effectErr error) {
-	if errors.Is(effectErr, core.ErrNeedsApproval) {
+	if errors.As(effectErr, new(*core.ApprovalRequiredError)) {
 		return
 	}
 	l.mu.Lock()

@@ -53,7 +53,7 @@ func run(ctx context.Context, args []string, readiness, diagnostics io.Writer) e
 	}
 	effects := broker.BuildPolicyEnforcedBroker(paths.WorkspaceDir, sessionPolicy, core.SystemClock{})
 
-	sessionListener, err := broker.ListenForSession(broker.SessionEndpoint{Address: *endpoint})
+	sessionListener, err := broker.ListenForSession(broker.SessionEndpoint(*endpoint))
 	if err != nil {
 		return err
 	}

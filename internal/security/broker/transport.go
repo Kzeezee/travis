@@ -25,32 +25,29 @@ const endpointNonceBytes = 8
 
 // SessionEndpoint is where one session's broker listens: a Unix socket path or a Windows pipe
 // name, carrying a random nonce so another local process cannot guess it (D-12).
-type SessionEndpoint struct {
-	Address string
-}
+type SessionEndpoint string
 
 // CreateSessionEndpoint makes a fresh endpoint for one session under runtimeDir. On Unix it
 // creates a private directory for the socket; removeEndpoint deletes whatever was created.
 func CreateSessionEndpoint(runtimeDir string) (endpoint SessionEndpoint, removeEndpoint func(), err error) {
 	nonce := make([]byte, endpointNonceBytes)
 	if _, err := rand.Read(nonce); err != nil {
-		return SessionEndpoint{}, nil, fmt.Errorf("broker endpoint nonce: %w", err)
+		return "", nil, fmt.Errorf("broker endpoint nonce: %w", err)
 	}
 	return createEndpointForOS(runtimeDir, hex.EncodeToString(nonce))
 }
 
 // SessionListener is a broker endpoint that is open but has not accepted its client yet.
 type SessionListener struct {
-	endpoint SessionEndpoint
 	listener net.Listener
 }
 
 func ListenForSession(endpoint SessionEndpoint) (*SessionListener, error) {
 	listener, err := listenOnEndpoint(endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("broker listen on %q: %w", endpoint.Address, err)
+		return nil, fmt.Errorf("broker listen on %q: %w", endpoint, err)
 	}
-	return &SessionListener{endpoint: endpoint, listener: listener}, nil
+	return &SessionListener{listener: listener}, nil
 }
 
 // ServeOneClient accepts exactly one connection, refuses it unless it comes from clientPID,
@@ -87,11 +84,11 @@ func (s *SessionListener) Close() error {
 func ConnectRemoteBroker(ctx context.Context, endpoint SessionEndpoint, brokerPID int, options RemoteOptions) (*RemoteBroker, error) {
 	conn, err := dialEndpoint(ctx, endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("broker unreachable at %q: %w", endpoint.Address, err)
+		return nil, fmt.Errorf("broker unreachable at %q: %w", endpoint, err)
 	}
 	if err := verifyPeerProcess(conn, brokerPID); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("refused broker at %q: %w", endpoint.Address, err)
+		return nil, fmt.Errorf("refused broker at %q: %w", endpoint, err)
 	}
 	return BuildRemoteBroker(conn, options), nil
 }

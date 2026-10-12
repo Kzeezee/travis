@@ -16,7 +16,7 @@ import (
 var errTransportNotBuilt = fmt.Errorf("the broker transport for Windows is not built yet: %w", core.ErrUnsupported)
 
 func createEndpointForOS(string, string) (SessionEndpoint, func(), error) {
-	return SessionEndpoint{}, nil, errTransportNotBuilt
+	return "", nil, errTransportNotBuilt
 }
 
 func listenOnEndpoint(SessionEndpoint) (net.Listener, error) {

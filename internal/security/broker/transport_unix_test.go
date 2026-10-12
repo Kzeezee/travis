@@ -58,11 +58,11 @@ func TestCreateSessionEndpointMakesAPrivateDirectoryPerSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := createEndpoint(t, runtimeDir)
-	if first.Address == second.Address {
-		t.Fatalf("two sessions share endpoint %q", first.Address)
+	if first == second {
+		t.Fatalf("two sessions share endpoint %q", first)
 	}
 
-	sessionDir := filepath.Dir(first.Address)
+	sessionDir := filepath.Dir(string(first))
 	info, err := os.Stat(sessionDir)
 	if err != nil {
 		t.Fatal(err)

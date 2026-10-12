@@ -52,7 +52,7 @@ func runHelperBroker(helperMode string, args []string) int {
 	if err != nil {
 		return 2
 	}
-	sessionListener, err := broker.ListenForSession(broker.SessionEndpoint{Address: *endpoint})
+	sessionListener, err := broker.ListenForSession(broker.SessionEndpoint(*endpoint))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "helper broker:", err)
 		return 1

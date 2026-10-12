@@ -80,7 +80,7 @@ func StartSessionBroker(ctx context.Context, launch SessionLaunch) (*SessionBrok
 
 	// The broker outlives the start-up context for the whole session; Close ends it.
 	brokerProcess := exec.CommandContext(context.WithoutCancel(ctx), launch.Executable, //nolint:gosec // the path comes from ResolveBrokerExecutable or a test, never from the model or config
-		"-endpoint", endpoint.Address,
+		"-endpoint", string(endpoint),
 		"-client-pid", strconv.Itoa(os.Getpid()),
 		"-profile", launch.Profile)
 	brokerProcess.Dir = launch.WorkspaceDir

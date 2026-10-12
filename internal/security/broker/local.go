@@ -25,7 +25,7 @@ type LocalBroker struct {
 	// resolvedRoot is root with symlinks evaluated, so confinement compares like with like.
 	resolvedRoot string
 	// authorizeRead and authorizeWrite refuse an absolute path with an error wrapping
-	// core.ErrDenied or core.ErrNeedsApproval. Workspace confinement is the default rule;
+	// core.ErrDenied or a *core.ApprovalRequiredError. Workspace confinement is the default rule;
 	// BuildPolicyEnforcedBroker replaces it with the session policy.
 	authorizeRead  func(path string) error
 	authorizeWrite func(path string) error
