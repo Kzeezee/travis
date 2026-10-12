@@ -323,7 +323,9 @@ func TestRemoteBrokerWritesThroughTheEnforcedBroker(t *testing.T) {
 	}
 }
 
-func TestRemoteBrokerReportsTheBrokerUnavailableOnce(t *testing.T) {
+// Every refused call reports the broken broker again, so a report the bus dropped is not the
+// only chance the red bar gets.
+func TestRemoteBrokerReportsTheBrokerUnavailableOnEveryRefusedCall(t *testing.T) {
 	enforced, _, _ := buildSessionBroker(t, "paranoid")
 	events := &recordingSink{}
 	remote, stop := startPipedBrokerWith(t, enforced, broker.RemoteOptions{Events: events})
@@ -333,8 +335,54 @@ func TestRemoteBrokerReportsTheBrokerUnavailableOnce(t *testing.T) {
 	for range 2 {
 		_, _ = remote.DescribePath(context.Background(), "a.txt")
 	}
-	if types := events.reportEventTypes(); len(types) != 1 || types[0] != core.EventBrokerUnavailable {
-		t.Fatalf("events = %v, want exactly one BrokerUnavailable", types)
+	types := events.reportEventTypes()
+	if len(types) != 2 || types[0] != core.EventBrokerUnavailable || types[1] != core.EventBrokerUnavailable {
+		t.Fatalf("events = %v, want BrokerUnavailable for each refused call", types)
+	}
+
+	_ = remote.Close()
+	_, _ = remote.DescribePath(context.Background(), "a.txt")
+	if got := len(events.reportEventTypes()); got != 2 {
+		t.Fatalf("%d events after Close, want no new report for a connection closed on purpose", got)
+	}
+}
+
+// blockingBroker never answers DescribePath until release closes, like a hung broker.
+type blockingBroker struct {
+	*broker.LocalBroker
+	release chan struct{}
+}
+
+func (b blockingBroker) DescribePath(ctx context.Context, path string) (core.PathInfo, error) {
+	<-b.release
+	return b.LocalBroker.DescribePath(ctx, path)
+}
+
+func TestRemoteBrokerCloseDoesNotWaitForAHungExchange(t *testing.T) {
+	hung := blockingBroker{broker.BuildLocalBroker(t.TempDir(), core.SystemClock{}), make(chan struct{})}
+	events := &recordingSink{}
+	remote, _ := startPipedBrokerWith(t, hung, broker.RemoteOptions{Events: events})
+	t.Cleanup(func() { close(hung.release) })
+
+	stalled := make(chan error, 1)
+	go func() {
+		_, err := remote.DescribePath(context.Background(), ".")
+		stalled <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	closed := make(chan error, 1)
+	go func() { closed <- remote.Close() }()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close waited behind a hung exchange")
+	}
+	if err := <-stalled; err == nil {
+		t.Fatal("the stalled call succeeded after Close")
+	}
+	if types := events.reportEventTypes(); len(types) != 0 {
+		t.Fatalf("events = %v, want none for a connection closed on purpose", types)
 	}
 }
 

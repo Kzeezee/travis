@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Kzeezee/travis/internal/core"
@@ -21,6 +22,9 @@ type RemoteBroker struct {
 	nextID uint64
 	// brokenErr is set by the first transport failure; after it the stream cannot be trusted.
 	brokenErr error
+	// isClosing is set by Close before it closes conn, so failures Close itself causes are not
+	// reported as the broker becoming unavailable.
+	isClosing atomic.Bool
 	options   RemoteOptions
 }
 
@@ -51,13 +55,40 @@ func BuildRemoteBroker(conn net.Conn, options RemoteOptions) *RemoteBroker {
 	return &RemoteBroker{conn: conn, options: options}
 }
 
+// Close ends the connection. conn is closed before taking the lock, so an exchange stuck on a
+// hung broker returns instead of holding Close up.
 func (r *RemoteBroker) Close() error {
+	r.isClosing.Store(true)
+	closeErr := r.conn.Close()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.brokenErr == nil {
 		r.brokenErr = fmt.Errorf("broker connection closed: %w", net.ErrClosed)
 	}
-	return r.conn.Close()
+	return closeErr
+}
+
+// reportBrokerExit marks the connection broken as soon as the broker process exits, so the red
+// bar does not wait for the next effect to find out.
+func (r *RemoteBroker) reportBrokerExit(exitErr error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.brokenErr == nil {
+		r.markBrokenLocked(context.Background(), errors.Join(errors.New("broker process exited"), exitErr))
+	}
+}
+
+// markBrokenLocked records that the stream is unusable and reports it; r.mu must be held.
+func (r *RemoteBroker) markBrokenLocked(ctx context.Context, cause error) {
+	r.brokenErr = fmt.Errorf("broker unreachable: %w", cause)
+	r.publishUnavailableLocked(ctx)
+}
+
+// publishUnavailableLocked reports the broken connection, unless Close broke it on purpose.
+func (r *RemoteBroker) publishUnavailableLocked(ctx context.Context) {
+	if !r.isClosing.Load() {
+		r.publish(ctx, core.BrokerUnavailable{EventHeader: r.buildEventHeader(), Reason: r.brokenErr.Error()})
+	}
 }
 
 func (r *RemoteBroker) DescribePath(ctx context.Context, path string) (core.PathInfo, error) {
@@ -191,6 +222,9 @@ func (r *RemoteBroker) exchange(ctx context.Context, req Request) (Response, err
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.brokenErr != nil {
+		// Every refusal repeats the fact: the bus drops events for a full subscriber, and the red
+		// bar must not hang on the first report getting through.
+		r.publishUnavailableLocked(ctx)
 		return Response{}, r.brokenErr
 	}
 
@@ -204,8 +238,7 @@ func (r *RemoteBroker) exchange(ctx context.Context, req Request) (Response, err
 	}
 	if err != nil {
 		// A half-sent request or half-read response leaves the stream unusable for everyone.
-		r.brokenErr = fmt.Errorf("broker unreachable: %w", err)
-		r.publish(ctx, core.BrokerUnavailable{EventHeader: r.buildEventHeader(), Reason: r.brokenErr.Error()})
+		r.markBrokenLocked(ctx, err)
 		return Response{}, r.brokenErr
 	}
 	if resp.Error != nil {

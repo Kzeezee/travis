@@ -29,7 +29,8 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// runHelperBroker behaves like travis-broker for "serve", or fails on purpose for the others.
+// runHelperBroker behaves like travis-broker for "serve", stops serving on its own shortly after
+// its client connects for "exit-after-connect", or fails on purpose for the others.
 func runHelperBroker(helperMode string, args []string) int {
 	switch helperMode {
 	case "exit-early":
@@ -39,7 +40,7 @@ func runHelperBroker(helperMode string, args []string) int {
 		// Not select{}: the runtime would kill an all-goroutines-blocked process as deadlocked.
 		time.Sleep(time.Hour)
 		return 0
-	case "serve":
+	case "serve", "exit-after-connect":
 	default:
 		fmt.Fprintf(os.Stderr, "helper broker: unknown mode %q\n", helperMode)
 		return 2
@@ -62,7 +63,13 @@ func runHelperBroker(helperMode string, args []string) int {
 		return 1
 	}
 	fmt.Println(broker.BrokerReadyLine)
-	if err := sessionListener.ServeOneClient(context.Background(), *clientPID, broker.BuildLocalBroker(workspace, core.SystemClock{})); err != nil {
+	serveCtx := context.Background()
+	if helperMode == "exit-after-connect" {
+		var cancel context.CancelFunc
+		serveCtx, cancel = context.WithTimeout(serveCtx, 200*time.Millisecond)
+		defer cancel()
+	}
+	if err := sessionListener.ServeOneClient(serveCtx, *clientPID, broker.BuildLocalBroker(workspace, core.SystemClock{})); err != nil {
 		fmt.Fprintln(os.Stderr, "helper broker:", err)
 		return 1
 	}
@@ -137,6 +144,8 @@ func requireNoEndpointLeft(t *testing.T, runtimeDir string) {
 func TestStartSessionBrokerConnectsToItsChildAndShutsItDown(t *testing.T) {
 	launch := buildHelperLaunch(t, "serve")
 	writeWorkspaceFile(t, launch.WorkspaceDir, "notes/today.md", "hi")
+	events := &recordingSink{}
+	launch.Client = broker.RemoteOptions{Events: events}
 
 	sessionBroker, err := broker.StartSessionBroker(context.Background(), launch)
 	if err != nil {
@@ -153,6 +162,32 @@ func TestStartSessionBrokerConnectsToItsChildAndShutsItDown(t *testing.T) {
 	requireNoEndpointLeft(t, launch.RuntimeDir)
 	if _, err := sessionBroker.Remote.DescribePath(context.Background(), "."); err == nil {
 		t.Fatal("the broker connection still works after Close")
+	}
+	if types := events.reportEventTypes(); len(types) != 0 {
+		t.Fatalf("events = %v, want none for a session that ended normally", types)
+	}
+}
+
+// A broker that dies while travis is idle shows the red bar at once, not at the next tool call.
+func TestStartSessionBrokerReportsABrokerThatExitsMidSession(t *testing.T) {
+	launch := buildHelperLaunch(t, "exit-after-connect")
+	events := &recordingSink{}
+	launch.Client = broker.RemoteOptions{Events: events}
+
+	sessionBroker, err := broker.StartSessionBroker(context.Background(), launch)
+	if err != nil {
+		t.Fatalf("StartSessionBroker: %v (diagnostics: %s)", err, launch.Diagnostics)
+	}
+	defer func() { _ = sessionBroker.Close() }()
+
+	for deadline := time.Now().Add(5 * time.Second); len(events.reportEventTypes()) == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("no BrokerUnavailable after the broker exited")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if types := events.reportEventTypes(); len(types) != 1 || types[0] != core.EventBrokerUnavailable {
+		t.Fatalf("events = %v, want one BrokerUnavailable without any call", types)
 	}
 }
 

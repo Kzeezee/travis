@@ -67,8 +67,10 @@ type SessionLaunch struct {
 
 // SessionBroker is one running broker process and travis's connection to it.
 type SessionBroker struct {
-	Remote         *RemoteBroker
-	brokerProcess  *exec.Cmd
+	Remote        *RemoteBroker
+	brokerProcess *exec.Cmd
+	// brokerExited delivers the broker's exit, once; the session reports it the moment it happens.
+	brokerExited   <-chan error
 	removeEndpoint func()
 }
 
@@ -122,7 +124,13 @@ func StartSessionBroker(ctx context.Context, launch SessionLaunch) (*SessionBrok
 	if err != nil {
 		return abandon(err)
 	}
-	return &SessionBroker{Remote: remoteBroker, brokerProcess: brokerProcess, removeEndpoint: removeEndpoint}, nil
+	brokerExited := make(chan error, 1)
+	go func() {
+		exitErr := brokerProcess.Wait()
+		remoteBroker.reportBrokerExit(exitErr)
+		brokerExited <- exitErr
+	}()
+	return &SessionBroker{Remote: remoteBroker, brokerProcess: brokerProcess, brokerExited: brokerExited, removeEndpoint: removeEndpoint}, nil
 }
 
 // verifyBrokerBinary refuses a broker that is not the one travis was built with (R-23): a
@@ -152,15 +160,12 @@ func verifyBrokerBinary(path, wantSHA256 string) error {
 // The returned error describes how the broker exited; the session itself is already over.
 func (s *SessionBroker) Close() error {
 	_ = s.Remote.Close()
-	brokerExited := make(chan error, 1)
-	go func() { brokerExited <- s.brokerProcess.Wait() }()
-
 	var exitErr error
 	select {
-	case exitErr = <-brokerExited:
+	case exitErr = <-s.brokerExited:
 	case <-time.After(brokerShutdownTimeout):
 		_ = s.brokerProcess.Process.Kill()
-		exitErr = fmt.Errorf("broker did not exit within %s and was killed: %w", brokerShutdownTimeout, <-brokerExited)
+		exitErr = fmt.Errorf("broker did not exit within %s and was killed: %w", brokerShutdownTimeout, <-s.brokerExited)
 	}
 	s.removeEndpoint()
 	if exitErr != nil {
