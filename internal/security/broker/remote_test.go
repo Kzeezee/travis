@@ -297,7 +297,7 @@ func TestRemoteBrokerWritesThroughTheEnforcedBroker(t *testing.T) {
 	enforced, workspace, _ := buildSessionBroker(t, "default")
 	events := &recordingSink{}
 	remote, _ := startPipedBrokerWith(t, enforced, broker.RemoteOptions{Events: events})
-	ctx := context.Background()
+	ctx := testTurn
 
 	info, err := remote.WriteFile(ctx, "notes/new.md", []byte("hello"))
 	if err != nil || info.WorkspacePath != "notes/new.md" {

@@ -31,6 +31,10 @@ type LocalBroker struct {
 	authorizeWrite func(ctx context.Context, path string) error
 	// clock stamps AddDecisionRule's AddedAt; injected so tests can use a FixedClock.
 	clock core.Clock
+	// recordWrite runs once a write is authorized and its target resolved, before any byte
+	// changes; an error stops the write. Nil records nothing. PolicyEnforcedBroker backs the file
+	// up and logs the change here (§5.15.1).
+	recordWrite func(ctx context.Context, target string, content []byte) error
 }
 
 var _ core.Broker = (*LocalBroker)(nil)
@@ -132,6 +136,11 @@ func (b *LocalBroker) WriteFile(ctx context.Context, path string, content []byte
 		perm = existing.Mode().Perm()
 	case !errors.Is(err, fs.ErrNotExist):
 		return core.PathInfo{}, translatePathError(path, err)
+	}
+	if b.recordWrite != nil {
+		if err := b.recordWrite(ctx, target, content); err != nil {
+			return core.PathInfo{}, err
+		}
 	}
 	parent := filepath.Dir(target)
 	if err := os.MkdirAll(parent, 0o750); err != nil {

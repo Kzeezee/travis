@@ -169,3 +169,23 @@ func TestChannelApproverReturnsOnContextCancellation(t *testing.T) {
 		t.Fatalf("got error %v, want context.Canceled", err)
 	}
 }
+
+// §6.4: an irreversible write can be approved once, never always, so a stray a answers nothing.
+func TestIrreversibleApprovalOffersNoAlways(t *testing.T) {
+	m, answers := buildPendingApproval(t)
+	m.pendingApproval.Operation.IsIrreversible = true
+
+	view := renderPlainView(m)
+	if strings.Contains(view, "[a] always") || !strings.Contains(view, "can't be undone · [y] once · [n] deny") {
+		t.Fatalf("got view\n%s\nwant the legend without always, saying it can't be undone", view)
+	}
+	next, cmd := updateModel(m, tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if next.pendingApproval == nil || cmd != nil {
+		t.Fatal("want a ignored while an irreversible approval is pending")
+	}
+	select {
+	case got := <-answers:
+		t.Fatalf("a answered an irreversible approval with %v", got)
+	default:
+	}
+}

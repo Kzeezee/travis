@@ -50,7 +50,13 @@ func runHelperBroker(helperMode string, args []string) int {
 	endpoint := flags.String("endpoint", "", "")
 	clientPID := flags.Int("client-pid", 0, "")
 	flags.String("profile", "", "")
+	sessionID := flags.String("session", "", "")
+	snapshotMaxBytes := flags.Int64("snapshot-max-bytes", 0, "")
 	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if *sessionID != "helper-session" || *snapshotMaxBytes != 4096 {
+		fmt.Fprintf(os.Stderr, "helper broker: launched with session %q and snapshot limit %d\n", *sessionID, *snapshotMaxBytes)
 		return 2
 	}
 	workspace, err := os.Getwd()
@@ -84,12 +90,14 @@ func buildHelperLaunch(t *testing.T, helperMode string) broker.SessionLaunch {
 		t.Fatal(err)
 	}
 	return broker.SessionLaunch{
-		Executable:     testBinary,
-		ExpectedSHA256: hashFile(t, testBinary),
-		WorkspaceDir:   t.TempDir(),
-		RuntimeDir:     buildShortRuntimeDir(t),
-		Profile:        "default",
-		Diagnostics:    &strings.Builder{},
+		Executable:       testBinary,
+		ExpectedSHA256:   hashFile(t, testBinary),
+		WorkspaceDir:     t.TempDir(),
+		RuntimeDir:       buildShortRuntimeDir(t),
+		Profile:          "default",
+		SessionID:        "helper-session",
+		SnapshotMaxBytes: 4096,
+		Diagnostics:      &strings.Builder{},
 	}
 }
 

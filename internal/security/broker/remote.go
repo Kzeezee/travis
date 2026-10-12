@@ -40,13 +40,17 @@ type RemoteOptions struct {
 // connection is declared broken.
 const brokerExchangeTimeout = 30 * time.Second
 
-// maxApprovalsPerEffect covers an effect whose as-written and resolved paths each Ask.
-const maxApprovalsPerEffect = 2
+// maxApprovalsPerEffect covers a write whose as-written and resolved paths each Ask and which
+// then turns out too large to back up.
+const maxApprovalsPerEffect = 3
 
 // decisionRuleSource is the audit text on rules the approval modal creates.
 const decisionRuleSource = "approval modal"
 
-var _ core.Broker = (*RemoteBroker)(nil)
+var (
+	_ core.Broker     = (*RemoteBroker)(nil)
+	_ core.SessionLog = (*RemoteBroker)(nil)
+)
 
 func BuildRemoteBroker(conn net.Conn, options RemoteOptions) *RemoteBroker {
 	if options.Clock == nil {
@@ -155,6 +159,24 @@ func (r *RemoteBroker) AddDecisionRule(ctx context.Context, rule core.DecisionRu
 	return err
 }
 
+// AppendEntries logs completed messages in the broker's session log and returns once they are durable.
+func (r *RemoteBroker) AppendEntries(ctx context.Context, entries []core.SessionEntry) error {
+	messages, err := BuildEntryMessages(entries)
+	if err != nil {
+		return err
+	}
+	_, err = r.exchange(ctx, Request{Op: OpAppendEntries, Entries: messages})
+	return err
+}
+
+func (r *RemoteBroker) ListTurns(ctx context.Context) ([]core.TurnSummary, error) {
+	resp, err := r.exchange(ctx, Request{Op: OpListTurns})
+	if err != nil {
+		return nil, err
+	}
+	return ConvertTurnSummaryMessages(resp.Turns), nil
+}
+
 // exchangeEffect is exchange for a request policy decides: an Ask goes to the human and the
 // request is retried on approval, and a refusal is published as PolicyDenied (D-29).
 func (r *RemoteBroker) exchangeEffect(ctx context.Context, kind core.CapabilityKind, req Request) (Response, error) {
@@ -232,6 +254,7 @@ func (r *RemoteBroker) exchange(ctx context.Context, req Request) (Response, err
 	r.nextID++
 	req.Version, req.ID = ProtocolVersion, r.nextID
 	req.IsFromUntrustedStep = core.ReportIsFromUntrustedStep(ctx)
+	req.Turn, req.Call = string(core.ReportTurnID(ctx)), string(core.ReportToolCallID(ctx))
 	resp, err := r.sendAndReceive(req)
 	if errors.Is(err, errFrameTooLarge) {
 		return Response{}, err

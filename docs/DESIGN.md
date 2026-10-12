@@ -2172,6 +2172,24 @@ type Journal interface {
 }
 ```
 
+**Where it runs, and who vouches for what.** The session log is kept by the **broker
+process**, as the append-only audit log §4.4 gives it. It is one JSON-lines file per session
+under `<state>/sessions/`, synced on every append; backups live in `<state>/blobs/`. Every
+entry records its author, which the broker stamps itself:
+
+| Author | Entries | What the broker guarantees |
+|---|---|---|
+| `broker` | `file_changed`, `policy_denied`, `approval_asked`, `approval_given` | true: it did or decided this |
+| `travis` | `message` (user, assistant, tool) | stored exactly as received, never changed after |
+
+Travis sends completed messages with `append_entries` (redacted first) and waits for them to
+be durable before acting on them; it can never append a broker-authored kind. The conversation
+the model sees is rebuilt from the log's messages, so the log and the history cannot drift.
+The "journal" above is therefore two pieces: `internal/state/blobs` holds the backup bytes,
+and each change is a `file_changed` entry in this log, joined to its turn and tool call by id.
+The rules for reading the log (validation, history, turn summaries) are a pure package,
+`internal/state/session`, shared by the loop and the broker; it imports only `core`.
+
 **The journal is on the M2 critical path**, not a v2 nicety: §6.4's whole argument is
 that reversible actions need no prompt, and that is only true if the undo exists.
 Storage is **content-addressed blobs** under the state dir (D-13, closing `[OQ-22]`),
@@ -2208,10 +2226,11 @@ Crash between steps 3 and 5 leaves an orphan blob and an untouched file — it f
 in the only direction that matters. **Testing:** crash-injection with `kill -9` between
 snapshot and write, then assert `/undo` restores correctly.
 
-**Depends on:** `core`, `security`
+**Depends on:** `core`
 
-→ **Why `security`:** session files hold conversation history and journal blobs, which are
-secrets-adjacent and must be redacted (§5.12.3).
+→ **Why not `security`:** session files hold conversation history and journal blobs, which are
+secrets-adjacent and must be redacted (§5.12.3). Travis redacts each message before sending it
+to the broker, so the store itself needs no redaction and `security/broker` can depend on it.
 
 **Configuration.** `[session] backend = "sqlite"`, `dir`, `retention = "90d"`,
 `redact = true`.

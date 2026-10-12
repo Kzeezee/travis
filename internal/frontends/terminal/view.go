@@ -56,8 +56,12 @@ func (m chatModel) View() tea.View {
 
 // approvalLegend is the only three answers the keyboard accepts; it must always be fully
 // visible, so renderApprovalModal truncates the explanation around it rather than
-// truncating the whole line and risking cutting the legend off.
-const approvalLegend = "[y] once · [a] always · [n] deny"
+// truncating the whole line and risking cutting the legend off. An irreversible operation
+// offers no always (§6.4), so its legend leaves it out.
+const (
+	approvalLegend             = "[y] once · [a] always · [n] deny"
+	irreversibleApprovalLegend = "can't be undone · [y] once · [n] deny"
+)
 
 // renderApprovalModal replaces the input line while a decision is pending (D-10): it shows
 // what is being asked, why (policy.Explain's trace, flattened like a collapsed thought so
@@ -67,8 +71,12 @@ func renderApprovalModal(request core.ApprovalRequest, width int) string {
 	explanation := strings.Join(strings.Fields(op.Explanation), " ")
 	prefix := fmt.Sprintf(" %s %s — %s · ", op.Kind, op.Target, explanation)
 
-	available := max(width-1-lipgloss.Width(approvalLegend), lipgloss.Width(ellipsis))
-	line := ansi.Truncate(prefix, available, ellipsis) + approvalLegend
+	legend := approvalLegend
+	if op.IsIrreversible {
+		legend = irreversibleApprovalLegend
+	}
+	available := max(width-1-lipgloss.Width(legend), lipgloss.Width(ellipsis))
+	line := ansi.Truncate(prefix, available, ellipsis) + legend
 	return assistantLabelStyle.Render(ansi.Truncate(line, max(width-1, 1), ellipsis))
 }
 

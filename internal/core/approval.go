@@ -2,12 +2,15 @@ package core
 
 import "context"
 
-// Operation is a pending action that policy evaluated to Ask (§6.4). Explanation is the
-// evaluation trace, shown verbatim to the human who must decide.
+// Operation is a pending action that needs a human's answer: policy evaluated it to Ask, or it
+// cannot be undone (§6.4). Explanation says why, shown verbatim to the human who must decide.
 type Operation struct {
 	Kind        CapabilityKind
 	Target      string
 	Explanation string
+	// IsIrreversible means the effect cannot be undone, so it may be approved once but never
+	// learned as an always rule (§6.4).
+	IsIrreversible bool
 }
 
 // ApprovalDecision is the human's answer to a pending Operation.

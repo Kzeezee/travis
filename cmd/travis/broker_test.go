@@ -70,10 +70,18 @@ func buildShortRuntimeDir(t *testing.T) string {
 	return runtimeDir
 }
 
+// testSessionID names the session log every test broker keeps.
+const testSessionID core.ID = "test-session"
+
 // startTestSessionBroker runs the real broker process over workspace for the rest of the test.
-func startTestSessionBroker(t *testing.T, paths config.PathSet, diagnostics *strings.Builder, client broker.RemoteOptions) core.Broker {
+// The broker finds its state directory the way production does, from the environment, so the
+// test points TRAVIS_HOME at a scratch directory and reports the state directory under it.
+func startTestSessionBroker(t *testing.T, paths config.PathSet, diagnostics *strings.Builder, client broker.RemoteOptions) (*broker.RemoteBroker, string) {
 	t.Helper()
-	sessionBroker, err := startSessionBroker(paths, diagnostics, client)
+	travisHome := t.TempDir()
+	t.Setenv("TRAVIS_HOME", travisHome)
+	sessionCfg := config.SessionCfg{SnapshotMaxBytes: 1 << 20}
+	sessionBroker, err := startSessionBroker(paths, testSessionID, sessionCfg, diagnostics, client)
 	if err != nil {
 		t.Fatalf("start session broker: %v (diagnostics: %s)", err, diagnostics)
 	}
@@ -82,7 +90,7 @@ func startTestSessionBroker(t *testing.T, paths config.PathSet, diagnostics *str
 			t.Errorf("session broker: %v", err)
 		}
 	})
-	return sessionBroker.Remote
+	return sessionBroker.Remote, filepath.Join(travisHome, "state")
 }
 
 // The broker process, not the tool, refuses a deny-listed file inside the workspace, and the
@@ -98,7 +106,7 @@ func TestFileReadThroughTheBrokerProcessIsRefusedByPolicy(t *testing.T) {
 	var diagnostics strings.Builder
 	bus := buildSessionBus(io.Discard)
 	events, _ := bus.Subscribe(nil)
-	fileBroker := startTestSessionBroker(t, config.PathSet{WorkspaceDir: workspace, RuntimeDir: buildShortRuntimeDir(t)}, &diagnostics, broker.RemoteOptions{Events: bus})
+	fileBroker, _ := startTestSessionBroker(t, config.PathSet{WorkspaceDir: workspace, RuntimeDir: buildShortRuntimeDir(t)}, &diagnostics, broker.RemoteOptions{Events: bus})
 	fileRead := builtin.BuildFileReadTool(fileBroker, workspace, defaultMaxReadBytes)
 
 	refused, err := fileRead.Invoke(core.WithToolCallID(context.Background(), "call-env"), json.RawMessage(`{"path":".env"}`))

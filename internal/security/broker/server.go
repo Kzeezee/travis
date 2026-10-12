@@ -63,6 +63,13 @@ type onceApprover interface {
 	ApproveOnce(ctx context.Context, approved core.Capability) error
 }
 
+// sessionKeeper is a broker that keeps the session log, and so can log reported messages and
+// list the session's turns.
+type sessionKeeper interface {
+	AppendTravisEntries(ctx context.Context, entries []core.SessionEntry) error
+	ListTurns(ctx context.Context) ([]core.TurnSummary, error)
+}
+
 // connectionSession holds the files one client has open, and the listing it is paging through;
 // both are only valid on their connection.
 type connectionSession struct {
@@ -85,6 +92,12 @@ const listPageBudgetBytes = MaxFrameBytes / 2
 func (s *connectionSession) answer(ctx context.Context, req Request) Response {
 	if req.IsFromUntrustedStep {
 		ctx = core.MarkUntrustedStep(ctx)
+	}
+	if req.Turn != "" {
+		ctx = core.WithTurnID(ctx, core.ID(req.Turn))
+	}
+	if req.Call != "" {
+		ctx = core.WithToolCallID(ctx, core.ID(req.Call))
 	}
 	resp, err := s.perform(ctx, req)
 	if err != nil {
@@ -138,8 +151,26 @@ func (s *connectionSession) perform(ctx context.Context, req Request) (Response,
 		return Response{}, approver.ApproveOnce(ctx, core.Capability{Kind: core.CapabilityKind(req.Capability.Kind), Scope: req.Capability.Scope})
 	case OpAddDecisionRule:
 		return Response{}, s.effects.AddDecisionRule(ctx, ConvertDecisionRuleMessage(*req.Rule))
+	case OpAppendEntries, OpListTurns:
+		return s.answerSessionLog(ctx, req)
 	}
 	return Response{}, fmt.Errorf("unknown op %q: %w", req.Op, core.ErrInvalid)
+}
+
+func (s *connectionSession) answerSessionLog(ctx context.Context, req Request) (Response, error) {
+	keeper, isKeeper := s.effects.(sessionKeeper)
+	if !isKeeper {
+		return Response{}, fmt.Errorf("this broker keeps no session log: %w", core.ErrInvalid)
+	}
+	if req.Op == OpListTurns {
+		summaries, err := keeper.ListTurns(ctx)
+		return Response{Turns: BuildTurnSummaryMessages(summaries)}, err
+	}
+	entries, err := ConvertEntryMessages(req.Entries)
+	if err != nil {
+		return Response{}, err
+	}
+	return Response{}, keeper.AppendTravisEntries(ctx, entries)
 }
 
 // listDirectoryPage lists path at offset zero and answers later offsets from that listing, so a

@@ -18,6 +18,8 @@ import (
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
 	"github.com/Kzeezee/travis/internal/security/broker"
 	"github.com/Kzeezee/travis/internal/security/redact"
+	"github.com/Kzeezee/travis/internal/state/blobs"
+	"github.com/Kzeezee/travis/internal/state/session/filestore"
 )
 
 // notesTask is the TRA-17 exit task over testdata/fixtures/notes, written down so the 6A
@@ -217,8 +219,8 @@ func runNotesTask(t *testing.T, provider core.Provider, model string) notesTaskR
 	}
 	var diagnostics strings.Builder
 	bus := buildSessionBus(&diagnostics)
-	fileBroker := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
-	session, err := assembleChatSession(cfg, paths, provider, fileBroker, bus, redact.New(), model, &diagnostics)
+	remote, _ := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, bus, redact.New(), model, &diagnostics)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,8 +361,8 @@ func TestWriteTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
 	paths := config.PathSet{WorkspaceDir: workspace, StateDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t)}
 	var diagnostics strings.Builder
 	bus := buildSessionBus(io.Discard)
-	fileBroker := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
-	session, err := assembleChatSession(cfg, paths, provider, fileBroker, bus, redact.New(), "scripted-model", io.Discard)
+	remote, brokerStateDir := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, bus, redact.New(), "scripted-model", io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,5 +393,74 @@ func TestWriteTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
 	}
 	if entries, err := os.ReadDir(root); err != nil || len(entries) != 1 {
 		t.Fatalf("scratch root holds %v (%v), want only the workspace", entries, err)
+	}
+	assertWritesWereBackedUpAndLogged(t, brokerStateDir, workspace, confirmation)
+}
+
+// assertWritesWereBackedUpAndLogged reads the broker's own session log: every message travis
+// reported, then each write logged by the broker between the call that asked for it and its
+// result, with a backup that restores the edited file's original bytes (§5.15.1).
+func assertWritesWereBackedUpAndLogged(t *testing.T, brokerStateDir, workspace, edited string) {
+	t.Helper()
+	sessionLog, err := filestore.Open(filepath.Join(brokerStateDir, "sessions"), testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sessionLog.Close()
+	entries := sessionLog.ReadEntries()
+	resolvedWorkspace, err := filepath.EvalSymlinks(workspace) // the broker logs resolved paths
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var kinds []string
+	changes := map[string]*core.FileChange{}
+	for _, entry := range entries {
+		switch entry.Kind {
+		case core.EntryMessage:
+			if entry.Author != core.AuthorTravis {
+				t.Fatalf("message entry authored by %q, want travis", entry.Author)
+			}
+			kinds = append(kinds, string(entry.Message.Role))
+		case core.EntryFileChanged:
+			if entry.Author != core.AuthorBroker || entry.Call == "" {
+				t.Fatalf("file_changed entry %+v, want the broker's, naming its call", entry)
+			}
+			kinds = append(kinds, "write:"+string(entry.Call))
+			rel, _ := filepath.Rel(resolvedWorkspace, entry.FileChange.Path)
+			changes[filepath.ToSlash(rel)] = entry.FileChange
+		case core.EntryPolicyDenied, core.EntryApprovalAsked, core.EntryApprovalGiven:
+			kinds = append(kinds, string(entry.Kind))
+		}
+		if entry.Turn != entries[0].Turn {
+			t.Fatalf("entry %+v is not filed under the one turn %q", entry, entries[0].Turn)
+		}
+	}
+	want := []string{"user", "assistant", "tool", "assistant", "write:call-edit", "tool", "assistant", "write:call-write", "tool", "assistant"}
+	if !slices.Equal(kinds, want) {
+		t.Fatalf("session log = %v\nwant          %v", kinds, want)
+	}
+
+	if created := changes["summary.md"]; created == nil || created.Before != "" {
+		t.Fatalf("summary.md change = %+v, want one with no backup: the file did not exist", created)
+	}
+	editedChange := changes[edited]
+	if editedChange == nil || editedChange.Before == "" {
+		t.Fatalf("%s change = %+v, want a backup of its prior bytes", edited, editedChange)
+	}
+	backups, err := blobs.Open(filepath.Join(brokerStateDir, "blobs"), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	editedPath := filepath.Join(workspace, filepath.FromSlash(edited))
+	if err := backups.Restore(context.Background(), editedPath, blobs.Ref(editedChange.Before)); err != nil {
+		t.Fatalf("restore the backup: %v", err)
+	}
+	original, err := os.ReadFile(filepath.Join("..", "..", "testdata", "fixtures", "notes", filepath.FromSlash(edited)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored, err := os.ReadFile(editedPath); err != nil || string(restored) != string(original) {
+		t.Fatalf("restored %s = %q, %v; want the fixture's original bytes", edited, restored, err)
 	}
 }

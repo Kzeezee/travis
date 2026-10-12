@@ -301,6 +301,9 @@ func (m chatModel) handleApprovalKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "y":
 		decision = core.ApprovalOnce
 	case "a":
+		if m.pendingApproval.Operation.IsIrreversible {
+			return m, nil // §6.4: what cannot be undone is never learned as always
+		}
 		decision = core.ApprovalAlways
 	case "n", "esc":
 		decision = core.ApprovalDenied
