@@ -20,6 +20,7 @@ import (
 	"github.com/Kzeezee/travis/internal/log"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
 	"github.com/Kzeezee/travis/internal/security/broker"
+	"github.com/Kzeezee/travis/internal/security/redact"
 	"github.com/Kzeezee/travis/internal/tools/builtin"
 	"github.com/Kzeezee/travis/internal/tools/registry"
 )
@@ -103,8 +104,9 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	provider := openaicompat.BuildProvider(profile.BaseURL, config.ResolveProviderAPIKey(), nil, core.SystemClock{})
-	session, err := assembleChatSession(cfg, paths, provider, profile.Model, os.Stderr)
+	apiKey := config.ResolveProviderAPIKey()
+	provider := openaicompat.BuildProvider(profile.BaseURL, apiKey, nil, core.SystemClock{})
+	session, err := assembleChatSession(cfg, paths, provider, profile.Model, os.Stderr, redact.New(apiKey))
 	if err != nil {
 		return err
 	}
@@ -112,7 +114,11 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	events, unsubscribe := session.bus.Subscribe(nil)
 	defer unsubscribe()
 
-	chatErr := terminal.RunChat(context.Background(), events, session.conversation.RunAssistantTurn,
+	// session.approver is unused until 2B drives real Ask decisions through it; wiring it
+	// here means the modal is already end to end once that call site exists.
+	approvals := make(chan core.ApprovalRequest)
+	session.approver = terminal.BuildApprover(approvals)
+	chatErr := terminal.RunChat(context.Background(), events, approvals, session.conversation.RunAssistantTurn,
 		terminal.Options{ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out})
 	session.close()
 	return chatErr
@@ -124,15 +130,18 @@ type chatSession struct {
 	conversation *loop.AssistantConversation
 	bus          *core.Bus
 	waitForTrace func()
+	// approver is set by runChat once it creates the approval channel; 2B's broker-side
+	// policy loop will call it wherever a decision evaluates to Ask.
+	approver core.Approver
 }
 
 // assembleChatSession wires the registry, built-in tools, bus, trace and conversation for
 // one session. The provider is a parameter so the end-to-end test can script it while
 // everything else stays real; diagnostics receives bus warnings and trace status lines.
-func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core.Provider, model string, diagnostics io.Writer) (*chatSession, error) {
+func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core.Provider, model string, diagnostics io.Writer, redactor redact.Redactor) (*chatSession, error) {
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
 	// In-process and workspace-confined, with no policy until the broker process replaces it (D-18).
-	fileBroker := broker.BuildLocalBroker(paths.WorkspaceDir)
+	fileBroker := broker.BuildLocalBroker(paths.WorkspaceDir, core.SystemClock{})
 	for _, tool := range []core.Tool{
 		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes),
 		builtin.BuildGrepTool(fileBroker, paths.WorkspaceDir),
@@ -147,7 +156,7 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core
 	bus := core.BuildEventBus(log.BuildTextLogger(diagnostics, log.LevelWarn), subscriberEventCapacity)
 	clock := core.SystemClock{}
 	ids := id.BuildULIDGenerator(clock)
-	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: bus, Clock: clock, IDs: ids}
+	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: redact.WrapSink(bus, redactor), Clock: clock, IDs: ids}
 
 	session := &chatSession{
 		conversation: loop.BuildAssistantConversation(deps, model, cfg.Brain.MaxSteps),

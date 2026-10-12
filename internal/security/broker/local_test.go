@@ -6,7 +6,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/security/broker"
@@ -34,7 +37,7 @@ func createSymlinkOrSkip(t *testing.T, target, link string) {
 func TestLocalBrokerDescribesPathsRelativeToTheWorkspace(t *testing.T) {
 	root := t.TempDir()
 	writeWorkspaceFile(t, root, "notes/today.md", "hi")
-	local := broker.BuildLocalBroker(root)
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
 
 	file, err := local.DescribePath(context.Background(), "notes/today.md")
 	if err != nil {
@@ -63,7 +66,7 @@ func TestLocalBrokerDeniesPathsOutsideTheWorkspace(t *testing.T) {
 	root := filepath.Join(parent, "workspace")
 	writeWorkspaceFile(t, root, "inside.txt", "in")
 	outside := writeWorkspaceFile(t, parent, "outside.txt", "out")
-	local := broker.BuildLocalBroker(root)
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
 
 	for _, path := range []string{"../outside.txt", "../missing.txt", outside} {
 		t.Run(path, func(t *testing.T) {
@@ -83,7 +86,7 @@ func TestLocalBrokerDeniesSymlinksThatEscapeTheWorkspace(t *testing.T) {
 	writeWorkspaceFile(t, root, "inside.txt", "in")
 	outside := writeWorkspaceFile(t, parent, "outside.txt", "out")
 	createSymlinkOrSkip(t, outside, filepath.Join(root, "escape.txt"))
-	local := broker.BuildLocalBroker(root)
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
 
 	if _, err := local.OpenFile(context.Background(), "escape.txt"); !errors.Is(err, core.ErrDenied) {
 		t.Fatalf("OpenFile(escape.txt) error = %v, want ErrDenied", err)
@@ -93,7 +96,7 @@ func TestLocalBrokerDeniesSymlinksThatEscapeTheWorkspace(t *testing.T) {
 func TestLocalBrokerReportsMissingPathsAndDirectories(t *testing.T) {
 	root := t.TempDir()
 	writeWorkspaceFile(t, root, "folder/file.txt", "x")
-	local := broker.BuildLocalBroker(root)
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
 
 	if _, err := local.OpenFile(context.Background(), "missing.txt"); !errors.Is(err, core.ErrNotFound) {
 		t.Fatalf("OpenFile(missing) error = %v, want ErrNotFound", err)
@@ -109,7 +112,7 @@ func TestLocalBrokerReportsMissingPathsAndDirectories(t *testing.T) {
 func TestLocalBrokerOpensFilesWithTheirResolvedInfo(t *testing.T) {
 	root := t.TempDir()
 	writeWorkspaceFile(t, root, "a.txt", "contents")
-	local := broker.BuildLocalBroker(root)
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
 
 	opened, err := local.OpenFile(context.Background(), "workspace:a.txt")
 	if err != nil {
@@ -130,7 +133,7 @@ func TestLocalBrokerListsEntriesInNameOrderWithoutFollowingSymlinks(t *testing.T
 	writeWorkspaceFile(t, root, "b.txt", "b")
 	writeWorkspaceFile(t, root, "a/inner.txt", "a")
 	createSymlinkOrSkip(t, root, filepath.Join(root, "c-loop"))
-	local := broker.BuildLocalBroker(root)
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
 
 	entries, err := local.ListDirectory(context.Background(), ".")
 	if err != nil {
@@ -151,7 +154,7 @@ func TestLocalBrokerListsEntriesInNameOrderWithoutFollowingSymlinks(t *testing.T
 }
 
 func TestLocalBrokerRejectsUnknownPathPrefixesAsInvalid(t *testing.T) {
-	local := broker.BuildLocalBroker(t.TempDir())
+	local := broker.BuildLocalBroker(t.TempDir(), core.SystemClock{})
 	if _, err := local.DescribePath(context.Background(), "secrets:token"); !errors.Is(err, core.ErrInvalid) {
 		t.Fatalf("DescribePath(secrets:token) error = %v, want ErrInvalid", err)
 	}
@@ -160,7 +163,7 @@ func TestLocalBrokerRejectsUnknownPathPrefixesAsInvalid(t *testing.T) {
 func TestLocalBrokerStopsWhenTheContextIsCancelled(t *testing.T) {
 	root := t.TempDir()
 	writeWorkspaceFile(t, root, "a.txt", "a")
-	local := broker.BuildLocalBroker(root)
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -169,6 +172,108 @@ func TestLocalBrokerStopsWhenTheContextIsCancelled(t *testing.T) {
 	}
 	if _, err := local.ListDirectory(ctx, "."); !errors.Is(err, context.Canceled) {
 		t.Fatalf("ListDirectory error = %v, want context.Canceled", err)
+	}
+}
+
+// decisionRuleDocument mirrors the broker's own on-disk shape so the test can parse back
+// what AddDecisionRule wrote without reaching into the package's unexported type.
+type decisionRuleDocument struct {
+	Rule []core.DecisionRule `toml:"rule"`
+}
+
+func readDecisionRules(t *testing.T, root string) []core.DecisionRule {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, ".travis", "decisions.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc decisionRuleDocument
+	if err := toml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("decisions.toml did not parse: %v\n%s", err, data)
+	}
+	return doc.Rule
+}
+
+func TestLocalBrokerAddDecisionRuleAppendsAParseableRule(t *testing.T) {
+	root := t.TempDir()
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
+	rule := core.DecisionRule{Kind: core.CapabilityFSWrite, Scope: filepath.Join(root, "notes/today.md"), Decision: core.DecisionAllow, Source: "user approved"}
+
+	if err := local.AddDecisionRule(context.Background(), rule); err != nil {
+		t.Fatal(err)
+	}
+
+	rules := readDecisionRules(t, root)
+	if len(rules) != 1 || rules[0].Kind != rule.Kind || rules[0].Scope != rule.Scope || rules[0].Decision != rule.Decision {
+		t.Fatalf("decisions.toml = %+v, want one rule matching %+v", rules, rule)
+	}
+	if rules[0].AddedAt.IsZero() {
+		t.Fatal("AddDecisionRule did not stamp AddedAt")
+	}
+}
+
+func TestLocalBrokerAddDecisionRuleAccumulatesAcrossCalls(t *testing.T) {
+	root := t.TempDir()
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
+	for i := 0; i < 2; i++ {
+		rule := core.DecisionRule{Kind: core.CapabilityFSWrite, Scope: filepath.Join(root, "f.txt"), Decision: core.DecisionAllow}
+		if err := local.AddDecisionRule(context.Background(), rule); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rules := readDecisionRules(t, root); len(rules) != 2 {
+		t.Fatalf("decisions.toml has %d rules, want 2: %+v", len(rules), rules)
+	}
+}
+
+func TestLocalBrokerAddDecisionRuleRejectsExec(t *testing.T) {
+	local := broker.BuildLocalBroker(t.TempDir(), core.SystemClock{})
+	rule := core.DecisionRule{Kind: core.CapabilityExec, Scope: "git push", Decision: core.DecisionAllow}
+	if err := local.AddDecisionRule(context.Background(), rule); !errors.Is(err, core.ErrDenied) {
+		t.Fatalf("AddDecisionRule(exec) error = %v, want ErrDenied", err)
+	}
+}
+
+func TestLocalBrokerAddDecisionRuleRejectsMalformedRules(t *testing.T) {
+	root := t.TempDir()
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
+	cases := map[string]core.DecisionRule{
+		"empty kind":      {Scope: "a", Decision: core.DecisionAllow},
+		"empty scope":     {Kind: core.CapabilityFSWrite, Decision: core.DecisionAllow},
+		"unknown outcome": {Kind: core.CapabilityFSWrite, Scope: "a", Decision: "deny"},
+	}
+	for name, rule := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := local.AddDecisionRule(context.Background(), rule); !errors.Is(err, core.ErrInvalid) {
+				t.Fatalf("AddDecisionRule(%+v) error = %v, want ErrInvalid", rule, err)
+			}
+		})
+	}
+}
+
+// TestLocalBrokerAddDecisionRuleSerializesConcurrentWriters proves the exclusive lock
+// (D-32): N goroutines appending at once must still leave N well-formed entries, never a
+// corrupted interleaving of two writes.
+func TestLocalBrokerAddDecisionRuleSerializesConcurrentWriters(t *testing.T) {
+	root := t.TempDir()
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
+	const writers = 8
+
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rule := core.DecisionRule{Kind: core.CapabilityFSWrite, Scope: filepath.Join(root, "f.txt"), Decision: core.DecisionAllow, Source: "writer"}
+			if err := local.AddDecisionRule(context.Background(), rule); err != nil {
+				t.Error(err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if rules := readDecisionRules(t, root); len(rules) != writers {
+		t.Fatalf("decisions.toml has %d rules, want %d: %+v", len(rules), writers, rules)
 	}
 }
 
@@ -183,7 +288,7 @@ func readWorkspaceFile(t *testing.T, root, rel string) string {
 
 func TestLocalBrokerWritesNewFilesAndMissingParents(t *testing.T) {
 	root := t.TempDir()
-	local := broker.BuildLocalBroker(root)
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
 
 	info, err := local.WriteFile(context.Background(), "notes/2026/summary.md", []byte("new"))
 	if err != nil {
@@ -204,7 +309,7 @@ func TestLocalBrokerOverwritesKeepingPermissionsAndLeavesNoTempFiles(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	local := broker.BuildLocalBroker(root)
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
 
 	if _, err := local.WriteFile(context.Background(), "a.txt", []byte("replaced")); err != nil {
 		t.Fatal(err)
@@ -229,7 +334,7 @@ func TestLocalBrokerDeniesWritesOutsideTheWorkspace(t *testing.T) {
 	parent := t.TempDir()
 	root := filepath.Join(parent, "workspace")
 	writeWorkspaceFile(t, root, "inside.txt", "in")
-	local := broker.BuildLocalBroker(root)
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
 
 	for _, path := range []string{"../outside.txt", filepath.Join(parent, "abs.txt"), "../new/dir/file.txt"} {
 		if _, err := local.WriteFile(context.Background(), path, []byte("x")); !errors.Is(err, core.ErrDenied) {
@@ -251,7 +356,7 @@ func TestLocalBrokerDeniesWritesThroughASymlinkedParentThatEscapes(t *testing.T)
 		t.Fatal(err)
 	}
 	createSymlinkOrSkip(t, outsideDir, filepath.Join(root, "escape"))
-	local := broker.BuildLocalBroker(root)
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
 
 	for _, path := range []string{"escape/new.txt", "escape/deeper/new.txt"} {
 		if _, err := local.WriteFile(context.Background(), path, []byte("x")); !errors.Is(err, core.ErrDenied) {
@@ -266,7 +371,7 @@ func TestLocalBrokerDeniesWritesThroughASymlinkedParentThatEscapes(t *testing.T)
 func TestLocalBrokerRefusesToWriteOverDirectoriesAndSymlinks(t *testing.T) {
 	root := t.TempDir()
 	target := writeWorkspaceFile(t, root, "folder/real.txt", "real")
-	local := broker.BuildLocalBroker(root)
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
 
 	if _, err := local.WriteFile(context.Background(), "folder", []byte("x")); !errors.Is(err, core.ErrIsDirectory) {
 		t.Fatalf("WriteFile(folder) error = %v, want ErrIsDirectory", err)
@@ -282,7 +387,7 @@ func TestLocalBrokerRefusesToWriteOverDirectoriesAndSymlinks(t *testing.T) {
 
 func TestLocalBrokerWritesNothingWhenTheContextIsCancelled(t *testing.T) {
 	root := t.TempDir()
-	local := broker.BuildLocalBroker(root)
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

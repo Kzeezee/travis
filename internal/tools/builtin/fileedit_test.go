@@ -15,7 +15,7 @@ import (
 )
 
 func buildConfinedFileEditTool(root string) *builtin.FileEditTool {
-	return builtin.BuildFileEditTool(broker.BuildLocalBroker(root), root, testMaxBytes)
+	return builtin.BuildFileEditTool(broker.BuildLocalBroker(root, core.SystemClock{}), root, testMaxBytes)
 }
 
 func invokeEdit(t *testing.T, tool *builtin.FileEditTool, path, oldString, newString string) core.ToolOutput {

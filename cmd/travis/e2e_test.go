@@ -16,6 +16,7 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/providers/cassette"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
+	"github.com/Kzeezee/travis/internal/security/redact"
 )
 
 // notesTask is the TRA-17 exit task over testdata/fixtures/notes, written down so the 6A
@@ -214,7 +215,7 @@ func runNotesTask(t *testing.T, provider core.Provider, model string) notesTaskR
 		Eval:  config.EvalCfg{Traces: true},
 	}
 	var diagnostics strings.Builder
-	session, err := assembleChatSession(cfg, paths, provider, model, &diagnostics)
+	session, err := assembleChatSession(cfg, paths, provider, model, &diagnostics, redact.New())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +353,7 @@ func TestWriteTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
 	}}
 
 	cfg := &config.Config{Brain: config.BrainCfg{MaxSteps: e2eMaxSteps}, Tools: config.ToolsCfg{MaxExposed: 60}}
-	session, err := assembleChatSession(cfg, config.PathSet{WorkspaceDir: workspace, StateDir: t.TempDir()}, provider, "scripted-model", io.Discard)
+	session, err := assembleChatSession(cfg, config.PathSet{WorkspaceDir: workspace, StateDir: t.TempDir()}, provider, "scripted-model", io.Discard, redact.New())
 	if err != nil {
 		t.Fatal(err)
 	}

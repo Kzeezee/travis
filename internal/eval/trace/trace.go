@@ -1,6 +1,8 @@
 // Package trace records a session's event timeline as JSONL, one file per session under
 // the state dir (DESIGN.md §5.13). It only observes: a failed write is reported after the
-// fact and never affects a turn. Traces are not redacted yet (§5.12.3).
+// fact and never affects a turn. Redaction (§5.12.3) happens upstream of this package, at
+// the bus-publishing call site (internal/security/redact), so every event already on the
+// bus — and therefore every event here — is scrubbed.
 package trace
 
 import (
