@@ -18,7 +18,7 @@ import (
 // buildConfinedGrepTool runs the tool over a LocalBroker, so these tests cover the walk end to
 // end on a real temporary workspace.
 func buildConfinedGrepTool(root string) *builtin.GrepTool {
-	return builtin.BuildGrepTool(broker.BuildLocalBroker(root, core.SystemClock{}), root)
+	return builtin.BuildGrepTool(broker.BuildLocalBroker(root), root)
 }
 
 func invokeGrep(t *testing.T, tool *builtin.GrepTool, arguments string) core.ToolOutput {

@@ -141,7 +141,7 @@ type chatSession struct {
 func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core.Provider, model string, diagnostics io.Writer, redactor redact.Redactor) (*chatSession, error) {
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
 	// In-process and workspace-confined, with no policy until the broker process replaces it (D-18).
-	fileBroker := broker.BuildLocalBroker(paths.WorkspaceDir, core.SystemClock{})
+	fileBroker := broker.BuildLocalBroker(paths.WorkspaceDir)
 	for _, tool := range []core.Tool{
 		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes),
 		builtin.BuildGrepTool(fileBroker, paths.WorkspaceDir),

@@ -15,7 +15,7 @@ import (
 )
 
 func buildConfinedFileWriteTool(root, newFileLineEnding string) *builtin.FileWriteTool {
-	return builtin.BuildFileWriteTool(broker.BuildLocalBroker(root, core.SystemClock{}), root, testMaxBytes, newFileLineEnding)
+	return builtin.BuildFileWriteTool(broker.BuildLocalBroker(root), root, testMaxBytes, newFileLineEnding)
 }
 
 func invokeWrite(t *testing.T, tool *builtin.FileWriteTool, path, content string) core.ToolOutput {

@@ -31,7 +31,7 @@ func writeFixture(t *testing.T, root, name, content string) string {
 // buildConfinedFileReadTool runs the tool over a LocalBroker, so these tests cover the read
 // path end to end on a real temporary workspace.
 func buildConfinedFileReadTool(root string, maxBytes int64) *builtin.FileReadTool {
-	return builtin.BuildFileReadTool(broker.BuildLocalBroker(root, core.SystemClock{}), root, maxBytes)
+	return builtin.BuildFileReadTool(broker.BuildLocalBroker(root), root, maxBytes)
 }
 
 func invokeRead(t *testing.T, tool *builtin.FileReadTool, arguments string) core.ToolOutput {

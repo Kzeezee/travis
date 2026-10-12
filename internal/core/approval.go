@@ -19,19 +19,6 @@ const (
 	ApprovalAlways
 )
 
-func (d ApprovalDecision) String() string {
-	switch d {
-	case ApprovalDenied:
-		return "denied"
-	case ApprovalOnce:
-		return "once"
-	case ApprovalAlways:
-		return "always"
-	default:
-		return "denied"
-	}
-}
-
 // ApprovalRequest is delivered to a frontend, like events are, but it is an operation,
 // not an event (AGENTS.md: events are facts that already happened; approvals are
 // required work with a return value). Respond must be called exactly once, and only ever
