@@ -88,7 +88,7 @@ func (t *FileReadTool) Invoke(ctx context.Context, arguments json.RawMessage) (c
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return core.ToolOutput{}, ctxErr
 		}
-		return buildBrokerErrorOutput(args.Path, t.workspaceRoot, err), nil
+		return buildBrokerErrorOutput(args.Path, t.workspaceRoot, errorReadFailed, err), nil
 	}
 	defer file.Content.Close()
 

@@ -32,6 +32,8 @@ const (
 	// defaultMaxReadBytes is fs_read's own cap. It isn't a key in DESIGN.md 5.5's
 	// [tools] example, so it stays a compiled constant rather than a Config field.
 	defaultMaxReadBytes = 256 << 10
+	// defaultMaxWriteBytes matches the read cap so a future wire write_file fits in one frame.
+	defaultMaxWriteBytes = 256 << 10
 )
 
 // Overridden at release time via: go build -ldflags "-X main.version=v0.1.0"
@@ -143,6 +145,8 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core
 	for _, tool := range []core.Tool{
 		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes),
 		builtin.BuildGrepTool(fileBroker, paths.WorkspaceDir),
+		builtin.BuildFileWriteTool(fileBroker, paths.WorkspaceDir, defaultMaxWriteBytes, config.ReportNativeLineEnding()),
+		builtin.BuildFileEditTool(fileBroker, paths.WorkspaceDir, defaultMaxWriteBytes),
 	} {
 		if err := toolRegistry.Register(registry.SourceBuiltin, tool); err != nil {
 			return nil, err

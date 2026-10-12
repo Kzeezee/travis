@@ -18,6 +18,10 @@ const (
 	errorPathIsDirectory      = "path_is_directory"
 	errorBinaryFile           = "binary_file"
 	errorReadFailed           = "read_failed"
+	errorWriteFailed          = "write_failed"
+	errorContentTooLarge      = "content_too_large"
+	errorEditAnchorNotFound   = "edit_anchor_not_found"
+	errorEditAnchorAmbiguous  = "edit_anchor_ambiguous"
 )
 
 // decodeStrictArgs rejects unknown fields and trailing data, so a malformed call errors instead of half-running.
@@ -46,9 +50,10 @@ func buildErrorOutput(code string, fields map[string]any) core.ToolOutput {
 	return core.ToolOutput{Content: string(content), Display: code, IsError: true}
 }
 
-// buildBrokerErrorOutput tells the model why the broker refused or failed a path, in the
-// stable codes above, whichever broker is behind the port.
-func buildBrokerErrorOutput(requested, workspaceRoot string, err error) core.ToolOutput {
+// buildBrokerErrorOutput tells the model why the broker refused or failed a path (or why
+// readWholeFileCapped rejected it), in the stable codes above, whichever broker is behind
+// the port; anything unrecognised reports fallbackCode.
+func buildBrokerErrorOutput(requested, workspaceRoot, fallbackCode string, err error) core.ToolOutput {
 	switch {
 	case errors.Is(err, core.ErrDenied):
 		return buildErrorOutput(errorPathOutsideWorkspace, map[string]any{"path": requested, "workspace": workspaceRoot})
@@ -58,7 +63,11 @@ func buildBrokerErrorOutput(requested, workspaceRoot string, err error) core.Too
 		return buildErrorOutput(errorPathIsDirectory, map[string]any{"path": requested})
 	case errors.Is(err, core.ErrInvalid):
 		return buildErrorOutput(errorInvalidArguments, map[string]any{"detail": err.Error()})
+	case errors.Is(err, errContentTooLarge):
+		return buildErrorOutput(errorContentTooLarge, map[string]any{"path": requested, "detail": err.Error()})
+	case errors.Is(err, errBinaryContent):
+		return buildErrorOutput(errorBinaryFile, map[string]any{"path": requested})
 	default:
-		return buildErrorOutput(errorReadFailed, map[string]any{"path": requested, "detail": err.Error()})
+		return buildErrorOutput(fallbackCode, map[string]any{"path": requested, "detail": err.Error()})
 	}
 }

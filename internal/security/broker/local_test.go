@@ -276,3 +276,125 @@ func TestLocalBrokerAddDecisionRuleSerializesConcurrentWriters(t *testing.T) {
 		t.Fatalf("decisions.toml has %d rules, want %d: %+v", len(rules), writers, rules)
 	}
 }
+
+func readWorkspaceFile(t *testing.T, root, rel string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func TestLocalBrokerWritesNewFilesAndMissingParents(t *testing.T) {
+	root := t.TempDir()
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
+
+	info, err := local.WriteFile(context.Background(), "notes/2026/summary.md", []byte("new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Kind != core.PathKindFile || info.WorkspacePath != "notes/2026/summary.md" {
+		t.Fatalf("WriteFile info = %+v", info)
+	}
+	if got := readWorkspaceFile(t, root, "notes/2026/summary.md"); got != "new" {
+		t.Fatalf("written content = %q", got)
+	}
+}
+
+func TestLocalBrokerOverwritesKeepingPermissionsAndLeavesNoTempFiles(t *testing.T) {
+	root := t.TempDir()
+	path := writeWorkspaceFile(t, root, "a.txt", "old")
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
+
+	if _, err := local.WriteFile(context.Background(), "a.txt", []byte("replaced")); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readWorkspaceFile(t, root, "a.txt"); got != "replaced" {
+		t.Fatalf("content = %q", got)
+	}
+	if after.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("perm = %v, want %v", after.Mode().Perm(), before.Mode().Perm())
+	}
+	leftovers, err := filepath.Glob(filepath.Join(root, ".travis-write-*"))
+	if err != nil || len(leftovers) != 0 {
+		t.Fatalf("temp leftovers = %v, %v", leftovers, err)
+	}
+}
+
+func TestLocalBrokerDeniesWritesOutsideTheWorkspace(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "workspace")
+	writeWorkspaceFile(t, root, "inside.txt", "in")
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
+
+	for _, path := range []string{"../outside.txt", filepath.Join(parent, "abs.txt"), "../new/dir/file.txt"} {
+		if _, err := local.WriteFile(context.Background(), path, []byte("x")); !errors.Is(err, core.ErrDenied) {
+			t.Fatalf("WriteFile(%q) error = %v, want ErrDenied", path, err)
+		}
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("parent entries = %v, %v; want only the workspace", entries, err)
+	}
+}
+
+func TestLocalBrokerDeniesWritesThroughASymlinkedParentThatEscapes(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "workspace")
+	outsideDir := filepath.Join(parent, "outside")
+	writeWorkspaceFile(t, root, "inside.txt", "in")
+	if err := os.MkdirAll(outsideDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	createSymlinkOrSkip(t, outsideDir, filepath.Join(root, "escape"))
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
+
+	for _, path := range []string{"escape/new.txt", "escape/deeper/new.txt"} {
+		if _, err := local.WriteFile(context.Background(), path, []byte("x")); !errors.Is(err, core.ErrDenied) {
+			t.Fatalf("WriteFile(%q) error = %v, want ErrDenied", path, err)
+		}
+	}
+	if entries, _ := os.ReadDir(outsideDir); len(entries) != 0 {
+		t.Fatalf("outside dir gained entries %v", entries)
+	}
+}
+
+func TestLocalBrokerRefusesToWriteOverDirectoriesAndSymlinks(t *testing.T) {
+	root := t.TempDir()
+	target := writeWorkspaceFile(t, root, "folder/real.txt", "real")
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
+
+	if _, err := local.WriteFile(context.Background(), "folder", []byte("x")); !errors.Is(err, core.ErrIsDirectory) {
+		t.Fatalf("WriteFile(folder) error = %v, want ErrIsDirectory", err)
+	}
+	createSymlinkOrSkip(t, target, filepath.Join(root, "link.txt"))
+	if _, err := local.WriteFile(context.Background(), "link.txt", []byte("x")); !errors.Is(err, core.ErrInvalid) {
+		t.Fatalf("WriteFile(link.txt) error = %v, want ErrInvalid", err)
+	}
+	if got := readWorkspaceFile(t, root, "folder/real.txt"); got != "real" {
+		t.Fatalf("symlink target changed to %q", got)
+	}
+}
+
+func TestLocalBrokerWritesNothingWhenTheContextIsCancelled(t *testing.T) {
+	root := t.TempDir()
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := local.WriteFile(ctx, "a.txt", []byte("x")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("WriteFile error = %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "a.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a.txt exists after cancelled write: %v", err)
+	}
+}

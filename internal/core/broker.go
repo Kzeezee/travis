@@ -23,6 +23,8 @@ type Broker interface {
 	// reach this only through a real keypress in the approval modal — see
 	// internal/security/rules for why nothing else may construct a DecisionRule.
 	AddDecisionRule(ctx context.Context, rule DecisionRule) error
+	// WriteFile creates or atomically replaces a regular file inside the workspace, creating parent dirs; never follows a final symlink.
+	WriteFile(ctx context.Context, path string, content []byte) (PathInfo, error)
 }
 
 type PathKind string

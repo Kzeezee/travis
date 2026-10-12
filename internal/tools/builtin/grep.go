@@ -126,7 +126,7 @@ func (t *GrepTool) Invoke(ctx context.Context, arguments json.RawMessage) (core.
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return core.ToolOutput{}, ctxErr
 		}
-		return buildBrokerErrorOutput(args.Path, t.workspaceRoot, err), nil
+		return buildBrokerErrorOutput(args.Path, t.workspaceRoot, errorReadFailed, err), nil
 	}
 
 	results, err := t.searchTree(ctx, start, query)
