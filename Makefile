@@ -18,8 +18,10 @@ help: ## List targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: build
-build: ## Build every package
+build: ## Build every package, then bin/travis with bin/travis-broker's hash stamped in (R-23)
 	go build ./...
+	go build -o bin/travis-broker$(GOEXE) ./cmd/travis-broker
+	go build -o bin/travis$(GOEXE) -ldflags "-X main.brokerSHA256=$$( (sha256sum bin/travis-broker$(GOEXE) 2>/dev/null || shasum -a 256 bin/travis-broker$(GOEXE)) | cut -d' ' -f1)" ./cmd/travis
 
 .PHONY: test
 test: ## Run the unit tests

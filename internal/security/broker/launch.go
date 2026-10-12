@@ -3,6 +3,8 @@ package broker
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -25,8 +27,8 @@ const (
 )
 
 // ResolveBrokerExecutable finds travis-broker beside the running travis binary, never on PATH
-// or through an override, so another program cannot substitute it by name (R-23). Verifying
-// the binary's hash before exec is still to come.
+// or through an override, so another program cannot substitute it by name (R-23).
+// StartSessionBroker then checks its hash before exec.
 func ResolveBrokerExecutable() (string, error) {
 	travisExecutable, err := os.Executable()
 	if err != nil {
@@ -44,10 +46,12 @@ func ResolveBrokerExecutable() (string, error) {
 
 // SessionLaunch is what one session's broker is started with.
 type SessionLaunch struct {
-	Executable   string
-	WorkspaceDir string
-	RuntimeDir   string
-	Profile      string
+	Executable string
+	// ExpectedSHA256 is the hex hash travis was built with; Executable must match it (R-23).
+	ExpectedSHA256 string
+	WorkspaceDir   string
+	RuntimeDir     string
+	Profile        string
 	// Diagnostics receives the broker's stderr; nil discards it.
 	Diagnostics io.Writer
 	// ReadyTimeout bounds the wait for the broker to start listening; zero means the default.
@@ -67,6 +71,9 @@ type SessionBroker struct {
 // listening, and connects after checking the peer is that child (D-12). Any failure leaves no
 // process and no endpoint behind.
 func StartSessionBroker(ctx context.Context, launch SessionLaunch) (*SessionBroker, error) {
+	if err := verifyBrokerBinary(launch.Executable, launch.ExpectedSHA256); err != nil {
+		return nil, err
+	}
 	endpoint, removeEndpoint, err := CreateSessionEndpoint(launch.RuntimeDir)
 	if err != nil {
 		return nil, err
@@ -111,6 +118,29 @@ func StartSessionBroker(ctx context.Context, launch SessionLaunch) (*SessionBrok
 		return abandon(err)
 	}
 	return &SessionBroker{Remote: remoteBroker, brokerProcess: brokerProcess, removeEndpoint: removeEndpoint}, nil
+}
+
+// verifyBrokerBinary refuses a broker that is not the one travis was built with (R-23): a
+// swapped binary would inherit every grant while the UI still shows a normal profile. A travis
+// built without a stamped hash cannot tell, so it refuses too rather than trusting the disk.
+// ponytail: hash-then-exec leaves a TOCTOU window; exec the hashed fd (fexecve) if the threat model needs it.
+func verifyBrokerBinary(path, wantSHA256 string) error {
+	if wantSHA256 == "" {
+		return fmt.Errorf("this travis has no broker hash built in, so %q cannot be verified; build with `make build`: %w", path, core.ErrDenied)
+	}
+	binary, err := os.Open(path) //nolint:gosec // the path comes from ResolveBrokerExecutable or a test, never from the model or config
+	if err != nil {
+		return fmt.Errorf("verify the broker binary: %w", err)
+	}
+	defer binary.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, binary); err != nil {
+		return fmt.Errorf("verify the broker binary: %w", err)
+	}
+	if got := hex.EncodeToString(hash.Sum(nil)); got != strings.ToLower(wantSHA256) {
+		return fmt.Errorf("%q has sha256 %s but travis was built with %s; refusing a broker that is not ours: %w", path, got, wantSHA256, core.ErrDenied)
+	}
+	return nil
 }
 
 // Close ends the session: the broker sees end-of-file and exits, and one that lingers is killed.

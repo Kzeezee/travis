@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,10 +44,18 @@ func buildBrokerBesideTestBinary() error {
 	if err != nil {
 		return fmt.Errorf("the go tool is needed to build travis-broker for these tests: %w", err)
 	}
-	brokerBuild := exec.CommandContext(context.Background(), goTool, "build", "-o", filepath.Join(filepath.Dir(testBinary), brokerName), "github.com/Kzeezee/travis/cmd/travis-broker")
+	brokerPath := filepath.Join(filepath.Dir(testBinary), brokerName)
+	brokerBuild := exec.CommandContext(context.Background(), goTool, "build", "-o", brokerPath, "github.com/Kzeezee/travis/cmd/travis-broker")
 	if output, err := brokerBuild.CombinedOutput(); err != nil {
 		return fmt.Errorf("build travis-broker: %w\n%s", err, output)
 	}
+	// What `make build` stamps into a real travis (R-23).
+	brokerBytes, err := os.ReadFile(brokerPath) //nolint:gosec // our own build output
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(brokerBytes)
+	brokerSHA256 = hex.EncodeToString(digest[:])
 	return nil
 }
 

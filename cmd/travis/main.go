@@ -39,6 +39,10 @@ const (
 // Overridden at release time via: go build -ldflags "-X main.version=v0.1.0"
 var version = "dev"
 
+// brokerSHA256 is travis-broker's hex hash, stamped by `make build` with
+// -ldflags "-X main.brokerSHA256=..."; chat refuses any other broker binary, or none (R-23).
+var brokerSHA256 string
+
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "travis:", err)
@@ -158,9 +162,10 @@ func startSessionBroker(paths config.PathSet, diagnostics io.Writer, client brok
 		return nil, fmt.Errorf("start the security broker: %w", err)
 	}
 	sessionBroker, err := broker.StartSessionBroker(context.Background(), broker.SessionLaunch{
-		Executable:   brokerExecutable,
-		WorkspaceDir: paths.WorkspaceDir,
-		RuntimeDir:   paths.RuntimeDir,
+		Executable:     brokerExecutable,
+		ExpectedSHA256: brokerSHA256,
+		WorkspaceDir:   paths.WorkspaceDir,
+		RuntimeDir:     paths.RuntimeDir,
 		// Not cfg.Profile: the workspace config layer can set that, and a cloned repo must not
 		// choose its own security profile. Selectable once [security] config exists.
 		Profile:     "default",

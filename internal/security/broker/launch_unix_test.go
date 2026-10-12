@@ -4,9 +4,13 @@ package broker_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -73,11 +77,53 @@ func buildHelperLaunch(t *testing.T, helperMode string) broker.SessionLaunch {
 		t.Fatal(err)
 	}
 	return broker.SessionLaunch{
-		Executable:   testBinary,
-		WorkspaceDir: t.TempDir(),
-		RuntimeDir:   buildShortRuntimeDir(t),
-		Profile:      "default",
-		Diagnostics:  &strings.Builder{},
+		Executable:     testBinary,
+		ExpectedSHA256: hashFile(t, testBinary),
+		WorkspaceDir:   t.TempDir(),
+		RuntimeDir:     buildShortRuntimeDir(t),
+		Profile:        "default",
+		Diagnostics:    &strings.Builder{},
+	}
+}
+
+func hashFile(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(content)
+	return hex.EncodeToString(digest[:])
+}
+
+// R-23's red-team case: a broker binary swapped on disk is refused before it runs, and so is
+// any broker at all when travis carries no hash to check it against.
+func TestStartSessionBrokerRefusesABrokerThatIsNotTheOneTravisWasBuiltWith(t *testing.T) {
+	launch := buildHelperLaunch(t, "serve")
+	swapped := filepath.Join(t.TempDir(), "travis-broker")
+	original, err := os.ReadFile(launch.Executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(swapped, append(original, 0), 0o700); err != nil { //nolint:gosec // a test executable
+		t.Fatal(err)
+	}
+
+	for name, tamper := range map[string]func(*broker.SessionLaunch){
+		"swapped binary":  func(l *broker.SessionLaunch) { l.Executable = swapped },
+		"no stamped hash": func(l *broker.SessionLaunch) { l.ExpectedSHA256 = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			tampered := launch
+			tamper(&tampered)
+			if _, err := broker.StartSessionBroker(context.Background(), tampered); !errors.Is(err, core.ErrDenied) {
+				t.Fatalf("StartSessionBroker error = %v, want ErrDenied", err)
+			}
+			requireNoEndpointLeft(t, tampered.RuntimeDir)
+			if diagnostics := fmt.Sprint(tampered.Diagnostics); diagnostics != "" {
+				t.Fatalf("the refused broker ran and wrote %q", diagnostics)
+			}
+		})
 	}
 }
 
