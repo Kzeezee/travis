@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -71,28 +70,10 @@ func buildShortRuntimeDir(t *testing.T) string {
 	return runtimeDir
 }
 
-// skipWithoutBrokerTransport skips before a test arms checks, such as a cassette's
-// every-response-was-used assertion, that a later skip would trip in cleanup.
-func skipWithoutBrokerTransport(t *testing.T) {
-	t.Helper()
-	_, removeEndpoint, err := broker.CreateSessionEndpoint(buildShortRuntimeDir(t))
-	if errors.Is(err, core.ErrUnsupported) {
-		t.Skipf("no broker transport on this OS yet: %v", err)
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	removeEndpoint()
-}
-
 // startTestSessionBroker runs the real broker process over workspace for the rest of the test.
-// It skips where the broker transport is not built yet, since travis cannot run a chat there.
 func startTestSessionBroker(t *testing.T, paths config.PathSet, diagnostics *strings.Builder, client broker.RemoteOptions) core.Broker {
 	t.Helper()
 	sessionBroker, err := startSessionBroker(paths, diagnostics, client)
-	if errors.Is(err, core.ErrUnsupported) {
-		t.Skipf("no broker transport on this OS yet: %v", err)
-	}
 	if err != nil {
 		t.Fatalf("start session broker: %v (diagnostics: %s)", err, diagnostics)
 	}

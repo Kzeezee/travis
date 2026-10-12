@@ -295,7 +295,6 @@ func TestNotesTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
 // task, but the replies are a real model's, replayed through the real provider adapter and its
 // stream parser. Re-record: go test ./cmd/travis -run Recorded -record-cassettes
 func TestNotesTaskReplaysARecordedModel(t *testing.T) {
-	skipWithoutBrokerTransport(t)
 	path := filepath.Join("..", "..", "testdata", "cassettes", "notes-task.jsonl")
 	baseURL, model := "http://cassette.invalid/v1", "replayed-model"
 	if cassette.IsRecording() {

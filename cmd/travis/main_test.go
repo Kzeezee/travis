@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/Kzeezee/travis/internal/config"
-	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
 )
 
@@ -63,9 +62,6 @@ func TestRunChatWiresTheSliceWithoutCallingTheProvider(t *testing.T) {
 	var out bytes.Buffer
 
 	err := run([]string{"chat", "--model", "test-model"}, strings.NewReader(""), &out)
-	if errors.Is(err, core.ErrUnsupported) {
-		t.Skipf("no broker transport on this OS yet, so chat refuses to start: %v", err)
-	}
 	if !errors.Is(err, terminal.ErrNotInteractive) {
 		t.Fatalf("run(chat) error = %v, want %v", err, terminal.ErrNotInteractive)
 	}
