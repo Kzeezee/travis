@@ -32,6 +32,10 @@ type RemoteOptions struct {
 	Clock    core.Clock
 }
 
+// brokerExchangeTimeout is how long a broker may take to answer one request before the
+// connection is declared broken.
+const brokerExchangeTimeout = 30 * time.Second
+
 // maxApprovalsPerEffect covers an effect whose as-written and resolved paths each Ask.
 const maxApprovalsPerEffect = 2
 
@@ -176,7 +180,10 @@ func (r *RemoteBroker) buildEventHeader() core.EventHeader {
 	return core.EventHeader{At: r.options.Clock.ReportCurrentTime()}
 }
 
-// exchange sends one request and waits for its response, honouring ctx's deadline and cancellation.
+// exchange sends one request and waits for its response. A ctx that is already done stops it
+// before sending; once sent, the exchange runs to completion even if ctx ends, because abandoning
+// it mid-frame would leave the stream unusable for every later call. Broker effects are bounded
+// local IO, so only a broker that stops answering for brokerExchangeTimeout breaks the connection.
 func (r *RemoteBroker) exchange(ctx context.Context, req Request) (Response, error) {
 	if err := ctx.Err(); err != nil {
 		return Response{}, err
@@ -187,11 +194,7 @@ func (r *RemoteBroker) exchange(ctx context.Context, req Request) (Response, err
 		return Response{}, r.brokenErr
 	}
 
-	deadline, _ := ctx.Deadline()
-	_ = r.conn.SetDeadline(deadline)
-	stopInterruptingOnCancel := context.AfterFunc(ctx, func() { _ = r.conn.SetDeadline(time.Unix(1, 0)) })
-	defer stopInterruptingOnCancel()
-
+	_ = r.conn.SetDeadline(r.options.Clock.ReportCurrentTime().Add(brokerExchangeTimeout))
 	r.nextID++
 	req.Version, req.ID = ProtocolVersion, r.nextID
 	resp, err := r.sendAndReceive(req)
@@ -202,9 +205,6 @@ func (r *RemoteBroker) exchange(ctx context.Context, req Request) (Response, err
 		// A half-sent request or half-read response leaves the stream unusable for everyone.
 		r.brokenErr = fmt.Errorf("broker unreachable: %w", err)
 		r.publish(ctx, core.BrokerUnavailable{EventHeader: r.buildEventHeader(), Reason: r.brokenErr.Error()})
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return Response{}, ctxErr
-		}
 		return Response{}, r.brokenErr
 	}
 	if resp.Error != nil {

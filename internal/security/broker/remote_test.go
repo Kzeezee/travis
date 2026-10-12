@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/security/broker"
@@ -370,5 +371,33 @@ func TestRemoteBrokerRefusesOversizeFramesWithoutBreaking(t *testing.T) {
 		if _, err := remote.DescribePath(context.Background(), "."); err != nil {
 			t.Fatalf("%s broke the session: %v", name, err)
 		}
+	}
+}
+
+// slowBroker answers DescribePath late, so a caller's context can end mid-exchange.
+type slowBroker struct {
+	*broker.LocalBroker
+}
+
+func (b slowBroker) DescribePath(ctx context.Context, path string) (core.PathInfo, error) {
+	time.Sleep(100 * time.Millisecond)
+	return b.LocalBroker.DescribePath(ctx, path)
+}
+
+// Esc cancels the turn while a tool is talking to the broker; that must end the call, not the session.
+func TestRemoteBrokerSurvivesAContextEndingMidExchange(t *testing.T) {
+	events := &recordingSink{}
+	remote, _ := startPipedBrokerWith(t, slowBroker{broker.BuildLocalBroker(t.TempDir(), core.SystemClock{})}, broker.RemoteOptions{Events: events})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	if _, err := remote.DescribePath(ctx, "."); err != nil {
+		t.Fatalf("DescribePath with a context that ended mid-exchange = %v, want the broker's answer", err)
+	}
+	if _, err := remote.DescribePath(context.Background(), "."); err != nil {
+		t.Fatalf("the next call after a cancelled one = %v, want it to work", err)
+	}
+	if types := events.reportEventTypes(); len(types) != 0 {
+		t.Fatalf("events = %v, want none", types)
 	}
 }
