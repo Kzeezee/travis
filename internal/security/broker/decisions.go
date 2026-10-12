@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -40,7 +39,7 @@ func (b *LocalBroker) AddDecisionRule(ctx context.Context, rule core.DecisionRul
 		return err
 	}
 	if rule.AddedAt.IsZero() {
-		rule.AddedAt = time.Now().UTC()
+		rule.AddedAt = b.clock.ReportCurrentTime().UTC()
 	}
 
 	path := filepath.Join(b.root, filepath.FromSlash(decisionsRelPath))
