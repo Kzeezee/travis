@@ -20,12 +20,3 @@ func buildPlatformPathDefaultsForOS(lookup envLookup, home string) (platformPath
 		systemConfigFile: filepath.Join(systemRoot, "etc", "travis", "config.toml"),
 	}, nil
 }
-
-// selectRuntimeDirForOS prefers the per-user XDG runtime dir. The fallback is the temp dir itself,
-// not a shared subdirectory another user could create first; its sticky bit protects our entries.
-func selectRuntimeDirForOS(lookup envLookup) string {
-	if runtimeRoot := readTrimmedEnvValue(lookup, "XDG_RUNTIME_DIR"); runtimeRoot != "" {
-		return filepath.Join(filepath.Clean(normalizeConfigPath(runtimeRoot)), "travis")
-	}
-	return os.TempDir()
-}

@@ -2,10 +2,7 @@
 
 package config
 
-import (
-	"os"
-	"path/filepath"
-)
+import "path/filepath"
 
 func buildPlatformPathDefaultsForOS(lookup envLookup, home string) (platformPathDefaults, error) {
 	appData := selectPathFromEnvOrFallback(lookup, "AppData", filepath.Join(home, "AppData", "Roaming"))
@@ -18,9 +15,4 @@ func buildPlatformPathDefaultsForOS(lookup envLookup, home string) (platformPath
 		cacheDir:         filepath.Join(localAppData, "travis", "cache"),
 		systemConfigFile: filepath.Join(programData, "travis", "config.toml"),
 	}, nil
-}
-
-// selectRuntimeDirForOS is unused by the broker on Windows, whose pipes have their own namespace.
-func selectRuntimeDirForOS(envLookup) string {
-	return os.TempDir()
 }

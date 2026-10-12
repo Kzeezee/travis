@@ -206,9 +206,10 @@ func TestStartSessionBrokerReportsABrokerThatExitsBeforeReady(t *testing.T) {
 
 func TestStartSessionBrokerGivesUpOnABrokerThatNeverBecomesReady(t *testing.T) {
 	launch := buildHelperLaunch(t, "never-ready")
-	launch.ReadyTimeout = 200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
 
-	_, err := broker.StartSessionBroker(context.Background(), launch)
+	_, err := broker.StartSessionBroker(ctx, launch)
 	if err == nil || !strings.Contains(err.Error(), "no ready line") {
 		t.Fatalf("StartSessionBroker error = %v, want a ready timeout", err)
 	}

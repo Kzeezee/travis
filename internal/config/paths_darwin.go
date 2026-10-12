@@ -17,8 +17,3 @@ func buildPlatformPathDefaultsForOS(lookup envLookup, home string) (platformPath
 		systemConfigFile: filepath.Join(systemRoot, "etc", "travis", "config.toml"),
 	}, nil
 }
-
-// selectRuntimeDirForOS uses $TMPDIR, which macOS already makes private to the user.
-func selectRuntimeDirForOS(envLookup) string {
-	return os.TempDir()
-}

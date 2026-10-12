@@ -198,8 +198,7 @@ func (s *connectionSession) selectOpenFile(handle uint64) (io.ReadCloser, error)
 }
 
 func (s *connectionSession) closeOpenFiles() {
-	for handle, content := range s.openFiles {
+	for _, content := range s.openFiles {
 		_ = content.Close()
-		delete(s.openFiles, handle)
 	}
 }

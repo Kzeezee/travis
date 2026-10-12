@@ -23,8 +23,8 @@ import (
 const BrokerReadyLine = "ready"
 
 const (
-	defaultBrokerReadyTimeout = 10 * time.Second
-	brokerShutdownTimeout     = 2 * time.Second
+	brokerReadyTimeout    = 10 * time.Second
+	brokerShutdownTimeout = 2 * time.Second
 )
 
 // ResolveBrokerExecutable finds travis-broker beside the running travis binary, never on PATH
@@ -59,8 +59,6 @@ type SessionLaunch struct {
 	Profile        string
 	// Diagnostics receives the broker's stderr; nil discards it.
 	Diagnostics io.Writer
-	// ReadyTimeout bounds the wait for the broker to start listening; zero means the default.
-	ReadyTimeout time.Duration
 	// Client is where the connected RemoteBroker reports denials and asks for approvals.
 	Client RemoteOptions
 	// Env is the broker's environment; nil inherits travis's own.
@@ -116,11 +114,10 @@ func StartSessionBroker(ctx context.Context, launch SessionLaunch) (*SessionBrok
 		removeEndpoint()
 		return nil, cause
 	}
-	readyTimeout := launch.ReadyTimeout
-	if readyTimeout <= 0 {
-		readyTimeout = defaultBrokerReadyTimeout
-	}
-	if err := waitForReadyLine(ctx, readyReader, readyTimeout); err != nil {
+	readyCtx, cancelReady := context.WithTimeout(ctx, brokerReadyTimeout)
+	err = waitForReadyLine(readyCtx, readyReader)
+	cancelReady()
+	if err != nil {
 		return abandon(fmt.Errorf("broker did not become ready: %w", err))
 	}
 	remoteBroker, err := ConnectRemoteBroker(ctx, endpoint, brokerProcess.Process.Pid, launch.Client)
@@ -177,9 +174,9 @@ func (s *SessionBroker) Close() error {
 	return nil
 }
 
-// waitForReadyLine returns once the broker reports it is listening. End-of-file first means
-// the broker exited, and it has already said why on stderr.
-func waitForReadyLine(ctx context.Context, brokerStdout io.Reader, readyTimeout time.Duration) error {
+// waitForReadyLine returns once the broker reports it is listening, or when ctx ends. End-of-file
+// first means the broker exited, and it has already said why on stderr.
+func waitForReadyLine(ctx context.Context, brokerStdout io.Reader) error {
 	firstLine := make(chan error, 1)
 	go func() {
 		line, err := bufio.NewReader(brokerStdout).ReadString('\n')
@@ -193,14 +190,10 @@ func waitForReadyLine(ctx context.Context, brokerStdout io.Reader, readyTimeout 
 		}
 	}()
 
-	readyTimer := time.NewTimer(readyTimeout)
-	defer readyTimer.Stop()
 	select {
 	case err := <-firstLine:
 		return err
-	case <-readyTimer.C:
-		return fmt.Errorf("no ready line within %s", readyTimeout)
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("no ready line: %w", ctx.Err())
 	}
 }

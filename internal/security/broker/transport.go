@@ -11,14 +11,7 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 )
 
-// The per-OS transport files each provide the same four functions:
-//
-//	createEndpointForOS(runtimeDir, nonce string) (SessionEndpoint, func(), error)
-//	listenOnEndpoint(endpoint SessionEndpoint) (net.Listener, error)
-//	dialEndpoint(ctx context.Context, endpoint SessionEndpoint) (net.Conn, error)
-//	verifyPeerProcess(conn net.Conn, wantPID int) error
-//
-// Everything above them (framing, policy, the client) is OS-independent (§5.12.5).
+// Per-OS endpoint, listen, dial and peer-check functions live in transport_*.go (§5.12.5).
 
 // endpointNonceBytes keeps names unguessable while leaving room under macOS's socket path limit.
 const endpointNonceBytes = 8

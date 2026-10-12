@@ -2,10 +2,7 @@
 
 package config
 
-import (
-	"os"
-	"path/filepath"
-)
+import "path/filepath"
 
 func buildPlatformPathDefaultsForOS(lookup envLookup, home string) (platformPathDefaults, error) {
 	return platformPathDefaults{
@@ -14,8 +11,4 @@ func buildPlatformPathDefaultsForOS(lookup envLookup, home string) (platformPath
 		cacheDir:         filepath.Join(home, ".cache", "travis"),
 		systemConfigFile: filepath.Join(home, ".config", "travis", "config.toml"),
 	}, nil
-}
-
-func selectRuntimeDirForOS(envLookup) string {
-	return os.TempDir()
 }
