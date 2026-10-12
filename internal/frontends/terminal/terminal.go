@@ -21,6 +21,7 @@ import (
 
 const (
 	quitCommand = "/quit"
+	undoCommand = "/undo"
 	// coalesceWindow turns a token stream into at most one render per frame, 30 fps (DESIGN.md §5.9.1, R-07).
 	coalesceWindow = 33 * time.Millisecond
 	// Used until the terminal reports its size, and for outputs that never do.
@@ -39,6 +40,14 @@ type Options struct {
 	StartupWarnings []string
 	Input           io.Reader
 	Output          io.Writer
+	Undo            UndoActions
+}
+
+// UndoActions are the operations /undo runs: list the turns it can take back, and rewind from
+// one of them. With either nil, /undo says it is unavailable.
+type UndoActions struct {
+	ListTurns func(ctx context.Context) ([]core.TurnSummary, error)
+	Rewind    func(ctx context.Context, fromTurn core.ID, mode core.RewindMode) (core.RewindReport, error)
 }
 
 // RunChat runs the interactive chat until the user quits or input ends. runTurn is the
@@ -173,6 +182,7 @@ type chatModel struct {
 	events    <-chan core.Event
 	approvals <-chan core.ApprovalRequest
 	runTurn   func(context.Context, string) error
+	undo      UndoActions
 	modelName string
 
 	transcript      transcript
@@ -180,6 +190,8 @@ type chatModel struct {
 	input           textinput.Model
 	width           int
 	pendingApproval *core.ApprovalRequest
+	// undoPicker is open while the user chooses what /undo takes back; it takes every key.
+	undoPicker *undoPicker
 	// brokerFailure is set once the broker connection breaks; it never clears, since every
 	// later effect fails closed until travis restarts.
 	brokerFailure string
@@ -203,7 +215,7 @@ func buildChatModel(
 	input.Focus()
 
 	m := chatModel{
-		ctx: ctx, events: events, approvals: approvals, runTurn: runTurn, modelName: opts.ModelName,
+		ctx: ctx, events: events, approvals: approvals, runTurn: runTurn, undo: opts.Undo, modelName: opts.ModelName,
 		viewport: viewport.New(), input: input,
 	}
 	m.transcript.warnings = opts.StartupWarnings
@@ -242,6 +254,10 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case turnFinishedMsg:
 		return m.finishTurn(msg)
+	case turnsListedMsg:
+		return m.openUndoPicker(msg)
+	case rewindFinishedMsg:
+		return m.finishRewind(msg)
 	case inputEndedMsg:
 		m.hasInputEnded = true
 		if m.cancelTurn == nil {
@@ -257,6 +273,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m chatModel) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.pendingApproval != nil {
 		return m.handleApprovalKey(key)
+	}
+	if m.undoPicker != nil {
+		return m.handleUndoPickerKey(key)
 	}
 	isTurnRunning := m.cancelTurn != nil
 	switch key.String() {
@@ -327,6 +346,8 @@ func (m chatModel) submitPrompt() (tea.Model, tea.Cmd) {
 		return m, nil
 	case quitCommand:
 		return m, tea.Quit
+	case undoCommand:
+		return m.requestTurnList()
 	}
 
 	turnCtx, cancel := context.WithCancel(m.ctx)

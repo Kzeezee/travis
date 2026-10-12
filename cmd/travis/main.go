@@ -137,7 +137,10 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	defer unsubscribe()
 
 	chatErr := terminal.RunChat(context.Background(), events, approvals, session.conversation.RunAssistantTurn,
-		terminal.Options{ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out})
+		terminal.Options{
+			ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out,
+			Undo: terminal.UndoActions{ListTurns: session.conversation.ListTurns, Rewind: session.conversation.Rewind},
+		})
 	session.close()
 	return chatErr
 }

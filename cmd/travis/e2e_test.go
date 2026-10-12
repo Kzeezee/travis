@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -429,7 +430,7 @@ func assertWritesWereBackedUpAndLogged(t *testing.T, brokerStateDir, workspace, 
 			kinds = append(kinds, "write:"+string(entry.Call))
 			rel, _ := filepath.Rel(resolvedWorkspace, entry.FileChange.Path)
 			changes[filepath.ToSlash(rel)] = entry.FileChange
-		case core.EntryPolicyDenied, core.EntryApprovalAsked, core.EntryApprovalGiven:
+		case core.EntryPolicyDenied, core.EntryApprovalAsked, core.EntryApprovalGiven, core.EntryFilesReverted, core.EntryRewound:
 			kinds = append(kinds, string(entry.Kind))
 		}
 		if entry.Turn != entries[0].Turn {
@@ -462,5 +463,106 @@ func assertWritesWereBackedUpAndLogged(t *testing.T, brokerStateDir, workspace, 
 	}
 	if restored, err := os.ReadFile(editedPath); err != nil || string(restored) != string(original) {
 		t.Fatalf("restored %s = %q, %v; want the fixture's original bytes", edited, restored, err)
+	}
+}
+
+// TestUndoRewindsFilesAndConversationThroughTheRealBroker is TRA-31's /undo end to end: two turns
+// write through the real broker process, /undo takes both back, and the next request no longer
+// carries them; the session log and the trace both record the rewind.
+func TestUndoRewindsFilesAndConversationThroughTheRealBroker(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "a.txt"), []byte("original\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reply := func(text string) scriptedStep {
+		return func(*testing.T, core.ProviderRequest) []core.Chunk {
+			return []core.Chunk{{Text: text, Finish: core.StopEndTurn}}
+		}
+	}
+	write := func(id core.ID, path, content string) scriptedStep {
+		return func(*testing.T, core.ProviderRequest) []core.Chunk {
+			return buildToolCallChunks(id, "fs_write", `{"path":"`+path+`","content":"`+content+`"}`)
+		}
+	}
+	provider := &scriptedProvider{t: t, steps: []scriptedStep{
+		write("call-a", "a.txt", "changed"), reply("edited a.txt"),
+		write("call-new", "new.txt", "brand new"), reply("created new.txt"),
+		func(t *testing.T, request core.ProviderRequest) []core.Chunk {
+			if len(request.Messages) != 1 {
+				t.Fatalf("request after /undo carries %d messages, want only the new prompt", len(request.Messages))
+			}
+			return []core.Chunk{{Text: "starting over", Finish: core.StopEndTurn}}
+		},
+	}}
+
+	cfg := &config.Config{Brain: config.BrainCfg{MaxSteps: e2eMaxSteps}, Tools: config.ToolsCfg{MaxExposed: 60}, Eval: config.EvalCfg{Traces: true}}
+	paths := config.PathSet{WorkspaceDir: workspace, StateDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t)}
+	var diagnostics strings.Builder
+	bus := buildSessionBus(io.Discard)
+	remote, brokerStateDir := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, bus, redact.New(), "scripted-model", io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, prompt := range []string{"change a.txt", "add new.txt"} {
+		if err := session.conversation.RunAssistantTurn(ctx, prompt); err != nil {
+			t.Fatalf("%s: %v", prompt, err)
+		}
+	}
+
+	turns, err := session.conversation.ListTurns(ctx)
+	if err != nil || len(turns) != 2 || turns[0].Prompt != "change a.txt" || !slices.Equal(turns[1].ChangedPaths, []string{"new.txt"}) {
+		t.Fatalf("ListTurns = %+v, %v", turns, err)
+	}
+	report, err := session.conversation.Rewind(ctx, turns[0].Turn, core.RewindFilesAndConversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(report.Files.Restored, []string{"a.txt"}) || !slices.Equal(report.Files.Deleted, []string{"new.txt"}) {
+		t.Fatalf("report = %+v, want a.txt restored and new.txt deleted", report)
+	}
+	if got, err := os.ReadFile(filepath.Join(workspace, "a.txt")); err != nil || string(got) != "original\n" {
+		t.Fatalf("a.txt = %q, %v; want its original bytes", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "new.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("new.txt still exists: %v", err)
+	}
+	if err := session.conversation.RunAssistantTurn(ctx, "start over"); err != nil {
+		t.Fatal(err)
+	}
+	session.close()
+
+	assertRewindWasLoggedAndTraced(t, brokerStateDir, paths.StateDir)
+}
+
+func assertRewindWasLoggedAndTraced(t *testing.T, brokerStateDir, travisStateDir string) {
+	t.Helper()
+	sessionLog, err := filestore.Open(filepath.Join(brokerStateDir, "sessions"), testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sessionLog.Close()
+	var rewindKinds []core.SessionEntryKind
+	for _, entry := range sessionLog.ReadEntries() {
+		if entry.Kind == core.EntryFilesReverted || entry.Kind == core.EntryRewound {
+			if entry.Author != core.AuthorBroker {
+				t.Fatalf("%s authored by %q, want the broker", entry.Kind, entry.Author)
+			}
+			rewindKinds = append(rewindKinds, entry.Kind)
+		}
+	}
+	if !slices.Equal(rewindKinds, []core.SessionEntryKind{core.EntryFilesReverted, core.EntryRewound}) {
+		t.Fatalf("rewind entries = %v, want files_reverted then rewound", rewindKinds)
+	}
+
+	trace, err := os.ReadFile(filepath.Join(travisStateDir, "traces", string(testSessionID)+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []core.EventType{core.EventFileChanged, core.EventFilesReverted, core.EventConversationRewound} {
+		if !strings.Contains(string(trace), `"`+string(want)+`"`) {
+			t.Fatalf("trace lacks %s, which undo_rate is counted from", want)
+		}
 	}
 }

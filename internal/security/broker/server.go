@@ -68,6 +68,7 @@ type onceApprover interface {
 type sessionKeeper interface {
 	AppendTravisEntries(ctx context.Context, entries []core.SessionEntry) error
 	ListTurns(ctx context.Context) ([]core.TurnSummary, error)
+	Rewind(ctx context.Context, fromTurn core.ID, mode core.RewindMode) (core.RewindReport, error)
 }
 
 // connectionSession holds the files one client has open, and the listing it is paging through;
@@ -151,7 +152,7 @@ func (s *connectionSession) perform(ctx context.Context, req Request) (Response,
 		return Response{}, approver.ApproveOnce(ctx, core.Capability{Kind: core.CapabilityKind(req.Capability.Kind), Scope: req.Capability.Scope})
 	case OpAddDecisionRule:
 		return Response{}, s.effects.AddDecisionRule(ctx, ConvertDecisionRuleMessage(*req.Rule))
-	case OpAppendEntries, OpListTurns:
+	case OpAppendEntries, OpListTurns, OpRewind:
 		return s.answerSessionLog(ctx, req)
 	}
 	return Response{}, fmt.Errorf("unknown op %q: %w", req.Op, core.ErrInvalid)
@@ -165,6 +166,13 @@ func (s *connectionSession) answerSessionLog(ctx context.Context, req Request) (
 	if req.Op == OpListTurns {
 		summaries, err := keeper.ListTurns(ctx)
 		return Response{Turns: BuildTurnSummaryMessages(summaries)}, err
+	}
+	if req.Op == OpRewind {
+		report, err := keeper.Rewind(ctx, core.ID(req.FromTurn), core.RewindMode(req.Mode))
+		if err != nil {
+			return Response{}, err
+		}
+		return Response{Rewind: BuildRewindReportMessage(report)}, nil
 	}
 	entries, err := ConvertEntryMessages(req.Entries)
 	if err != nil {

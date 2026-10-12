@@ -110,3 +110,121 @@ func TestValidateTravisReportedRefusesBrokerOnlyKinds(t *testing.T) {
 		t.Fatalf("ValidateTravisReported(message) = %v; the author it claims is overwritten, not trusted", err)
 	}
 }
+
+func buildChange(id core.ID, turn core.ID, path, before, after string) core.SessionEntry {
+	return core.SessionEntry{
+		ID: id, At: at, Author: core.AuthorBroker, Kind: core.EntryFileChanged, Turn: turn, Call: "c",
+		FileChange: &core.FileChange{Path: path, Before: before, After: after},
+	}
+}
+
+func buildRewindEntry(kind core.SessionEntryKind, fromTurn core.ID, mode core.RewindMode, changeIDs ...core.ID) core.SessionEntry {
+	return core.SessionEntry{ID: core.ID("r-" + string(fromTurn)), At: at, Author: core.AuthorBroker, Kind: kind,
+		Rewind: &core.RewindRecord{FromTurn: fromTurn, Mode: mode, ChangeIDs: changeIDs}}
+}
+
+// Three turns each edit x: reverting from the second plans x back to what the second found, and
+// expects what the third wrote.
+func TestPlanRevertTakesTheEarliestBeforeAndTheLatestAfterPerFile(t *testing.T) {
+	x, y := buildAbsolutePath("x"), buildAbsolutePath("y")
+	entries := []core.SessionEntry{
+		buildMessageEntry("t1", core.RoleUser, "one"), buildChange("c1", "t1", x, "x0", "x1"),
+		buildMessageEntry("t2", core.RoleUser, "two"), buildChange("c2", "t2", x, "x1", "x2"), buildChange("c3", "t2", y, "", "y1"),
+		buildMessageEntry("t3", core.RoleUser, "three"), buildChange("c4", "t3", x, "x2", "x3"),
+	}
+	plans, err := session.PlanRevert(entries, "t2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []session.FileRevertPlan{
+		{Path: x, Before: "x1", ExpectedAfter: "x3", ChangeIDs: []core.ID{"c2", "c4"}},
+		{Path: y, Before: "", ExpectedAfter: "y1", ChangeIDs: []core.ID{"c3"}},
+	}
+	if !reflect.DeepEqual(plans, want) {
+		t.Fatalf("plans = %+v\nwant    %+v", plans, want)
+	}
+}
+
+func TestPlanRevertSkipsChangesAnEarlierRewindReverted(t *testing.T) {
+	x := buildAbsolutePath("x")
+	entries := []core.SessionEntry{
+		buildMessageEntry("t1", core.RoleUser, "one"), buildChange("c1", "t1", x, "x0", "x1"),
+		buildMessageEntry("t2", core.RoleUser, "two"), buildChange("c2", "t2", x, "x1", "x2"),
+		buildRewindEntry(core.EntryFilesReverted, "t2", core.RewindFilesOnly, "c2"),
+	}
+	plans, err := session.PlanRevert(entries, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plans) != 1 || plans[0].Before != "x0" || plans[0].ExpectedAfter != "x1" {
+		t.Fatalf("plans = %+v, want x back to x0, expecting t1's x1 now that t2's change is reverted", plans)
+	}
+}
+
+// A conversation-only rewind hides turns from the chat but leaves their files changed; reverting
+// files from an earlier turn still covers them, because log order decides.
+func TestPlanRevertCoversTurnsTheConversationNoLongerShows(t *testing.T) {
+	x := buildAbsolutePath("x")
+	entries := []core.SessionEntry{
+		buildMessageEntry("t1", core.RoleUser, "one"),
+		buildMessageEntry("t2", core.RoleUser, "two"), buildChange("c2", "t2", x, "", "x2"),
+		buildRewindEntry(core.EntryRewound, "t2", core.RewindConversationOnly),
+	}
+	plans, err := session.PlanRevert(entries, "t1")
+	if err != nil || len(plans) != 1 || plans[0].Path != x {
+		t.Fatalf("plans = %+v, %v; want t2's hidden change planned", plans, err)
+	}
+}
+
+func TestPlanRevertMarksAFileWhoseEarliestChangeHasNoBackup(t *testing.T) {
+	x := buildAbsolutePath("x")
+	irreversible := buildChange("c1", "t1", x, "", "x1")
+	irreversible.FileChange.IsIrreversible = true
+	entries := []core.SessionEntry{buildMessageEntry("t1", core.RoleUser, "one"), irreversible, buildChange("c2", "t1", x, "x1", "x2")}
+	plans, _ := session.PlanRevert(entries, "t1")
+	if len(plans) != 1 || !plans[0].HasNoBackup {
+		t.Fatalf("plans = %+v, want x marked as having no backup", plans)
+	}
+	if later, _ := session.PlanRevert(append(entries, buildMessageEntry("t2", core.RoleUser, "two"), buildChange("c3", "t2", x, "x2", "x3")), "t2"); later[0].HasNoBackup {
+		t.Fatal("a later change with a backup is restorable even though an earlier one was not")
+	}
+}
+
+func TestPlanRevertRefusesATurnNotInTheSession(t *testing.T) {
+	if _, err := session.PlanRevert([]core.SessionEntry{buildMessageEntry("t1", core.RoleUser, "one")}, "t9"); !errors.Is(err, core.ErrInvalid) {
+		t.Fatalf("PlanRevert = %v, want ErrInvalid", err)
+	}
+}
+
+func TestBuildTurnSummariesHideRewoundTurnsAndRevertedChanges(t *testing.T) {
+	x, y := buildAbsolutePath("x"), buildAbsolutePath("y")
+	entries := []core.SessionEntry{
+		buildMessageEntry("t1", core.RoleUser, "one"), buildChange("c1", "t1", x, "", "x1"), buildChange("c2", "t1", y, "", "y1"),
+		buildRewindEntry(core.EntryFilesReverted, "t1", core.RewindFilesOnly, "c2"),
+		buildMessageEntry("t2", core.RoleUser, "two"),
+		buildRewindEntry(core.EntryRewound, "t2", core.RewindConversationOnly),
+	}
+	summaries := session.BuildTurnSummaries(entries)
+	if len(summaries) != 1 || summaries[0].Turn != "t1" || !slices.Equal(summaries[0].ChangedPaths, []string{x}) {
+		t.Fatalf("summaries = %+v, want only t1, with only its unreverted change", summaries)
+	}
+}
+
+func TestValidateEntryChecksRewindEntriesAgainstTheirMode(t *testing.T) {
+	for name, entry := range map[string]core.SessionEntry{
+		"no record":               {Author: core.AuthorBroker, Kind: core.EntryRewound},
+		"unknown mode":            buildRewindEntry(core.EntryRewound, "t1", "everything"),
+		"rewound in files mode":   buildRewindEntry(core.EntryRewound, "t1", core.RewindFilesOnly),
+		"files in chat-only mode": buildRewindEntry(core.EntryFilesReverted, "t1", core.RewindConversationOnly),
+		"no turn":                 buildRewindEntry(core.EntryRewound, "", core.RewindFilesAndConversation),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := session.ValidateEntry(entry); !errors.Is(err, core.ErrInvalid) {
+				t.Fatalf("ValidateEntry = %v, want ErrInvalid", err)
+			}
+		})
+	}
+	if err := session.ValidateTravisReported(buildRewindEntry(core.EntryRewound, "t1", core.RewindConversationOnly)); !errors.Is(err, core.ErrDenied) {
+		t.Fatalf("travis reporting a rewind = %v, want ErrDenied: only the broker rewinds", err)
+	}
+}

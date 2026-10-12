@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/state/session"
@@ -46,9 +47,11 @@ const (
 // core seams only, so the concrete provider, tools, event delivery, clock, and IDs are
 // all chosen by the caller.
 //
-// RunAssistantTurn mutates the conversation, so turns must be serialised; the caller
-// decides when a new prompt may start.
+// RunAssistantTurn and Rewind mutate the conversation, so they never overlap: a turn waits for
+// the one before it, and a rewind is refused while a turn runs.
 type AssistantConversation struct {
+	busy sync.Mutex
+
 	provider core.Provider
 	tools    ToolLookup
 	events   core.EventSink
@@ -93,6 +96,8 @@ type stepReply struct {
 // error reports required work that failed while the caller waited; the assistant's own
 // text arrives through the event sink, not the return value.
 func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt string) error {
+	c.busy.Lock()
+	defer c.busy.Unlock()
 	c.turnID = c.ids.GenerateID()
 	userMessage := core.Message{Role: core.RoleUser, Parts: []core.Part{core.TextPart{Text: prompt}}}
 	c.events.Publish(ctx, core.UserMessageSubmitted{EventHeader: c.buildEventHeader(), Message: userMessage})
@@ -130,6 +135,45 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 
 	c.completeTurn(ctx, core.StopBudget, usage)
 	return nil
+}
+
+// ListTurns reports the turns still in the conversation, as the session log has them.
+func (c *AssistantConversation) ListTurns(ctx context.Context) ([]core.TurnSummary, error) {
+	if c.log == nil {
+		return nil, nil
+	}
+	return c.log.ListTurns(ctx)
+}
+
+// Rewind takes back fromTurn and every later turn, as mode says (/undo). The session log does
+// the work and records it; the conversation then applies the same entries to its own copy, so
+// the next request leaves out what was rewound, or tells the model which files changed back.
+func (c *AssistantConversation) Rewind(ctx context.Context, fromTurn core.ID, mode core.RewindMode) (core.RewindReport, error) {
+	if !c.busy.TryLock() {
+		return core.RewindReport{}, fmt.Errorf("a turn is running; rewind once it ends: %w", core.ErrInvalid)
+	}
+	defer c.busy.Unlock()
+	if c.log == nil {
+		return core.RewindReport{}, fmt.Errorf("this conversation keeps no session log to rewind: %w", core.ErrInvalid)
+	}
+	report, err := c.log.Rewind(ctx, fromTurn, mode)
+	if err != nil {
+		return core.RewindReport{}, err
+	}
+
+	header := core.EventHeader{ID: c.ids.GenerateID(), At: c.clock.ReportCurrentTime()}
+	if mode.IsRevertingFiles() {
+		record := core.RewindRecord{FromTurn: fromTurn, Mode: mode, Files: report.Files}
+		c.entries = append(c.entries, core.SessionEntry{Kind: core.EntryFilesReverted, Rewind: &record})
+		c.events.Publish(ctx, core.FilesReverted{EventHeader: header, FromTurn: fromTurn, Files: report.Files})
+	}
+	if mode.IsRewindingConversation() {
+		record := core.RewindRecord{FromTurn: fromTurn, Mode: mode}
+		c.entries = append(c.entries, core.SessionEntry{Kind: core.EntryRewound, Rewind: &record})
+		header.ID = c.ids.GenerateID()
+		c.events.Publish(ctx, core.ConversationRewound{EventHeader: header, FromTurn: fromTurn, Mode: mode})
+	}
+	return report, nil
 }
 
 // runStep makes exactly one provider call; it exists so the stream closes every step.

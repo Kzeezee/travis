@@ -2179,7 +2179,7 @@ entry records its author, which the broker stamps itself:
 
 | Author | Entries | What the broker guarantees |
 |---|---|---|
-| `broker` | `file_changed`, `policy_denied`, `approval_asked`, `approval_given` | true: it did or decided this |
+| `broker` | `file_changed`, `policy_denied`, `approval_asked`, `approval_given`, `files_reverted`, `rewound` | true: it did or decided this |
 | `travis` | `message` (user, assistant, tool) | stored exactly as received, never changed after |
 
 Travis sends completed messages with `append_entries` (redacted first) and waits for them to
@@ -2187,6 +2187,13 @@ be durable before acting on them; it can never append a broker-authored kind. Th
 the model sees is rebuilt from the log's messages, so the log and the history cannot drift.
 The "journal" above is therefore two pieces: `internal/state/blobs` holds the backup bytes,
 and each change is a `file_changed` entry in this log, joined to its turn and tool call by id.
+`/undo` is a `rewind{from_turn, mode}` the broker performs: in `files` or `both` mode it puts
+each file changed from that turn on back to its earliest backup, leaving any file whose bytes
+are no longer what the agent last wrote, then appends `files_reverted`; in `conversation` or
+`both` mode it appends `rewound`, which hides that turn and later ones from the history. Files
+are restored before the entry is appended, so a crash in between can lose the record of a
+rewind but never overwrite a file. Nothing is deleted from the log, so redo and `/fork` can
+build on it.
 The rules for reading the log (validation, history, turn summaries) are a pure package,
 `internal/state/session`, shared by the loop and the broker; it imports only `core`.
 
@@ -2718,8 +2725,8 @@ requiring the user to remember syntax:
 `/trace` `/cost` `/new` `/resume` `/fork` `/export` `/eval` `/help` `/quit`.
 
 The four that are new in v0.3: `/auth` runs or revokes a provider sign-in (§5.3.1);
-`/auto [duration]` grants time-boxed autonomy; `/undo [n]` rolls back the last n
-journalled changes; `/decisions` lists and revokes learned approval rules (§6.4).
+`/auto [duration]` grants time-boxed autonomy; `/undo` picks a turn and rewinds its
+files, its conversation, or both, with everything after it (§5.15); `/decisions` lists and revokes learned approval rules (§6.4).
 
 ### 7.5 Other required screens
 
@@ -2732,7 +2739,8 @@ journalled changes; `/decisions` lists and revokes learned approval rules (§6.4
 - **Decisions inspector** (`/decisions`) — every learned "always allow" rule, its
   scope, its TTL, and when it was granted, with one-key revoke. If a user cannot see
   what they have agreed to, they have not agreed to it.
-- **Undo view** (`/undo`) — journalled changes per turn, with per-file restore.
+- **Undo view** (`/undo`) — turns newest first with the files each changed; choose a turn and
+  whether to rewind files, conversation, or both. Per-file restore is not built yet.
 - **Trace viewer** (`/trace`) — collapsible causal tree of the current turn: steps,
   tool calls, tokens, cost, policy decisions.
 - **Context inspector** (`/context`) — what is actually in the window right now,

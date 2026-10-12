@@ -46,12 +46,14 @@ func (l *memoryLog) reportKinds() []core.SessionEntryKind {
 	return kinds
 }
 
-// memoryBackups records what each Snapshot saw on disk, without keeping blobs. Files larger
-// than maxBytes are irreversible, as the real store reports them.
+// memoryBackups records what each Snapshot saw on disk and keeps the bytes in memory. Files
+// larger than maxBytes are irreversible, as the real store reports them.
 type memoryBackups struct {
 	maxBytes    int
 	snapshotErr error
+	restoreErr  error
 	seen        map[string]string
+	blobs       map[blobs.Ref][]byte
 }
 
 func (b *memoryBackups) Snapshot(_ context.Context, path string) (blobs.Ref, error) {
@@ -70,11 +72,30 @@ func (b *memoryBackups) Snapshot(_ context.Context, path string) (blobs.Ref, err
 		return "", blobs.ErrIrreversible
 	}
 	b.seen[path] = string(data)
-	return blobs.HashContent(data), nil
+	ref := blobs.HashContent(data)
+	b.blobs[ref] = data
+	return ref, nil
+}
+
+func (b *memoryBackups) Restore(_ context.Context, path string, ref blobs.Ref) error {
+	if b.restoreErr != nil {
+		return b.restoreErr
+	}
+	if ref == "" {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	data, isKept := b.blobs[ref]
+	if !isKept {
+		return errors.New("no such backup")
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 func buildTestRecords() (broker.SessionRecords, *memoryLog, *memoryBackups) {
-	log, backups := &memoryLog{}, &memoryBackups{seen: map[string]string{}}
+	log, backups := &memoryLog{}, &memoryBackups{seen: map[string]string{}, blobs: map[blobs.Ref][]byte{}}
 	return broker.SessionRecords{Log: log, Backups: backups, IDs: &core.SequentialIDGenerator{Prefix: "entry-"}}, log, backups
 }
 

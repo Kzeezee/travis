@@ -1,0 +1,16 @@
+ /undo · rewind to before…
+   14:32  rename the config loader and u…  3 files
+ ▸ 14:21  why does BuildPathSet fail on window…  —
+   14:15  fix the typo in README            1 file
+
+
+
+
+
+ ◉ files + conversation   ○ conversation only   ○…
+ rewinds 2 turns · puts back config/load.go, conf…
+ ↑↓ choose · tab mode · ⏎ rewind · esc cancel
+──────────────────────────────────────────────────
+ ›                                                
+──────────────────────────────────────────────────
+ test-model · idle · last turn: none

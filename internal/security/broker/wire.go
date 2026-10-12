@@ -21,8 +21,8 @@ import (
 // ProtocolVersion is carried on every request; a broker refuses any version it does not speak.
 // Version 2 added write_file, approve_once, add_decision_rule, the needs_approval error and
 // list_directory paging. Version 3 added append_entries, list_turns, the turn and call every
-// request is made under, and irreversible approvals.
-const ProtocolVersion uint16 = 3
+// request is made under, and irreversible approvals. Version 4 added rewind.
+const ProtocolVersion uint16 = 4
 
 const (
 	// MaxFrameBytes bounds what either side allocates for one message.
@@ -51,6 +51,8 @@ const (
 	// OpAppendEntries logs conversation messages travis reports; OpListTurns lists the session's turns.
 	OpAppendEntries Op = "append_entries"
 	OpListTurns     Op = "list_turns"
+	// OpRewind takes back FromTurn and every later turn, as Mode says.
+	OpRewind Op = "rewind"
 )
 
 type Request struct {
@@ -76,6 +78,9 @@ type Request struct {
 	Call string `msgpack:"call,omitempty"`
 	// Entries are the messages append_entries logs.
 	Entries []EntryMessage `msgpack:"entries,omitempty"`
+	// FromTurn and Mode are what rewind takes back.
+	FromTurn string `msgpack:"from_turn,omitempty"`
+	Mode     string `msgpack:"mode,omitempty"`
 }
 
 // EntryMessage is one conversation message travis reports. Message is core.Message's JSON, which
@@ -119,6 +124,21 @@ type Response struct {
 	NextOffset uint32 `msgpack:"next_offset,omitempty"`
 	// Turns answers list_turns, oldest first.
 	Turns []TurnSummaryMessage `msgpack:"turns,omitempty"`
+	// Rewind answers rewind: what happened to each file.
+	Rewind *RewindReportMessage `msgpack:"rewind,omitempty"`
+}
+
+type RewindReportMessage struct {
+	FromTurn string               `msgpack:"from_turn"`
+	Mode     string               `msgpack:"mode"`
+	Restored []string             `msgpack:"restored,omitempty"`
+	Deleted  []string             `msgpack:"deleted,omitempty"`
+	Skipped  []SkippedFileMessage `msgpack:"skipped,omitempty"`
+}
+
+type SkippedFileMessage struct {
+	Path   string `msgpack:"path"`
+	Reason string `msgpack:"reason"`
 }
 
 type PathInfo struct {
@@ -222,6 +242,10 @@ func validateRequest(req Request) error {
 			return fmt.Errorf("%s needs at least one entry: %w", req.Op, core.ErrInvalid)
 		}
 	case OpListTurns:
+	case OpRewind:
+		if req.FromTurn == "" || req.Mode == "" {
+			return fmt.Errorf("%s needs a turn and a mode: %w", req.Op, core.ErrInvalid)
+		}
 	default:
 		return fmt.Errorf("unknown op %q: %w", req.Op, core.ErrInvalid)
 	}
@@ -398,4 +422,31 @@ func ConvertTurnSummaryMessages(messages []TurnSummaryMessage) []core.TurnSummar
 		})
 	}
 	return summaries
+}
+
+func BuildRewindReportMessage(report core.RewindReport) *RewindReportMessage {
+	skipped := make([]SkippedFileMessage, 0, len(report.Files.Skipped))
+	for _, file := range report.Files.Skipped {
+		skipped = append(skipped, SkippedFileMessage{Path: file.Path, Reason: file.Reason})
+	}
+	return &RewindReportMessage{
+		FromTurn: string(report.FromTurn), Mode: string(report.Mode),
+		Restored: report.Files.Restored, Deleted: report.Files.Deleted, Skipped: skipped,
+	}
+}
+
+// ConvertRewindReportMessage validates the broker's answer; a mode /undo never asked for is refused.
+func ConvertRewindReportMessage(msg RewindReportMessage) (core.RewindReport, error) {
+	mode := core.RewindMode(msg.Mode)
+	if !mode.IsRevertingFiles() && !mode.IsRewindingConversation() {
+		return core.RewindReport{}, fmt.Errorf("rewind report has unknown mode %q: %w", msg.Mode, core.ErrInvalid)
+	}
+	var skipped []core.SkippedFile
+	for _, file := range msg.Skipped {
+		skipped = append(skipped, core.SkippedFile{Path: file.Path, Reason: file.Reason})
+	}
+	return core.RewindReport{
+		FromTurn: core.ID(msg.FromTurn), Mode: mode,
+		Files: core.FileReverts{Restored: msg.Restored, Deleted: msg.Deleted, Skipped: skipped},
+	}, nil
 }

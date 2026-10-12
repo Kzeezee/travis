@@ -19,9 +19,10 @@ type SessionRecorder interface {
 
 // FileBackups stores a file's current bytes before the broker overwrites it. Snapshot returns
 // "" for a file that does not exist yet, and an error wrapping blobs.ErrIrreversible for one it
-// cannot back up.
+// cannot back up. Restore puts a backup back, removing the file for "".
 type FileBackups interface {
 	Snapshot(ctx context.Context, path string) (blobs.Ref, error)
+	Restore(ctx context.Context, path string, ref blobs.Ref) error
 }
 
 // SessionRecords are where a PolicyEnforcedBroker keeps its record of the session; IDs names
@@ -90,6 +91,22 @@ func (b *PolicyEnforcedBroker) AppendTravisEntries(_ context.Context, entries []
 	return b.records.Log.Append(stamped...)
 }
 
+// ListTurns reports the turns still in the conversation, with workspace-relative paths for display.
 func (b *PolicyEnforcedBroker) ListTurns(context.Context) ([]core.TurnSummary, error) {
-	return session.BuildTurnSummaries(b.records.Log.ReadEntries()), nil
+	summaries := session.BuildTurnSummaries(b.records.Log.ReadEntries())
+	for i := range summaries {
+		summaries[i].ChangedPaths = b.reportWorkspacePaths(summaries[i].ChangedPaths)
+	}
+	return summaries, nil
+}
+
+func (b *PolicyEnforcedBroker) reportWorkspacePaths(paths []string) []string {
+	if paths == nil {
+		return nil
+	}
+	reported := make([]string, 0, len(paths))
+	for _, path := range paths {
+		reported = append(reported, b.describeResolvedPath(path, 0).WorkspacePath)
+	}
+	return reported
 }

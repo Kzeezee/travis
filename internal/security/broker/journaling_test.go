@@ -220,14 +220,13 @@ func TestListTurnsSummarisesTheSessionLog(t *testing.T) {
 	if err := enforced.AppendTravisEntries(testTurn, []core.SessionEntry{{Kind: core.EntryMessage, Turn: "turn-1", Message: &message}}); err != nil {
 		t.Fatal(err)
 	}
-	info, err := enforced.WriteFile(testTurn, "notes.md", []byte("hi"))
-	if err != nil {
+	if _, err := enforced.WriteFile(testTurn, "notes.md", []byte("hi")); err != nil {
 		t.Fatal(err)
 	}
 
 	turns, err := enforced.ListTurns(context.Background())
 	if err != nil || len(turns) != 1 || turns[0].Turn != "turn-1" || turns[0].Prompt != "write notes" ||
-		len(turns[0].ChangedPaths) != 1 || turns[0].ChangedPaths[0] != info.Path {
+		len(turns[0].ChangedPaths) != 1 || turns[0].ChangedPaths[0] != "notes.md" {
 		t.Fatalf("ListTurns = %+v, %v", turns, err)
 	}
 }
@@ -357,7 +356,7 @@ func TestCrashBetweenLoggingAndWritingLeavesAnUndoableFile(t *testing.T) {
 			if tc.original != "" {
 				writeWorkspaceFile(t, workspace, "a.txt", tc.original)
 			}
-			runCrashHelperUntilStalled(t, workspace, stateDir, "a.txt")
+			runCrashHelperUntilReady(t, buildCrashHelper(t, "^TestCrashHelper$", crashHelperEnv, "WORKSPACE="+workspace, "STATE_DIR="+stateDir, "TARGET=a.txt"))
 
 			target := filepath.Join(workspace, "a.txt")
 			current, err := os.ReadFile(target)
@@ -396,10 +395,17 @@ func TestCrashBetweenLoggingAndWritingLeavesAnUndoableFile(t *testing.T) {
 	}
 }
 
-func runCrashHelperUntilStalled(t *testing.T, workspace, stateDir, target string) {
+// buildCrashHelper reruns this test binary as the child test named by pattern, with env set.
+func buildCrashHelper(t *testing.T, pattern, env string, vars ...string) *exec.Cmd {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCrashHelper$")
-	cmd.Env = append(os.Environ(), crashHelperEnv+"=1", "WORKSPACE="+workspace, "STATE_DIR="+stateDir, "TARGET="+target)
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run="+pattern)
+	cmd.Env = append(append(os.Environ(), env+"=1"), vars...)
+	return cmd
+}
+
+// runCrashHelperUntilReady starts the child and kill -9s it as soon as it reports ready.
+func runCrashHelperUntilReady(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)

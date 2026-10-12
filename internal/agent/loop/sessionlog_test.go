@@ -15,10 +15,14 @@ import (
 var errLogUnavailable = errors.New("log unavailable")
 
 // recordingLog keeps what the loop appends; failAfter > 0 refuses every append after that many.
+// Rewind answers with report, or rewindErr, and notes what it was asked.
 type recordingLog struct {
 	entries           []core.SessionEntry
 	failAfter         int
 	wasCancelledOnAdd []bool
+	report            core.RewindReport
+	rewindErr         error
+	rewoundFrom       core.ID
 }
 
 func (l *recordingLog) AppendEntries(ctx context.Context, entries []core.SessionEntry) error {
@@ -31,6 +35,16 @@ func (l *recordingLog) AppendEntries(ctx context.Context, entries []core.Session
 }
 
 func (l *recordingLog) ListTurns(context.Context) ([]core.TurnSummary, error) { return nil, nil }
+
+func (l *recordingLog) Rewind(_ context.Context, fromTurn core.ID, mode core.RewindMode) (core.RewindReport, error) {
+	l.rewoundFrom = fromTurn
+	if l.rewindErr != nil {
+		return core.RewindReport{}, l.rewindErr
+	}
+	report := l.report
+	report.FromTurn, report.Mode = fromTurn, mode
+	return report, nil
+}
 
 func (l *recordingLog) reportRoles() []core.Role {
 	roles := make([]core.Role, 0, len(l.entries))
@@ -112,6 +126,9 @@ func (refusingLog) AppendEntries(context.Context, []core.SessionEntry) error {
 	return errLogUnavailable
 }
 func (refusingLog) ListTurns(context.Context) ([]core.TurnSummary, error) { return nil, nil }
+func (refusingLog) Rewind(context.Context, core.ID, core.RewindMode) (core.RewindReport, error) {
+	return core.RewindReport{}, errLogUnavailable
+}
 
 // cancellingTool cancels the turn while it runs, as Esc does mid tool call.
 type cancellingTool struct{ cancel context.CancelFunc }

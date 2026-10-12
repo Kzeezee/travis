@@ -38,8 +38,12 @@ func (m chatModel) View() tea.View {
 		failure := " security broker unreachable, every tool will fail; restart travis · " + m.brokerFailure
 		statusLine = failureBarStyle.Width(m.width).Render(ansi.Truncate(failure, m.width, ellipsis))
 	}
+	transcriptArea := m.viewport.View()
+	if m.undoPicker != nil {
+		transcriptArea = renderUndoPicker(*m.undoPicker, m.width, m.viewport.Height())
+	}
 	view := tea.NewView(strings.Join([]string{
-		m.viewport.View(),
+		transcriptArea,
 		separator,
 		inputLine,
 		separator,
@@ -47,7 +51,7 @@ func (m chatModel) View() tea.View {
 	}, "\n"))
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
-	if cursor := m.input.Cursor(); cursor != nil && m.pendingApproval == nil {
+	if cursor := m.input.Cursor(); cursor != nil && m.pendingApproval == nil && m.undoPicker == nil {
 		cursor.Y += m.viewport.Height() + 1
 		view.Cursor = cursor
 	}
@@ -115,7 +119,12 @@ func renderTranscript(t transcript, width int) string {
 		sections = append(sections, strings.Join(warnings, "\n"))
 	}
 	for _, turn := range t.turns {
-		sections = append(sections, renderTurn(turn, width))
+		switch {
+		case !turn.isRewound:
+			sections = append(sections, renderTurn(turn, width))
+		case len(turn.notices) > 0: // a rewound turn shows only what /undo did, in its place
+			sections = append(sections, renderNotices(turn.notices, width))
+		}
 	}
 	return strings.Join(sections, "\n\n")
 }
@@ -143,6 +152,21 @@ func renderTurn(turn chatTurn, width int) string {
 	case turnInterrupted:
 		lines = append(lines, truncateWithMargin(dimStyle.Render("  ⊘ interrupted"), width))
 	case turnPending, turnSucceeded:
+	}
+	if len(turn.changedPaths) > 0 && turn.outcome != turnPending {
+		changed := "  ✎ changed " + strings.Join(turn.changedPaths, ", ") + " · /undo to take back"
+		lines = append(lines, truncateWithMargin(dimStyle.Render(changed), width))
+	}
+	if len(turn.notices) > 0 {
+		lines = append(lines, renderNotices(turn.notices, width))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderNotices(notices []string, width int) string {
+	lines := make([]string, 0, len(notices))
+	for _, notice := range notices {
+		lines = append(lines, wrapWithMargin(warningStyle.Render("  "+notice), width))
 	}
 	return strings.Join(lines, "\n")
 }

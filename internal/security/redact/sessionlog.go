@@ -32,3 +32,7 @@ func (l sessionLog) AppendEntries(ctx context.Context, entries []core.SessionEnt
 func (l sessionLog) ListTurns(ctx context.Context) ([]core.TurnSummary, error) {
 	return l.next.ListTurns(ctx)
 }
+
+func (l sessionLog) Rewind(ctx context.Context, fromTurn core.ID, mode core.RewindMode) (core.RewindReport, error) {
+	return l.next.Rewind(ctx, fromTurn, mode)
+}

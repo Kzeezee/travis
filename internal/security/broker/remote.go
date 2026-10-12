@@ -151,7 +151,14 @@ func (r *RemoteBroker) WriteFile(ctx context.Context, path string, content []byt
 	if err != nil {
 		return core.PathInfo{}, err
 	}
-	return convertRequiredPathInfo(resp)
+	info, err := convertRequiredPathInfo(resp)
+	if err != nil {
+		return core.PathInfo{}, err
+	}
+	header := r.buildEventHeader()
+	header.TurnID = core.ReportTurnID(ctx)
+	r.publish(ctx, core.FileChanged{EventHeader: header, CallID: core.ReportToolCallID(ctx), Path: info.WorkspacePath})
+	return info, nil
 }
 
 func (r *RemoteBroker) AddDecisionRule(ctx context.Context, rule core.DecisionRule) error {
@@ -175,6 +182,17 @@ func (r *RemoteBroker) ListTurns(ctx context.Context) ([]core.TurnSummary, error
 		return nil, err
 	}
 	return ConvertTurnSummaryMessages(resp.Turns), nil
+}
+
+func (r *RemoteBroker) Rewind(ctx context.Context, fromTurn core.ID, mode core.RewindMode) (core.RewindReport, error) {
+	resp, err := r.exchange(ctx, Request{Op: OpRewind, FromTurn: string(fromTurn), Mode: string(mode)})
+	if err != nil {
+		return core.RewindReport{}, err
+	}
+	if resp.Rewind == nil {
+		return core.RewindReport{}, fmt.Errorf("broker answered rewind without a report: %w", core.ErrInvalid)
+	}
+	return ConvertRewindReportMessage(*resp.Rewind)
 }
 
 // exchangeEffect is exchange for a request policy decides: an Ask goes to the human and the

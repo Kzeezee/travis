@@ -48,6 +48,10 @@ func (l *recordingSessionLog) AppendEntries(_ context.Context, entries []core.Se
 
 func (l *recordingSessionLog) ListTurns(context.Context) ([]core.TurnSummary, error) { return nil, nil }
 
+func (l *recordingSessionLog) Rewind(context.Context, core.ID, core.RewindMode) (core.RewindReport, error) {
+	return core.RewindReport{}, nil
+}
+
 func TestSessionLogRecordsOnlyTheRedactedForm(t *testing.T) {
 	next := &recordingSessionLog{}
 	original := core.Message{Role: core.RoleTool, Parts: []core.Part{

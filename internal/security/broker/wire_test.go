@@ -17,14 +17,16 @@ import (
 )
 
 // These bytes are the frozen protocol (D-19). If a change here fails, the change breaks every
-// broker already built against version 3: add a new op or field under a new ProtocolVersion.
-// Version 3 changed only the version a request carries; the v2 response bytes are unchanged.
+// broker already built against version 4: add a new op or field under a new ProtocolVersion.
+// Versions 3 and 4 changed only the version a request carries; the v2 response bytes are unchanged.
 const (
-	goldenOpenFileRequest         = "0000003384a176cd0003a26964cf0000000000000007a26f70a96f70656e5f66696c65a470617468ae6e6f7465732f746f6461792e6d64"
+	goldenOpenFileRequest         = "0000003384a176cd0004a26964cf0000000000000007a26f70a96f70656e5f66696c65a470617468ae6e6f7465732f746f6461792e6d64"
 	goldenOpenFileResponse        = "0000006283a26964cf0000000000000007a4696e666f83a470617468b12f772f6e6f7465732f746f6461792e6d64ae776f726b73706163655f70617468ae6e6f7465732f746f6461792e6d64a46b696e64a466696c65a668616e646c65cf0000000000000001"
-	goldenWriteFileRequest        = "0000004487a176cd0003a26964cf0000000000000009a26f70aa77726974655f66696c65a470617468a5612e747874a464617461c4026869a47475726ea27431a463616c6ca26331"
-	goldenAppendEntriesRequest    = "0000007584a176cd0003a26964cf000000000000000aa26f70ae617070656e645f656e7472696573a7656e74726965739182a47475726ea27431a76d657373616765c4357b22726f6c65223a2275736572222c227061727473223a5b7b226b696e64223a2274657874222c2274657874223a226869227d5d7d"
+	goldenWriteFileRequest        = "0000004487a176cd0004a26964cf0000000000000009a26f70aa77726974655f66696c65a470617468a5612e747874a464617461c4026869a47475726ea27431a463616c6ca26331"
+	goldenAppendEntriesRequest    = "0000007584a176cd0004a26964cf000000000000000aa26f70ae617070656e645f656e7472696573a7656e74726965739182a47475726ea27431a76d657373616765c4357b22726f6c65223a2275736572222c227061727473223a5b7b226b696e64223a2274657874222c2274657874223a226869227d5d7d"
 	goldenListTurnsResponse       = "0000005682a26964cf000000000000000ba57475726e739185a47475726ea27431a670726f6d7074a26869a26174d6ff6acce7e0ad6368616e6765645f706174687391a82f772f612e747874ac697272657665727369626c65c3"
+	goldenRewindRequest           = "0000003385a176cd0004a26964cf000000000000000da26f70a6726577696e64a966726f6d5f7475726ea27431a46d6f6465a4626f7468"
+	goldenRewindResponse          = "0000007182a26964cf000000000000000da6726577696e6485a966726f6d5f7475726ea27431a46d6f6465a4626f7468a8726573746f72656491a5612e747874a764656c6574656491a76e65772e747874a7736b69707065649182a470617468a5622e747874a6726561736f6ea76368616e676564"
 	goldenIrreversibleAskResponse = "0000008982a26964cf000000000000000ca56572726f7283a4636f6465ae6e656564735f617070726f76616ca76d657373616765a3626967a8617070726f76616c84a46b696e64a866735f7772697465a6746172676574aa2f772f6269672e62696eab6578706c616e6174696f6eb063616e6e6f7420626520756e646f6e65ac697272657665727369626c65c3"
 	goldenErrorResponse           = "0000003082a26964cf0000000000000008a56572726f7282a4636f6465a664656e696564a76d657373616765a76f757473696465"
 )
@@ -46,6 +48,11 @@ var (
 	}}
 	sampleListTurnsResponse = broker.Response{ID: 11, Turns: []broker.TurnSummaryMessage{
 		{Turn: "t1", Prompt: "hi", At: time.Date(2026, 10, 12, 14, 0, 0, 0, time.UTC), ChangedPaths: []string{"/w/a.txt"}, HasIrreversible: true},
+	}}
+	sampleRewindRequest  = broker.Request{Version: broker.ProtocolVersion, ID: 13, Op: broker.OpRewind, FromTurn: "t1", Mode: "both"}
+	sampleRewindResponse = broker.Response{ID: 13, Rewind: &broker.RewindReportMessage{
+		FromTurn: "t1", Mode: "both", Restored: []string{"a.txt"}, Deleted: []string{"new.txt"},
+		Skipped: []broker.SkippedFileMessage{{Path: "b.txt", Reason: "changed"}},
 	}}
 	sampleIrreversibleAskResponse = broker.Response{ID: 12, Error: &broker.ErrorBody{
 		Code: broker.ErrorNeedsApproval, Message: "big", Approval: &broker.OperationMessage{Kind: "fs_write", Target: "/w/big.bin", Explanation: "cannot be undone", IsIrreversible: true},
@@ -82,6 +89,8 @@ func TestWireBytesStayFrozen(t *testing.T) {
 		{"write_file request", goldenWriteFileRequest, func(w io.Writer) error { return broker.WriteRequest(w, sampleWriteFileRequest) }},
 		{"append_entries request", goldenAppendEntriesRequest, func(w io.Writer) error { return broker.WriteRequest(w, sampleAppendEntriesRequest) }},
 		{"list_turns response", goldenListTurnsResponse, func(w io.Writer) error { return broker.WriteResponse(w, sampleListTurnsResponse) }},
+		{"rewind request", goldenRewindRequest, func(w io.Writer) error { return broker.WriteRequest(w, sampleRewindRequest) }},
+		{"rewind response", goldenRewindResponse, func(w io.Writer) error { return broker.WriteResponse(w, sampleRewindResponse) }},
 		{"irreversible ask response", goldenIrreversibleAskResponse, func(w io.Writer) error { return broker.WriteResponse(w, sampleIrreversibleAskResponse) }},
 	}
 	for _, tc := range cases {
@@ -132,8 +141,10 @@ func TestReadRequestRejectsWhatTheBrokerMustNotActOn(t *testing.T) {
 		"write beyond limit":      {broker.Request{Version: broker.ProtocolVersion, ID: 1, Op: broker.OpWriteFile, Path: "a", Data: make([]byte, broker.MaxWriteFileBytes+1)}, core.ErrInvalid},
 		"approve without target":  {broker.Request{Version: broker.ProtocolVersion, ID: 1, Op: broker.OpApproveOnce}, core.ErrInvalid},
 		"rule op without rule":    {broker.Request{Version: broker.ProtocolVersion, ID: 1, Op: broker.OpAddDecisionRule}, core.ErrInvalid},
-		"version 2 client":        {broker.Request{Version: broker.ProtocolVersion - 1, ID: 1, Op: broker.OpOpenFile, Path: "a"}, core.ErrUnsupported},
+		"version 3 client":        {broker.Request{Version: broker.ProtocolVersion - 1, ID: 1, Op: broker.OpOpenFile, Path: "a"}, core.ErrUnsupported},
 		"append without entries":  {broker.Request{Version: broker.ProtocolVersion, ID: 1, Op: broker.OpAppendEntries}, core.ErrInvalid},
+		"rewind without a turn":   {broker.Request{Version: broker.ProtocolVersion, ID: 1, Op: broker.OpRewind, Mode: "both"}, core.ErrInvalid},
+		"rewind without a mode":   {broker.Request{Version: broker.ProtocolVersion, ID: 1, Op: broker.OpRewind, FromTurn: "t1"}, core.ErrInvalid},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
