@@ -401,3 +401,25 @@ func TestRemoteBrokerSurvivesAContextEndingMidExchange(t *testing.T) {
 		t.Fatalf("events = %v, want none", types)
 	}
 }
+
+// The untrusted-step mark crosses the wire with the effect and with the human's answer, so the
+// real policy asks, and then honours the approval.
+func TestRemoteBrokerApprovesAnUntrustedStepThroughTheRealPolicy(t *testing.T) {
+	enforced, workspace, _ := buildSessionBroker(t, "default")
+	writeWorkspaceFile(t, workspace, "notes.md", "hi")
+	approver := &scriptedApprover{decision: core.ApprovalOnce}
+	remote, _ := startPipedBrokerWith(t, enforced, broker.RemoteOptions{Approver: approver})
+
+	opened, err := remote.OpenFile(core.MarkUntrustedStep(context.Background()), "notes.md")
+	if err != nil {
+		t.Fatalf("untrusted OpenFile after approval = %v", err)
+	}
+	_ = opened.Content.Close()
+	if len(approver.asked) != 1 || approver.asked[0].Kind != core.CapabilityFSRead {
+		t.Fatalf("asked %+v, want one fs_read question", approver.asked)
+	}
+
+	if _, err := remote.DescribePath(context.Background(), "notes.md"); err != nil || len(approver.asked) != 1 {
+		t.Fatalf("trusted DescribePath = %v after %d questions, want no new question", err, len(approver.asked))
+	}
+}

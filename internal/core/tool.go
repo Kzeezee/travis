@@ -42,6 +42,20 @@ func ReportToolCallID(ctx context.Context) ID {
 	return id
 }
 
+type untrustedStepKey struct{}
+
+// MarkUntrustedStep marks ctx as serving a step with untrusted intake (§5.12.4), so policy asks
+// a human before that step's effects instead of allowing them outright.
+func MarkUntrustedStep(ctx context.Context) context.Context {
+	return context.WithValue(ctx, untrustedStepKey{}, true)
+}
+
+// ReportIsFromUntrustedStep reports whether ctx serves a step MarkUntrustedStep marked.
+func ReportIsFromUntrustedStep(ctx context.Context) bool {
+	isUntrusted, _ := ctx.Value(untrustedStepKey{}).(bool)
+	return isUntrusted
+}
+
 type ToolOutput struct {
 	Content string
 	Display string

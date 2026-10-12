@@ -57,6 +57,9 @@ type Request struct {
 	Handle   uint64 `msgpack:"handle,omitempty"`
 	MaxBytes uint32 `msgpack:"max_bytes,omitempty"`
 	Data     []byte `msgpack:"data,omitempty"`
+	// IsFromUntrustedStep carries core.MarkUntrustedStep across the wire. It can only tighten
+	// policy, Allow to Ask, so a client that omits it gains nothing.
+	IsFromUntrustedStep bool `msgpack:"from_untrusted_step,omitempty"`
 	// Offset asks list_directory for the page starting at a Response.NextOffset.
 	Offset uint32 `msgpack:"offset,omitempty"`
 	// Capability is what approve_once lets through; Rule is what add_decision_rule persists.

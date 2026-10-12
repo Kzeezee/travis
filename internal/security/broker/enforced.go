@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
@@ -69,8 +68,8 @@ func BuildPolicyEnforcedBroker(workspaceDir string, sessionPolicy policy.Policy,
 		approvals:     approvalLedger{alwaysAllowed: map[core.Capability]bool{}, onceAllowed: map[core.Capability]bool{}},
 	}
 	b.paths = config.PathSet{WorkspaceDir: b.resolvedRoot}
-	b.authorizeRead = func(path string) error { return b.authorize(core.CapabilityFSRead, path) }
-	b.authorizeWrite = func(path string) error { return b.authorize(core.CapabilityFSWrite, path) }
+	b.authorizeRead = func(ctx context.Context, path string) error { return b.authorize(ctx, core.CapabilityFSRead, path) }
+	b.authorizeWrite = func(ctx context.Context, path string) error { return b.authorize(ctx, core.CapabilityFSWrite, path) }
 	return b
 }
 
@@ -99,12 +98,13 @@ func (b *PolicyEnforcedBroker) WriteFile(ctx context.Context, path string, conte
 }
 
 // ApproveOnce lets the next effect through an Ask on exactly this capability, once. Only an
-// Ask can be approved: a target policy denies or never granted stays refused (§6.4).
-func (b *PolicyEnforcedBroker) ApproveOnce(_ context.Context, approved core.Capability) error {
-	if err := b.requireAsk(approved); err != nil {
+// Ask can be approved: a target policy denies or never granted stays refused (§6.4). ctx must
+// carry the same untrusted-step mark as the request that asked, since that mark is why it asked.
+func (b *PolicyEnforcedBroker) ApproveOnce(ctx context.Context, approved core.Capability) error {
+	if err := b.requireAsk(ctx, approved); err != nil {
 		return err
 	}
-	b.approvals.allowOnce(approved)
+	b.approvals.onceAllowed[approved] = true
 	return nil
 }
 
@@ -112,27 +112,26 @@ func (b *PolicyEnforcedBroker) ApproveOnce(_ context.Context, approved core.Capa
 // ApproveOnce it can only narrow an Ask, never widen a Deny.
 func (b *PolicyEnforcedBroker) AddDecisionRule(ctx context.Context, rule core.DecisionRule) error {
 	approved := core.Capability{Kind: rule.Kind, Scope: rule.Scope}
-	if err := b.requireAsk(approved); err != nil {
+	if err := b.requireAsk(ctx, approved); err != nil {
 		return err
 	}
 	if err := b.LocalBroker.AddDecisionRule(ctx, rule); err != nil {
 		return err
 	}
-	b.approvals.allowAlways(approved)
+	b.approvals.alwaysAllowed[approved] = true
 	return nil
 }
 
-func (b *PolicyEnforcedBroker) requireAsk(approved core.Capability) error {
-	decision := b.sessionPolicy.Evaluate(context.Background(), policy.Request{Kind: approved.Kind, Target: approved.Scope})
+func (b *PolicyEnforcedBroker) requireAsk(ctx context.Context, approved core.Capability) error {
+	decision := b.sessionPolicy.Evaluate(ctx, buildPolicyRequest(ctx, approved.Kind, approved.Scope))
 	if decision.Verdict != policy.Ask {
 		return fmt.Errorf("%s %q is not awaiting approval (%s): %w", approved.Kind, approved.Scope, reportDecidingRule(decision), core.ErrDenied)
 	}
 	return nil
 }
 
-func (b *PolicyEnforcedBroker) authorize(kind core.CapabilityKind, path string) error {
-	req := policy.Request{Kind: kind, Target: path}
-	decision := b.sessionPolicy.Evaluate(context.Background(), req)
+func (b *PolicyEnforcedBroker) authorize(ctx context.Context, kind core.CapabilityKind, path string) error {
+	decision := b.sessionPolicy.Evaluate(ctx, buildPolicyRequest(ctx, kind, path))
 	switch decision.Verdict {
 	case policy.Allow:
 		return nil
@@ -147,6 +146,11 @@ func (b *PolicyEnforcedBroker) authorize(kind core.CapabilityKind, path string) 
 	return fmt.Errorf("unknown verdict %v for %s %q: %w", decision.Verdict, kind, path, core.ErrDenied)
 }
 
+// buildPolicyRequest is one effect as policy sees it, including whether its step is untrusted.
+func buildPolicyRequest(ctx context.Context, kind core.CapabilityKind, target string) policy.Request {
+	return policy.Request{Kind: kind, Target: target, IsFromUntrustedStep: core.ReportIsFromUntrustedStep(ctx)}
+}
+
 func reportDecidingRule(decision policy.Decision) string {
 	if len(decision.Trace) == 0 {
 		return "no rule recorded"
@@ -157,36 +161,19 @@ func reportDecidingRule(decision policy.Decision) string {
 // approvalLedger holds the human's answers for this session. Once-approvals accumulate while
 // one effect still needs more of them (its as-written and resolved paths can each Ask), and
 // are spent as soon as that effect finishes any other way; one the user abandons mid-effect
-// lingers, for that exact target only, until the next effect finishes.
+// lingers, for that exact target only, until the next effect finishes. It has no lock: the
+// broker's one connection is served one request at a time.
 type approvalLedger struct {
-	mu            sync.Mutex
 	alwaysAllowed map[core.Capability]bool
 	onceAllowed   map[core.Capability]bool
 }
 
 func (l *approvalLedger) isAllowed(c core.Capability) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
 	return l.alwaysAllowed[c] || l.onceAllowed[c]
 }
 
-func (l *approvalLedger) allowOnce(c core.Capability) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.onceAllowed[c] = true
-}
-
-func (l *approvalLedger) allowAlways(c core.Capability) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.alwaysAllowed[c] = true
-}
-
 func (l *approvalLedger) settleOnce(effectErr error) {
-	if errors.As(effectErr, new(*core.ApprovalRequiredError)) {
-		return
+	if !errors.As(effectErr, new(*core.ApprovalRequiredError)) {
+		clear(l.onceAllowed)
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	clear(l.onceAllowed)
 }

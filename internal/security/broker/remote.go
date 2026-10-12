@@ -197,6 +197,7 @@ func (r *RemoteBroker) exchange(ctx context.Context, req Request) (Response, err
 	_ = r.conn.SetDeadline(r.options.Clock.ReportCurrentTime().Add(brokerExchangeTimeout))
 	r.nextID++
 	req.Version, req.ID = ProtocolVersion, r.nextID
+	req.IsFromUntrustedStep = core.ReportIsFromUntrustedStep(ctx)
 	resp, err := r.sendAndReceive(req)
 	if errors.Is(err, errFrameTooLarge) {
 		return Response{}, err

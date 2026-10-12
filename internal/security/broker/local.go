@@ -27,8 +27,8 @@ type LocalBroker struct {
 	// authorizeRead and authorizeWrite refuse an absolute path with an error wrapping
 	// core.ErrDenied or a *core.ApprovalRequiredError. Workspace confinement is the default rule;
 	// BuildPolicyEnforcedBroker replaces it with the session policy.
-	authorizeRead  func(path string) error
-	authorizeWrite func(path string) error
+	authorizeRead  func(ctx context.Context, path string) error
+	authorizeWrite func(ctx context.Context, path string) error
 	// clock stamps AddDecisionRule's AddedAt; injected so tests can use a FixedClock.
 	clock core.Clock
 }
@@ -53,7 +53,7 @@ func buildLocalBrokerForWorkspace(workspaceDir string, clock core.Clock) *LocalB
 
 // confineToWorkspace accepts either form of the root, since paths this broker reported back
 // are already resolved.
-func (b *LocalBroker) confineToWorkspace(path string) error {
+func (b *LocalBroker) confineToWorkspace(_ context.Context, path string) error {
 	if isInsideRoot(b.root, path) || isInsideRoot(b.resolvedRoot, path) {
 		return nil
 	}
@@ -64,7 +64,7 @@ func (b *LocalBroker) DescribePath(ctx context.Context, path string) (core.PathI
 	if err := ctx.Err(); err != nil {
 		return core.PathInfo{}, err
 	}
-	resolved, err := b.resolveReadablePath(path)
+	resolved, err := b.resolveReadablePath(ctx, path)
 	if err != nil {
 		return core.PathInfo{}, err
 	}
@@ -79,7 +79,7 @@ func (b *LocalBroker) ListDirectory(ctx context.Context, path string) ([]core.Pa
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	resolved, err := b.resolveReadablePath(path)
+	resolved, err := b.resolveReadablePath(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +117,7 @@ func (b *LocalBroker) WriteFile(ctx context.Context, path string, content []byte
 	if err := ctx.Err(); err != nil {
 		return core.PathInfo{}, err
 	}
-	target, err := b.resolveWritablePath(path)
+	target, err := b.resolveWritablePath(ctx, path)
 	if err != nil {
 		return core.PathInfo{}, err
 	}
@@ -191,8 +191,8 @@ func syncDirectory(dir string) {
 
 // resolveReadablePath turns a requested path into a real path on disk, allowed only if the
 // read rule accepts it both as written and once symlinks are followed.
-func (b *LocalBroker) resolveReadablePath(requested string) (string, error) {
-	resolved, err := b.resolveAuthorizedAsWritten(requested, b.authorizeRead)
+func (b *LocalBroker) resolveReadablePath(ctx context.Context, requested string) (string, error) {
+	resolved, err := b.resolveAuthorizedAsWritten(ctx, requested, b.authorizeRead)
 	if err != nil {
 		return "", err
 	}
@@ -200,7 +200,7 @@ func (b *LocalBroker) resolveReadablePath(requested string) (string, error) {
 	if err != nil {
 		return "", translatePathError(requested, err)
 	}
-	if err := b.authorizeRead(evaluated); err != nil {
+	if err := b.authorizeRead(ctx, evaluated); err != nil {
 		return "", err
 	}
 	return evaluated, nil
@@ -208,8 +208,8 @@ func (b *LocalBroker) resolveReadablePath(requested string) (string, error) {
 
 // resolveWritablePath is resolveReadablePath for a target that may not exist yet: it follows
 // symlinks only up to the nearest existing ancestor and never through the final name.
-func (b *LocalBroker) resolveWritablePath(requested string) (string, error) {
-	resolved, err := b.resolveAuthorizedAsWritten(requested, b.authorizeWrite)
+func (b *LocalBroker) resolveWritablePath(ctx context.Context, requested string) (string, error) {
+	resolved, err := b.resolveAuthorizedAsWritten(ctx, requested, b.authorizeWrite)
 	if err != nil {
 		return "", err
 	}
@@ -232,7 +232,7 @@ func (b *LocalBroker) resolveWritablePath(requested string) (string, error) {
 		return "", translatePathError(requested, err)
 	}
 	target := filepath.Join(evaluatedAncestor, missingTail)
-	if err := b.authorizeWrite(target); err != nil {
+	if err := b.authorizeWrite(ctx, target); err != nil {
 		return "", err
 	}
 	return target, nil
@@ -240,7 +240,7 @@ func (b *LocalBroker) resolveWritablePath(requested string) (string, error) {
 
 // resolveAuthorizedAsWritten checks the path before any symlink is followed, so a refused path
 // cannot reveal whether it exists.
-func (b *LocalBroker) resolveAuthorizedAsWritten(requested string, authorize func(string) error) (string, error) {
+func (b *LocalBroker) resolveAuthorizedAsWritten(ctx context.Context, requested string, authorize func(context.Context, string) error) (string, error) {
 	resolved, err := b.paths.Resolve(requested)
 	if err != nil {
 		return "", err
@@ -248,7 +248,7 @@ func (b *LocalBroker) resolveAuthorizedAsWritten(requested string, authorize fun
 	if !filepath.IsAbs(resolved) {
 		return "", fmt.Errorf("%q does not resolve to an absolute path: %w", requested, core.ErrDenied)
 	}
-	if err := authorize(resolved); err != nil {
+	if err := authorize(ctx, resolved); err != nil {
 		return "", err
 	}
 	return resolved, nil

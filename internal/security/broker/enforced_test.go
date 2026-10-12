@@ -261,3 +261,55 @@ func TestPolicyEnforcedBrokerWritesAFileIffPolicyAllowsIt(t *testing.T) {
 		}
 	}
 }
+
+// An untrusted step's effect Asks (§5.12.4); the human's answer, given in that same step, lets it
+// through: once for one effect, or always for the rest of the session and in decisions.toml.
+func TestPolicyEnforcedBrokerApprovesAnUntrustedStepsAsk(t *testing.T) {
+	enforced, workspace, _ := buildSessionBroker(t, "default")
+	writeWorkspaceFile(t, workspace, "notes.md", "hi")
+	writeWorkspaceFile(t, workspace, ".env", "TOKEN=secret")
+	untrusted := core.MarkUntrustedStep(context.Background())
+	openNotes := func() error {
+		opened, err := enforced.OpenFile(untrusted, "notes.md")
+		if err == nil {
+			_ = opened.Content.Close()
+		}
+		return err
+	}
+
+	var required *core.ApprovalRequiredError
+	if err := openNotes(); !errors.As(err, &required) {
+		t.Fatalf("untrusted OpenFile = %v, want an approval request", err)
+	}
+	asked := core.Capability{Kind: required.Operation.Kind, Scope: required.Operation.Target}
+	if err := enforced.ApproveOnce(context.Background(), asked); !errors.Is(err, core.ErrDenied) {
+		t.Fatalf("ApproveOnce outside the untrusted step = %v, want ErrDenied: policy allows it there, so nothing asks", err)
+	}
+	secret := core.Capability{Kind: core.CapabilityFSRead, Scope: filepath.Join(filepath.Dir(asked.Scope), ".env")}
+	if err := enforced.ApproveOnce(untrusted, secret); !errors.Is(err, core.ErrDenied) {
+		t.Fatalf("ApproveOnce(deny-listed) = %v, want ErrDenied", err)
+	}
+
+	if err := enforced.ApproveOnce(untrusted, asked); err != nil {
+		t.Fatalf("ApproveOnce = %v", err)
+	}
+	if err := openNotes(); err != nil {
+		t.Fatalf("OpenFile after ApproveOnce = %v", err)
+	}
+	if err := openNotes(); !errors.As(err, &required) {
+		t.Fatalf("second OpenFile = %v, want it to ask again: once is spent", err)
+	}
+
+	rule := core.DecisionRule{Kind: asked.Kind, Scope: asked.Scope, Decision: core.DecisionAllow, Source: "test"}
+	if err := enforced.AddDecisionRule(untrusted, rule); err != nil {
+		t.Fatalf("AddDecisionRule = %v", err)
+	}
+	for range 2 {
+		if err := openNotes(); err != nil {
+			t.Fatalf("OpenFile after an always rule = %v", err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".travis", "decisions.toml")); err != nil {
+		t.Fatalf("the always rule was not persisted: %v", err)
+	}
+}

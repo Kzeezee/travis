@@ -83,6 +83,9 @@ type pagedListing struct {
 const listPageBudgetBytes = MaxFrameBytes / 2
 
 func (s *connectionSession) answer(ctx context.Context, req Request) Response {
+	if req.IsFromUntrustedStep {
+		ctx = core.MarkUntrustedStep(ctx)
+	}
 	resp, err := s.perform(ctx, req)
 	if err != nil {
 		return Response{ID: req.ID, Error: BuildErrorBody(err)}
