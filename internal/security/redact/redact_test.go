@@ -63,6 +63,27 @@ func TestRedactJSONScrubsCredentialShapedKeysRegardlessOfValueShape(t *testing.T
 	}
 }
 
+func TestRedactJSONMatchesCredentialKeysButNotLookalikes(t *testing.T) {
+	r := redact.New()
+	raw := json.RawMessage(`{"access_token":"a","githubToken":"b","client_secret":"c","credentials":"d",` +
+		`"max_tokens":"e","input_tokens":"f","secretary":"g","tokenizer":"h"}`)
+
+	var decoded map[string]any
+	if err := json.Unmarshal(r.RedactJSON(raw), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"access_token", "githubToken", "client_secret", "credentials"} {
+		if decoded[key] != redact.Placeholder {
+			t.Errorf("%s = %v, want it redacted", key, decoded[key])
+		}
+	}
+	for _, key := range []string{"max_tokens", "input_tokens", "secretary", "tokenizer"} {
+		if decoded[key] == redact.Placeholder {
+			t.Errorf("%s was redacted, want it untouched", key)
+		}
+	}
+}
+
 func TestRedactJSONFallsBackToTextForNonJSONContent(t *testing.T) {
 	r := redact.New()
 	raw := json.RawMessage("plain text with sk-abcdefghijklmnopqrstuvwxyz inside")
@@ -98,13 +119,5 @@ func TestRedactEventOnlyTouchesFreeTextFields(t *testing.T) {
 				t.Fatalf("RedactEvent left the secret in place: %s", blob)
 			}
 		})
-	}
-}
-
-func TestRedactEventLeavesTurnCompletedUntouched(t *testing.T) {
-	r := redact.New("topsecret")
-	event := core.TurnCompleted{EventHeader: core.EventHeader{ID: "evt-1"}, Reason: core.StopEndTurn}
-	if got := r.RedactEvent(event); got != event {
-		t.Fatalf("RedactEvent(TurnCompleted) = %+v, want it unchanged", got)
 	}
 }

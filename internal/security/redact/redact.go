@@ -17,8 +17,9 @@ import (
 const Placeholder = "[REDACTED]"
 
 // keyPattern matches a JSON object key whose value is credential-shaped regardless of
-// the value's own format.
-var keyPattern = regexp.MustCompile(`(?i)(api[_-]?key|secret|passwd|password|token|authorization|bearer|credential|private[_-]?key|access[_-]?key)`)
+// the value's own format. The trailing non-letter boundary keeps counters like
+// max_tokens and words like secretary from matching.
+var keyPattern = regexp.MustCompile(`(?i)(api[_-]?key|secrets?|passwd|passwords?|token|authorization|bearer|credentials?|private[_-]?key|access[_-]?key)([^a-z]|$)`)
 
 // valuePatterns catches known secret formats in free text, independent of any key name.
 var valuePatterns = []*regexp.Regexp{
@@ -71,10 +72,8 @@ func (r Redactor) RedactJSON(raw json.RawMessage) json.RawMessage {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return json.RawMessage(r.RedactText(string(raw)))
 	}
-	redacted, err := json.Marshal(r.redactValue(decoded))
-	if err != nil {
-		return json.RawMessage(r.RedactText(string(raw)))
-	}
+	// Cannot fail: decoded holds only the JSON-native types Unmarshal produced.
+	redacted, _ := json.Marshal(r.redactValue(decoded))
 	return redacted
 }
 
@@ -123,8 +122,6 @@ func (r Redactor) RedactEvent(event core.Event) core.Event {
 	case core.ToolCallFinished:
 		e.Result.Content = r.RedactText(e.Result.Content)
 		e.Display = r.RedactText(e.Display)
-		return e
-	case core.TurnCompleted:
 		return e
 	default:
 		return event
