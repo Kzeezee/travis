@@ -248,6 +248,7 @@ func TestValidateRejectsActiveProfileWithNoDefinition(t *testing.T) {
 		Provider: ProviderCfg{Active: "missing", Profiles: map[string]ProviderProfileCfg{}},
 		Brain:    BrainCfg{MaxSteps: 1},
 		Tools:    ToolsCfg{ApprovalDefault: "ask", MaxExposed: 1},
+		Session:  SessionCfg{SnapshotMaxBytes: 1},
 	}
 
 	if diags := cfg.Validate(); !diags.HasErrors() {
@@ -266,6 +267,7 @@ func TestValidateRejectsNonPositiveLimits(t *testing.T) {
 				Provider: ProviderCfg{Active: "a", Profiles: map[string]ProviderProfileCfg{"a": {BaseURL: "u", Model: "m"}}},
 				Brain:    BrainCfg{MaxSteps: 0},
 				Tools:    ToolsCfg{ApprovalDefault: "ask", MaxExposed: 1},
+				Session:  SessionCfg{SnapshotMaxBytes: 1},
 			},
 		},
 		{
@@ -274,6 +276,16 @@ func TestValidateRejectsNonPositiveLimits(t *testing.T) {
 				Provider: ProviderCfg{Active: "a", Profiles: map[string]ProviderProfileCfg{"a": {BaseURL: "u", Model: "m"}}},
 				Brain:    BrainCfg{MaxSteps: 1},
 				Tools:    ToolsCfg{ApprovalDefault: "ask", MaxExposed: 0},
+				Session:  SessionCfg{SnapshotMaxBytes: 1},
+			},
+		},
+		{
+			name: "zero snapshot max bytes",
+			cfg: Config{
+				Provider: ProviderCfg{Active: "a", Profiles: map[string]ProviderProfileCfg{"a": {BaseURL: "u", Model: "m"}}},
+				Brain:    BrainCfg{MaxSteps: 1},
+				Tools:    ToolsCfg{ApprovalDefault: "ask", MaxExposed: 1},
+				Session:  SessionCfg{SnapshotMaxBytes: 0},
 			},
 		},
 	}
@@ -292,6 +304,7 @@ func TestValidateWarnsOnUnrecognizedApprovalDefault(t *testing.T) {
 		Provider: ProviderCfg{Active: "a", Profiles: map[string]ProviderProfileCfg{"a": {BaseURL: "u", Model: "m"}}},
 		Brain:    BrainCfg{MaxSteps: 1},
 		Tools:    ToolsCfg{ApprovalDefault: "sometimes", MaxExposed: 1},
+		Session:  SessionCfg{SnapshotMaxBytes: 1},
 	}
 
 	diags := cfg.Validate()
@@ -321,6 +334,29 @@ func TestLoadTracesAreOnByDefaultAndOnlyTrustedLayersTurnThemOff(t *testing.T) {
 			}
 			if cfg.Eval.Traces != tc.wantTraces {
 				t.Fatalf("Eval.Traces = %v, want %v", cfg.Eval.Traces, tc.wantTraces)
+			}
+		})
+	}
+}
+
+func TestLoadSnapshotMaxBytesDefaultsTo16MiBAndOnlyTrustedLayersChangeIt(t *testing.T) {
+	pathSet := testPathSet()
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		want  int64
+	}{
+		{"compiled default", nil, 16 << 20},
+		{"user file", map[string]string{testUserConfigFile(pathSet): "[session]\nsnapshot_max_bytes = 1024\n"}, 1024},
+		{"workspace file is ignored", map[string]string{pathSet.WorkspaceConfigFile: "[session]\nsnapshot_max_bytes = 1024\n"}, 16 << 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, diags, err := load(buildFileReaderFromMap(tc.files), pathSet, nil, buildEnvLookupFromMap(nil))
+			if err != nil {
+				t.Fatalf("load() error = %v, diags = %v", err, diags)
+			}
+			if cfg.Session.SnapshotMaxBytes != tc.want {
+				t.Fatalf("Session.SnapshotMaxBytes = %d, want %d", cfg.Session.SnapshotMaxBytes, tc.want)
 			}
 		})
 	}

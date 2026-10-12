@@ -2,8 +2,11 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
+	"sync"
 
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
@@ -47,29 +50,101 @@ func resolveRootSymlinks(root string) string {
 	return filepath.Clean(root)
 }
 
-// BuildPolicyEnforcedBroker is the broker process's effect performer: every path is checked by
-// sessionPolicy, as written and once symlinks are followed, before any IO touches it (§5.12.1).
-// Ask is refused until approvals exist (2D), which keeps the broker fail-closed.
-func BuildPolicyEnforcedBroker(workspaceDir string, sessionPolicy policy.Policy) *LocalBroker {
-	b := buildLocalBrokerForWorkspace(workspaceDir)
-	b.paths = config.PathSet{WorkspaceDir: b.resolvedRoot}
-	b.authorizeRead = func(path string) error {
-		return authorizeByPolicy(sessionPolicy, policy.Request{Kind: core.CapabilityFSRead, Target: path})
+// PolicyEnforcedBroker is the broker process's effect performer: every path is checked by the
+// session policy, as written and once symlinks are followed, before any IO touches it
+// (§5.12.1). Ask is answered with core.ErrNeedsApproval; the client puts it to the human and
+// reports back with ApproveOnce or AddDecisionRule before retrying.
+type PolicyEnforcedBroker struct {
+	*LocalBroker
+	sessionPolicy policy.Policy
+	approvals     approvalLedger
+}
+
+var _ core.Broker = (*PolicyEnforcedBroker)(nil)
+
+func BuildPolicyEnforcedBroker(workspaceDir string, sessionPolicy policy.Policy, clock core.Clock) *PolicyEnforcedBroker {
+	b := &PolicyEnforcedBroker{
+		LocalBroker:   buildLocalBrokerForWorkspace(workspaceDir, clock),
+		sessionPolicy: sessionPolicy,
+		approvals:     approvalLedger{alwaysAllowed: map[core.Capability]bool{}, onceAllowed: map[core.Capability]bool{}},
 	}
+	b.paths = config.PathSet{WorkspaceDir: b.resolvedRoot}
+	b.authorizeRead = func(path string) error { return b.authorize(core.CapabilityFSRead, path) }
+	b.authorizeWrite = func(path string) error { return b.authorize(core.CapabilityFSWrite, path) }
 	return b
 }
 
-func authorizeByPolicy(sessionPolicy policy.Policy, req policy.Request) error {
-	decision := sessionPolicy.Evaluate(context.Background(), req)
+func (b *PolicyEnforcedBroker) DescribePath(ctx context.Context, path string) (core.PathInfo, error) {
+	info, err := b.LocalBroker.DescribePath(ctx, path)
+	b.approvals.settleOnce(err)
+	return info, err
+}
+
+func (b *PolicyEnforcedBroker) ListDirectory(ctx context.Context, path string) ([]core.PathInfo, error) {
+	entries, err := b.LocalBroker.ListDirectory(ctx, path)
+	b.approvals.settleOnce(err)
+	return entries, err
+}
+
+func (b *PolicyEnforcedBroker) OpenFile(ctx context.Context, path string) (core.OpenedFile, error) {
+	opened, err := b.LocalBroker.OpenFile(ctx, path)
+	b.approvals.settleOnce(err)
+	return opened, err
+}
+
+func (b *PolicyEnforcedBroker) WriteFile(ctx context.Context, path string, content []byte) (core.PathInfo, error) {
+	info, err := b.LocalBroker.WriteFile(ctx, path, content)
+	b.approvals.settleOnce(err)
+	return info, err
+}
+
+// ApproveOnce lets the next effect through an Ask on exactly this capability, once. Only an
+// Ask can be approved: a target policy denies or never granted stays refused (§6.4).
+func (b *PolicyEnforcedBroker) ApproveOnce(_ context.Context, approved core.Capability) error {
+	if err := b.requireAsk(approved); err != nil {
+		return err
+	}
+	b.approvals.allowOnce(approved)
+	return nil
+}
+
+// AddDecisionRule persists the rule (D-30) and honours it for the rest of the session. Like
+// ApproveOnce it can only narrow an Ask, never widen a Deny.
+func (b *PolicyEnforcedBroker) AddDecisionRule(ctx context.Context, rule core.DecisionRule) error {
+	approved := core.Capability{Kind: rule.Kind, Scope: rule.Scope}
+	if err := b.requireAsk(approved); err != nil {
+		return err
+	}
+	if err := b.LocalBroker.AddDecisionRule(ctx, rule); err != nil {
+		return err
+	}
+	b.approvals.allowAlways(approved)
+	return nil
+}
+
+func (b *PolicyEnforcedBroker) requireAsk(approved core.Capability) error {
+	decision := b.sessionPolicy.Evaluate(context.Background(), policy.Request{Kind: approved.Kind, Target: approved.Scope})
+	if decision.Verdict != policy.Ask {
+		return fmt.Errorf("%s %q is not awaiting approval (%s): %w", approved.Kind, approved.Scope, reportDecidingRule(decision), core.ErrDenied)
+	}
+	return nil
+}
+
+func (b *PolicyEnforcedBroker) authorize(kind core.CapabilityKind, path string) error {
+	req := policy.Request{Kind: kind, Target: path}
+	decision := b.sessionPolicy.Evaluate(context.Background(), req)
 	switch decision.Verdict {
 	case policy.Allow:
 		return nil
 	case policy.Ask:
-		return fmt.Errorf("needs approval, which this broker cannot ask for yet (%s): %w", reportDecidingRule(decision), core.ErrDenied)
+		if b.approvals.isAllowed(core.Capability{Kind: kind, Scope: path}) {
+			return nil
+		}
+		return &core.ApprovalRequiredError{Operation: core.Operation{Kind: kind, Target: path, Explanation: strings.Join(decision.Trace, "\n")}}
 	case policy.Deny:
 		return fmt.Errorf("refused by policy (%s): %w", reportDecidingRule(decision), core.ErrDenied)
 	}
-	return fmt.Errorf("unknown verdict %v for %s %q: %w", decision.Verdict, req.Kind, req.Target, core.ErrDenied)
+	return fmt.Errorf("unknown verdict %v for %s %q: %w", decision.Verdict, kind, path, core.ErrDenied)
 }
 
 func reportDecidingRule(decision policy.Decision) string {
@@ -77,4 +152,41 @@ func reportDecidingRule(decision policy.Decision) string {
 		return "no rule recorded"
 	}
 	return decision.Trace[len(decision.Trace)-1]
+}
+
+// approvalLedger holds the human's answers for this session. Once-approvals accumulate while
+// one effect still needs more of them (its as-written and resolved paths can each Ask), and
+// are spent as soon as that effect finishes any other way; one the user abandons mid-effect
+// lingers, for that exact target only, until the next effect finishes.
+type approvalLedger struct {
+	mu            sync.Mutex
+	alwaysAllowed map[core.Capability]bool
+	onceAllowed   map[core.Capability]bool
+}
+
+func (l *approvalLedger) isAllowed(c core.Capability) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.alwaysAllowed[c] || l.onceAllowed[c]
+}
+
+func (l *approvalLedger) allowOnce(c core.Capability) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.onceAllowed[c] = true
+}
+
+func (l *approvalLedger) allowAlways(c core.Capability) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.alwaysAllowed[c] = true
+}
+
+func (l *approvalLedger) settleOnce(effectErr error) {
+	if errors.Is(effectErr, core.ErrNeedsApproval) {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	clear(l.onceAllowed)
 }

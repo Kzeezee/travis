@@ -15,6 +15,8 @@ const (
 	EventToolCallStarted       EventType = "tool_call.started"
 	EventToolCallFinished      EventType = "tool_call.finished"
 	EventTurnCompleted         EventType = "turn.completed"
+	EventPolicyDenied          EventType = "policy.denied"
+	EventBrokerUnavailable     EventType = "broker.unavailable"
 )
 
 // Event is the shared interface for timeline facts observed by UI, traces, or tests.
@@ -95,4 +97,28 @@ type TurnCompleted struct {
 
 func (TurnCompleted) ReportEventType() EventType {
 	return EventTurnCompleted
+}
+
+// PolicyDenied records that the broker refused an effect, naming the rule that decided it
+// (D-29: a red-team case asserts this event fired, not merely that the effect is absent).
+// It carries no call id yet, because no tool call identity reaches the broker seam.
+type PolicyDenied struct {
+	EventHeader
+	Capability Capability `json:"capability"`
+	Rule       string     `json:"rule"`
+}
+
+func (PolicyDenied) ReportEventType() EventType {
+	return EventPolicyDenied
+}
+
+// BrokerUnavailable records that the broker connection broke. Every later effect fails
+// closed, so the frontend shows it until the session ends; there is no degraded mode.
+type BrokerUnavailable struct {
+	EventHeader
+	Reason string `json:"reason"`
+}
+
+func (BrokerUnavailable) ReportEventType() EventType {
+	return EventBrokerUnavailable
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,9 +77,9 @@ func skipWithoutBrokerTransport(t *testing.T) {
 
 // startTestSessionBroker runs the real broker process over workspace for the rest of the test.
 // It skips where the broker transport is not built yet, since travis cannot run a chat there.
-func startTestSessionBroker(t *testing.T, paths config.PathSet, diagnostics *strings.Builder) core.Broker {
+func startTestSessionBroker(t *testing.T, paths config.PathSet, diagnostics *strings.Builder, client broker.RemoteOptions) core.Broker {
 	t.Helper()
-	sessionBroker, err := startSessionBroker(paths, diagnostics)
+	sessionBroker, err := startSessionBroker(paths, diagnostics, client)
 	if errors.Is(err, core.ErrUnsupported) {
 		t.Skipf("no broker transport on this OS yet: %v", err)
 	}
@@ -93,8 +94,8 @@ func startTestSessionBroker(t *testing.T, paths config.PathSet, diagnostics *str
 	return sessionBroker.Remote
 }
 
-// The broker process, not the tool, refuses a deny-listed file inside the workspace; the
-// Phase 1 LocalBroker would have read it.
+// The broker process, not the tool, refuses a deny-listed file inside the workspace, and the
+// refusal is published as PolicyDenied (D-29); the Phase 1 LocalBroker would have read it.
 func TestFileReadThroughTheBrokerProcessIsRefusedByPolicy(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, ".env"), []byte("TOKEN=secret\n"), 0o600); err != nil {
@@ -104,7 +105,9 @@ func TestFileReadThroughTheBrokerProcessIsRefusedByPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	var diagnostics strings.Builder
-	fileBroker := startTestSessionBroker(t, config.PathSet{WorkspaceDir: workspace, RuntimeDir: buildShortRuntimeDir(t)}, &diagnostics)
+	bus := buildSessionBus(io.Discard)
+	events, _ := bus.Subscribe(nil)
+	fileBroker := startTestSessionBroker(t, config.PathSet{WorkspaceDir: workspace, RuntimeDir: buildShortRuntimeDir(t)}, &diagnostics, broker.RemoteOptions{Events: bus})
 	fileRead := builtin.BuildFileReadTool(fileBroker, workspace, defaultMaxReadBytes)
 
 	refused, err := fileRead.Invoke(context.Background(), json.RawMessage(`{"path":".env"}`))
@@ -113,6 +116,16 @@ func TestFileReadThroughTheBrokerProcessIsRefusedByPolicy(t *testing.T) {
 	}
 	if !refused.IsError || strings.Contains(refused.Content, "TOKEN=secret") {
 		t.Fatalf("fs_read .env = %+v, want a refusal without the secret", refused)
+	}
+	bus.Close()
+	var denials []core.PolicyDenied
+	for event := range events {
+		if denied, isDenial := event.(core.PolicyDenied); isDenial {
+			denials = append(denials, denied)
+		}
+	}
+	if len(denials) == 0 || denials[0].Capability.Kind != core.CapabilityFSRead || !strings.Contains(denials[0].Rule, "deny") {
+		t.Fatalf("PolicyDenied events = %+v, want an fs_read denial naming its rule", denials)
 	}
 
 	allowed, err := fileRead.Invoke(context.Background(), json.RawMessage(`{"path":"notes.md"}`))

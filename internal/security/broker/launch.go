@@ -52,6 +52,8 @@ type SessionLaunch struct {
 	Diagnostics io.Writer
 	// ReadyTimeout bounds the wait for the broker to start listening; zero means the default.
 	ReadyTimeout time.Duration
+	// Client is where the connected RemoteBroker reports denials and asks for approvals.
+	Client RemoteOptions
 }
 
 // SessionBroker is one running broker process and travis's connection to it.
@@ -104,7 +106,7 @@ func StartSessionBroker(ctx context.Context, launch SessionLaunch) (*SessionBrok
 	if err := waitForReadyLine(ctx, readyReader, readyTimeout); err != nil {
 		return abandon(fmt.Errorf("broker did not become ready: %w", err))
 	}
-	remoteBroker, err := ConnectRemoteBroker(ctx, endpoint, brokerProcess.Process.Pid)
+	remoteBroker, err := ConnectRemoteBroker(ctx, endpoint, brokerProcess.Process.Pid, launch.Client)
 	if err != nil {
 		return abandon(err)
 	}

@@ -16,6 +16,8 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/providers/cassette"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
+	"github.com/Kzeezee/travis/internal/security/broker"
+	"github.com/Kzeezee/travis/internal/security/redact"
 )
 
 // notesTask is the TRA-17 exit task over testdata/fixtures/notes, written down so the 6A
@@ -214,8 +216,9 @@ func runNotesTask(t *testing.T, provider core.Provider, model string) notesTaskR
 		Eval:  config.EvalCfg{Traces: true},
 	}
 	var diagnostics strings.Builder
-	fileBroker := startTestSessionBroker(t, paths, &diagnostics)
-	session, err := assembleChatSession(cfg, paths, provider, fileBroker, model, &diagnostics)
+	bus := buildSessionBus(&diagnostics)
+	fileBroker := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
+	session, err := assembleChatSession(cfg, paths, provider, fileBroker, bus, redact.New(), model, &diagnostics)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,5 +318,79 @@ func TestNotesTaskReplaysARecordedModel(t *testing.T) {
 	// The cassette is a reasoning model's, so the last step thinks before it answers (TRA-33).
 	if run.finalThoughts == "" || strings.Contains(run.answer, run.finalThoughts) {
 		t.Fatalf("final thoughts = %q, answer = %q: want reasoning streamed apart from the answer", run.finalThoughts, run.answer)
+	}
+}
+
+// TestWriteTaskRunsEndToEndThroughTheRealWiring is the TRA-25 write path: fs_read, fs_edit and
+// fs_write through the real registry and LocalBroker on a scratch copy of the notes fixture.
+func TestWriteTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "notes")
+	if err := os.CopyFS(workspace, os.DirFS(filepath.Join("..", "..", "testdata", "fixtures", "notes"))); err != nil {
+		t.Fatal(err)
+	}
+	const confirmation = "admin/clinic-confirmation.md"
+	provider := &scriptedProvider{t: t, steps: []scriptedStep{
+		func(t *testing.T, request core.ProviderRequest) []core.Chunk {
+			offered := map[string]bool{}
+			for _, spec := range request.Tools {
+				offered[spec.Name] = true
+			}
+			if !offered["fs_write"] || !offered["fs_edit"] {
+				t.Fatalf("offered tools %v, want fs_write and fs_edit from the real registry", request.Tools)
+			}
+			return buildToolCallChunks("call-read", "fs_read", `{"path":"`+confirmation+`"}`)
+		},
+		func(t *testing.T, request core.ProviderRequest) []core.Chunk {
+			requireContains(t, "fs_read", readLatestToolResult(t, request).Content, "09:30")
+			return buildToolCallChunks("call-edit", "fs_edit",
+				`{"path":"`+confirmation+`","old_string":"Tuesday 13 October 2026, 09:30\n","new_string":"Tuesday 13 October 2026, 10:15\n"}`)
+		},
+		func(t *testing.T, request core.ProviderRequest) []core.Chunk {
+			requireContains(t, "fs_edit", readLatestToolResult(t, request).Content, `"bytes_written"`)
+			return buildToolCallChunks("call-write", "fs_write", `{"path":"summary.md","content":"Dentist moved to 10:15.\nRoom 4.\n"}`)
+		},
+		func(t *testing.T, request core.ProviderRequest) []core.Chunk {
+			requireContains(t, "fs_write", readLatestToolResult(t, request).Content, `"created":true`)
+			return []core.Chunk{{Text: "Moved the appointment and wrote summary.md.", Finish: core.StopEndTurn}}
+		},
+	}}
+
+	cfg := &config.Config{Brain: config.BrainCfg{MaxSteps: e2eMaxSteps}, Tools: config.ToolsCfg{MaxExposed: 60}}
+	paths := config.PathSet{WorkspaceDir: workspace, StateDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t)}
+	var diagnostics strings.Builder
+	bus := buildSessionBus(io.Discard)
+	fileBroker := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
+	session, err := assembleChatSession(cfg, paths, provider, fileBroker, bus, redact.New(), "scripted-model", io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnErr := session.conversation.RunAssistantTurn(context.Background(), "Move my dentist appointment to 10:15 and write a summary.")
+	session.close()
+	if turnErr != nil {
+		t.Fatalf("RunAssistantTurn returned %v, want nil", turnErr)
+	}
+	if len(provider.requests) != len(provider.steps) {
+		t.Fatalf("took %d provider calls, want %d", len(provider.requests), len(provider.steps))
+	}
+
+	edited, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(confirmation)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEdited := "Riverside Dental Clinic: booking confirmed\r\nPatient: me\r\nAppointment: Tuesday 13 October 2026, 10:15\r\nWith Dr. Tan, room 4\r\n"
+	if string(edited) != wantEdited {
+		t.Fatalf("edited file = %q, want %q", edited, wantEdited)
+	}
+	summary, err := os.ReadFile(filepath.Join(workspace, "summary.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eol := config.ReportNativeLineEnding()
+	if want := "Dentist moved to 10:15." + eol + "Room 4." + eol; string(summary) != want {
+		t.Fatalf("summary = %q, want %q", summary, want)
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 1 {
+		t.Fatalf("scratch root holds %v (%v), want only the workspace", entries, err)
 	}
 }

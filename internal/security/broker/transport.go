@@ -84,7 +84,7 @@ func (s *SessionListener) Close() error {
 
 // ConnectRemoteBroker dials the session's broker and refuses it unless it is brokerPID, so a
 // process squatting on the endpoint cannot pose as the broker.
-func ConnectRemoteBroker(ctx context.Context, endpoint SessionEndpoint, brokerPID int) (*RemoteBroker, error) {
+func ConnectRemoteBroker(ctx context.Context, endpoint SessionEndpoint, brokerPID int, options RemoteOptions) (*RemoteBroker, error) {
 	conn, err := dialEndpoint(ctx, endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("broker unreachable at %q: %w", endpoint.Address, err)
@@ -93,5 +93,5 @@ func ConnectRemoteBroker(ctx context.Context, endpoint SessionEndpoint, brokerPI
 		_ = conn.Close()
 		return nil, fmt.Errorf("refused broker at %q: %w", endpoint.Address, err)
 	}
-	return BuildRemoteBroker(conn), nil
+	return BuildRemoteBroker(conn, options), nil
 }

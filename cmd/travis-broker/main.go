@@ -11,6 +11,7 @@ import (
 	"os/signal"
 
 	"github.com/Kzeezee/travis/internal/config"
+	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/security/broker"
 )
 
@@ -50,7 +51,7 @@ func run(ctx context.Context, args []string, readiness, diagnostics io.Writer) e
 	if err != nil {
 		return err
 	}
-	effects := broker.BuildPolicyEnforcedBroker(paths.WorkspaceDir, sessionPolicy)
+	effects := broker.BuildPolicyEnforcedBroker(paths.WorkspaceDir, sessionPolicy, core.SystemClock{})
 
 	sessionListener, err := broker.ListenForSession(broker.SessionEndpoint{Address: *endpoint})
 	if err != nil {

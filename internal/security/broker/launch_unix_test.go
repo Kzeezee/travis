@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/security/broker"
 )
 
@@ -57,7 +58,7 @@ func runHelperBroker(helperMode string, args []string) int {
 		return 1
 	}
 	fmt.Println(broker.BrokerReadyLine)
-	if err := sessionListener.ServeOneClient(context.Background(), *clientPID, broker.BuildLocalBroker(workspace)); err != nil {
+	if err := sessionListener.ServeOneClient(context.Background(), *clientPID, broker.BuildLocalBroker(workspace, core.SystemClock{})); err != nil {
 		fmt.Fprintln(os.Stderr, "helper broker:", err)
 		return 1
 	}

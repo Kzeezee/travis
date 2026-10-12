@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -19,6 +20,12 @@ type Broker interface {
 	ListDirectory(ctx context.Context, path string) ([]PathInfo, error)
 	// OpenFile opens a regular file for reading; the caller closes Content.
 	OpenFile(ctx context.Context, path string) (OpenedFile, error)
+	// AddDecisionRule durably narrows one future Ask verdict to Allow (D-30). Callers must
+	// reach this only through a real keypress in the approval modal — see
+	// internal/security/rules for why nothing else may construct a DecisionRule.
+	AddDecisionRule(ctx context.Context, rule DecisionRule) error
+	// WriteFile creates or atomically replaces a regular file inside the workspace, creating parent dirs; never follows a final symlink.
+	WriteFile(ctx context.Context, path string, content []byte) (PathInfo, error)
 }
 
 type PathKind string
@@ -47,8 +54,26 @@ type OpenedFile struct {
 var (
 	// ErrDenied means the broker refused the effect.
 	ErrDenied = errors.New("denied")
+	// ErrNeedsApproval means policy evaluated the effect to Ask: it is neither allowed nor
+	// refused until a human answers. It is distinct from ErrDenied so a client can tell a
+	// refusal from a question it may still put to the user (§6.4).
+	ErrNeedsApproval = errors.New("needs_approval")
 	// ErrNotFound means the path does not exist.
 	ErrNotFound = errors.New("not_found")
 	// ErrIsDirectory means a file operation was asked of a directory.
 	ErrIsDirectory = errors.New("is_directory")
 )
+
+// ApprovalRequiredError is the ErrNeedsApproval a broker returns, carrying the Operation a
+// client must put to the human before retrying.
+type ApprovalRequiredError struct {
+	Operation Operation
+}
+
+func (e *ApprovalRequiredError) Error() string {
+	return fmt.Sprintf("%s %q needs approval", e.Operation.Kind, e.Operation.Target)
+}
+
+func (e *ApprovalRequiredError) Unwrap() error {
+	return ErrNeedsApproval
+}

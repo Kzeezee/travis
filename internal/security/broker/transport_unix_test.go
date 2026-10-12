@@ -91,9 +91,9 @@ func TestUnixTransportServesItsVerifiedPeer(t *testing.T) {
 	writeWorkspaceFile(t, workspace, "notes/today.md", "hi")
 	endpoint := createEndpoint(t, buildShortRuntimeDir(t))
 	// Both ends live in this test process, so each side's expected peer is this pid.
-	serveInBackground(t, endpoint, os.Getpid(), broker.BuildLocalBroker(workspace))
+	serveInBackground(t, endpoint, os.Getpid(), broker.BuildLocalBroker(workspace, core.SystemClock{}))
 
-	remote, err := broker.ConnectRemoteBroker(context.Background(), endpoint, os.Getpid())
+	remote, err := broker.ConnectRemoteBroker(context.Background(), endpoint, os.Getpid(), broker.RemoteOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,9 +106,9 @@ func TestUnixTransportServesItsVerifiedPeer(t *testing.T) {
 
 func TestUnixTransportRefusesAClientThatIsNotTheExpectedProcess(t *testing.T) {
 	endpoint := createEndpoint(t, buildShortRuntimeDir(t))
-	served := serveInBackground(t, endpoint, os.Getpid()+1, broker.BuildLocalBroker(t.TempDir()))
+	served := serveInBackground(t, endpoint, os.Getpid()+1, broker.BuildLocalBroker(t.TempDir(), core.SystemClock{}))
 
-	remote, err := broker.ConnectRemoteBroker(context.Background(), endpoint, os.Getpid())
+	remote, err := broker.ConnectRemoteBroker(context.Background(), endpoint, os.Getpid(), broker.RemoteOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,18 +123,18 @@ func TestUnixTransportRefusesAClientThatIsNotTheExpectedProcess(t *testing.T) {
 
 func TestUnixTransportRefusesABrokerThatIsNotTheExpectedProcess(t *testing.T) {
 	endpoint := createEndpoint(t, buildShortRuntimeDir(t))
-	serveInBackground(t, endpoint, os.Getpid(), broker.BuildLocalBroker(t.TempDir()))
+	serveInBackground(t, endpoint, os.Getpid(), broker.BuildLocalBroker(t.TempDir(), core.SystemClock{}))
 
-	if _, err := broker.ConnectRemoteBroker(context.Background(), endpoint, os.Getpid()+1); !errors.Is(err, core.ErrDenied) {
+	if _, err := broker.ConnectRemoteBroker(context.Background(), endpoint, os.Getpid()+1, broker.RemoteOptions{}); !errors.Is(err, core.ErrDenied) {
 		t.Fatalf("ConnectRemoteBroker(wrong pid) error = %v, want ErrDenied", err)
 	}
 }
 
 func TestUnixTransportAcceptsOnlyOneClientPerSession(t *testing.T) {
 	endpoint := createEndpoint(t, buildShortRuntimeDir(t))
-	serveInBackground(t, endpoint, os.Getpid(), broker.BuildLocalBroker(t.TempDir()))
+	serveInBackground(t, endpoint, os.Getpid(), broker.BuildLocalBroker(t.TempDir(), core.SystemClock{}))
 
-	first, err := broker.ConnectRemoteBroker(context.Background(), endpoint, os.Getpid())
+	first, err := broker.ConnectRemoteBroker(context.Background(), endpoint, os.Getpid(), broker.RemoteOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestUnixTransportAcceptsOnlyOneClientPerSession(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if second, err := broker.ConnectRemoteBroker(ctx, endpoint, os.Getpid()); err == nil {
+	if second, err := broker.ConnectRemoteBroker(ctx, endpoint, os.Getpid(), broker.RemoteOptions{}); err == nil {
 		_ = second.Close()
 		t.Fatal("a second client connected to a session that already has one")
 	}

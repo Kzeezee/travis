@@ -53,6 +53,11 @@ func reportServeEnd(ctx context.Context, err error) error {
 	return err
 }
 
+// onceApprover is a broker that can ask, and so can be told the human approved once.
+type onceApprover interface {
+	ApproveOnce(ctx context.Context, approved core.Capability) error
+}
+
 // connectionSession holds the files one client has open; handles are only valid on their connection.
 type connectionSession struct {
 	effects    core.Broker
@@ -106,6 +111,21 @@ func (s *connectionSession) perform(ctx context.Context, req Request) (Response,
 		}
 		delete(s.openFiles, req.Handle)
 		return Response{}, content.Close()
+	case OpWriteFile:
+		info, err := s.effects.WriteFile(ctx, req.Path, req.Data)
+		if err != nil {
+			return Response{}, err
+		}
+		msg := BuildPathInfoMessage(info)
+		return Response{Info: &msg}, nil
+	case OpApproveOnce:
+		approver, canApprove := s.effects.(onceApprover)
+		if !canApprove {
+			return Response{}, fmt.Errorf("this broker never asks, so it has nothing to approve: %w", core.ErrDenied)
+		}
+		return Response{}, approver.ApproveOnce(ctx, core.Capability{Kind: core.CapabilityKind(req.Capability.Kind), Scope: req.Capability.Scope})
+	case OpAddDecisionRule:
+		return Response{}, s.effects.AddDecisionRule(ctx, ConvertDecisionRuleMessage(*req.Rule))
 	}
 	return Response{}, fmt.Errorf("unknown op %q: %w", req.Op, core.ErrInvalid)
 }

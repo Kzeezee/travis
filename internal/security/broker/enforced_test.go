@@ -18,7 +18,7 @@ import (
 
 // buildSessionBroker enforces the named profile over a fresh workspace, with home and temp
 // roots that are separate temp directories so the real home directory never matters.
-func buildSessionBroker(t *testing.T, profile string) (*broker.LocalBroker, string, string) {
+func buildSessionBroker(t *testing.T, profile string) (*broker.PolicyEnforcedBroker, string, string) {
 	t.Helper()
 	base := t.TempDir()
 	workspace, home := filepath.Join(base, "workspace"), filepath.Join(base, "home")
@@ -32,7 +32,7 @@ func buildSessionBroker(t *testing.T, profile string) (*broker.LocalBroker, stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	return broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy), workspace, home
+	return broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, core.SystemClock{}), workspace, home
 }
 
 func TestPolicyEnforcedBrokerReadsGrantedWorkspaceFiles(t *testing.T) {
@@ -130,7 +130,7 @@ func TestPolicyEnforcedBrokerOpensAFileIffPolicyAllowsIt(t *testing.T) {
 			}
 		}
 		sessionPolicy := policy.New(grants, readDeny, nil, isCaseInsensitive)
-		enforced := broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy)
+		enforced := broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, core.SystemClock{})
 		isAllowed := func(path string) bool {
 			req := policy.Request{Kind: core.CapabilityFSRead, Target: path}
 			return sessionPolicy.Evaluate(context.Background(), req).Verdict == policy.Allow
@@ -151,6 +151,112 @@ func TestPolicyEnforcedBrokerOpensAFileIffPolicyAllowsIt(t *testing.T) {
 			if isOpened := err == nil; isOpened != shouldOpen {
 				t.Fatalf("grants %v, deny %v: OpenFile(%q) opened=%v err=%v, policy allows=%v",
 					grants, readDeny, path, isOpened, err, shouldOpen)
+			}
+		}
+	}
+}
+
+func TestPolicyEnforcedBrokerWritesOnlyWherePolicyAllows(t *testing.T) {
+	enforced, workspace, home := buildSessionBroker(t, "default")
+	ctx := context.Background()
+	if _, err := enforced.WriteFile(ctx, "notes/new.md", []byte("hi")); err != nil {
+		t.Fatalf("WriteFile(granted) = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "elsewhere"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	createSymlinkOrSkip(t, filepath.Join(home, "elsewhere"), filepath.Join(workspace, "out"))
+
+	for name, path := range map[string]string{
+		"decision rules":          ".travis/decisions.toml",
+		"git hooks":               ".git/hooks/pre-commit",
+		"deny-listed secret":      ".env",
+		"file with no grant":      filepath.Join(home, "x.txt"),
+		"escape by dot-dot":       "../home/x.txt",
+		"symlinked dir out":       "out/x.txt",
+		"new dir under a symlink": "out/deeper/x.txt",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := enforced.WriteFile(ctx, path, []byte("x")); !errors.Is(err, core.ErrDenied) {
+				t.Fatalf("WriteFile(%q) error = %v, want ErrDenied", path, err)
+			}
+		})
+	}
+	if entries, _ := os.ReadDir(filepath.Join(home, "elsewhere")); len(entries) != 0 {
+		t.Fatalf("a refused write still created %v", entries)
+	}
+
+	paranoid, _, _ := buildSessionBroker(t, "paranoid")
+	if _, err := paranoid.WriteFile(ctx, "notes/new.md", []byte("hi")); !errors.Is(err, core.ErrDenied) {
+		t.Fatalf("paranoid WriteFile error = %v, want ErrDenied", err)
+	}
+}
+
+// Approvals narrow an Ask (§6.4); they can never turn a Deny, or an Allow, into a recorded grant.
+func TestPolicyEnforcedBrokerOnlyApprovesWhatPolicyAsks(t *testing.T) {
+	enforced, workspace, _ := buildSessionBroker(t, "default")
+	ctx := context.Background()
+	secret := filepath.Join(workspace, ".env")
+	granted := filepath.Join(workspace, "notes.md")
+
+	if err := enforced.ApproveOnce(ctx, core.Capability{Kind: core.CapabilityFSRead, Scope: secret}); !errors.Is(err, core.ErrDenied) {
+		t.Fatalf("ApproveOnce(denied target) = %v, want ErrDenied", err)
+	}
+	rule := core.DecisionRule{Kind: core.CapabilityFSWrite, Scope: granted, Decision: core.DecisionAllow, Source: "test"}
+	if err := enforced.AddDecisionRule(ctx, rule); !errors.Is(err, core.ErrDenied) {
+		t.Fatalf("AddDecisionRule(already allowed) = %v, want ErrDenied", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".travis", "decisions.toml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused rule still reached decisions.toml: %v", err)
+	}
+}
+
+// TestPolicyEnforcedBrokerWritesAFileIffPolicyAllowsIt is the write half of §5.12.5's property.
+func TestPolicyEnforcedBrokerWritesAFileIffPolicyAllowsIt(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, outside := filepath.Join(base, "workspace"), filepath.Join(base, "outside")
+	writeWorkspaceFile(t, workspace, "sub/b.txt", "b")
+	writeWorkspaceFile(t, outside, "c.txt", "c")
+	requested := []string{"a.txt", "sub/b.txt", "sub/new/d.txt", "sub/.env", "../outside/c.txt", filepath.Join(outside, "e.txt")}
+
+	globUnder := func(dir string) string { return filepath.ToSlash(dir) + "/**" }
+	grantChoices := []string{globUnder(workspace), globUnder(filepath.Join(workspace, "sub")), globUnder(outside)}
+	denyChoices := []string{"**/.env", globUnder(filepath.Join(workspace, "sub"))}
+	isCaseInsensitive := config.IsPathCaseInsensitive()
+
+	random := rand.New(rand.NewPCG(27, 3))
+	for range 200 {
+		var grants capabilities.Set
+		for _, scope := range grantChoices {
+			if random.IntN(2) == 0 {
+				grants = append(grants, core.Capability{Kind: core.CapabilityFSWrite, Scope: scope})
+			}
+		}
+		var writeDeny []string
+		for _, glob := range denyChoices {
+			if random.IntN(2) == 0 {
+				writeDeny = append(writeDeny, glob)
+			}
+		}
+		sessionPolicy := policy.New(grants, nil, writeDeny, isCaseInsensitive)
+		enforced := broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, core.SystemClock{})
+
+		for _, path := range requested {
+			target := path
+			if !filepath.IsAbs(path) {
+				target = filepath.Join(workspace, path)
+			}
+			target = filepath.Clean(target)
+			req := policy.Request{Kind: core.CapabilityFSWrite, Target: target}
+			shouldWrite := sessionPolicy.Evaluate(context.Background(), req).Verdict == policy.Allow
+
+			_, err := enforced.WriteFile(context.Background(), path, []byte("x"))
+			if isWritten := err == nil; isWritten != shouldWrite {
+				t.Fatalf("grants %v, deny %v: WriteFile(%q) written=%v err=%v, policy allows=%v",
+					grants, writeDeny, path, isWritten, err, shouldWrite)
 			}
 		}
 	}

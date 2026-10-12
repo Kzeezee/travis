@@ -44,7 +44,7 @@ func TestGoldenFrames(t *testing.T) {
 				return nil
 			}
 
-			model := buildChatModel(context.Background(), events, runTurn, Options{ModelName: "gpt-4o-mini"})
+			model := buildChatModel(context.Background(), events, nil, runTurn, Options{ModelName: "gpt-4o-mini"})
 			tm := teatest.NewTestModel(t, model, teatest.WithInitialTermSize(width, 16))
 			tm.Type("what's in my notes folder?")
 			tm.Send(enterKey)
