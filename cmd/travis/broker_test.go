@@ -50,7 +50,7 @@ func buildBrokerBesideTestBinary() error {
 		return fmt.Errorf("build travis-broker: %w\n%s", err, output)
 	}
 	// What `make build` stamps into a real travis (R-23).
-	brokerBytes, err := os.ReadFile(brokerPath) //nolint:gosec // our own build output
+	brokerBytes, err := os.ReadFile(brokerPath)
 	if err != nil {
 		return err
 	}

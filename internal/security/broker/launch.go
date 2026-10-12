@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -37,7 +38,11 @@ func ResolveBrokerExecutable() (string, error) {
 	if travisExecutable, err = filepath.EvalSymlinks(travisExecutable); err != nil {
 		return "", fmt.Errorf("locate the travis binary: %w", err)
 	}
-	brokerExecutable := filepath.Join(filepath.Dir(travisExecutable), "travis-broker"+brokerExecutableSuffix)
+	brokerName := "travis-broker"
+	if runtime.GOOS == "windows" {
+		brokerName += ".exe"
+	}
+	brokerExecutable := filepath.Join(filepath.Dir(travisExecutable), brokerName)
 	if _, err := os.Stat(brokerExecutable); err != nil {
 		return "", fmt.Errorf("travis-broker must sit next to travis at %q: %w", brokerExecutable, errors.Join(core.ErrNotFound, err))
 	}
@@ -128,7 +133,7 @@ func verifyBrokerBinary(path, wantSHA256 string) error {
 	if wantSHA256 == "" {
 		return fmt.Errorf("this travis has no broker hash built in, so %q cannot be verified; build with `make build`: %w", path, core.ErrDenied)
 	}
-	binary, err := os.Open(path) //nolint:gosec // the path comes from ResolveBrokerExecutable or a test, never from the model or config
+	binary, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("verify the broker binary: %w", err)
 	}

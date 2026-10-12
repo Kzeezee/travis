@@ -1,4 +1,4 @@
-//go:build linux || darwin
+//go:build linux || darwin || windows
 
 package broker_test
 
@@ -105,7 +105,7 @@ func TestStartSessionBrokerRefusesABrokerThatIsNotTheOneTravisWasBuiltWith(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(swapped, append(original, 0), 0o700); err != nil { //nolint:gosec // a test executable
+	if err := os.WriteFile(swapped, append(original, 0), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
