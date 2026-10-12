@@ -20,7 +20,7 @@ func TestRunChatRefusesNonTerminalIO(t *testing.T) {
 	}
 	opts := Options{Input: strings.NewReader("hello\r"), Output: &strings.Builder{}}
 
-	if err := RunChat(context.Background(), nil, nil, runTurn, opts); !errors.Is(err, ErrNotInteractive) {
+	if err := RunChat(context.Background(), nil, nil, ChatActions{RunTurn: runTurn}, opts); !errors.Is(err, ErrNotInteractive) {
 		t.Fatalf("got error %v, want %v", err, ErrNotInteractive)
 	}
 }
@@ -77,10 +77,10 @@ func TestSubmittedPromptRunsATurnAndReportsItsOutcome(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var gotPrompt string
-			m := buildTestModel(func(_ context.Context, prompt string) error {
+			m := buildTestModel(ChatActions{RunTurn: func(_ context.Context, prompt string) error {
 				gotPrompt = prompt
 				return tt.turnErr
-			})
+			}})
 
 			m, _ = pressKeys(m, typedKeys("  hello ")...)
 			m, turn := pressKeys(m, enterKey)
@@ -101,7 +101,7 @@ func TestSubmittedPromptRunsATurnAndReportsItsOutcome(t *testing.T) {
 }
 
 func TestStartupWarningsShowInTheFirstFrame(t *testing.T) {
-	m := buildChatModel(context.Background(), make(chan core.Event), nil, nil,
+	m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{},
 		Options{ModelName: "test-model", StartupWarnings: []string{"config: unknown key brain.max_stepz"}})
 
 	if view := renderPlainView(m); !strings.Contains(view, "⚠ config: unknown key brain.max_stepz") {
@@ -111,7 +111,7 @@ func TestStartupWarningsShowInTheFirstFrame(t *testing.T) {
 
 func TestQuestionIsShownAndTheTypedAnswerIsReturned(t *testing.T) {
 	answers := make(chan string, 1)
-	m := buildTestModel(nil)
+	m := buildTestModel(ChatActions{})
 	m.cancelTurn = func() {}
 	m, _ = updateModel(m, questionRequestedMsg{request: core.QuestionRequest{
 		Text: "Which day?", Respond: func(answer string) { answers <- answer },
@@ -134,7 +134,7 @@ func TestQuestionIsShownAndTheTypedAnswerIsReturned(t *testing.T) {
 }
 
 func TestBrokerUnavailableReplacesTheStatusBarWithAFailureBar(t *testing.T) {
-	m := buildChatModel(context.Background(), make(chan core.Event), nil, nil, Options{ModelName: "test-model"})
+	m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "test-model"})
 	updated, _ := m.Update(eventBatchMsg{events: []core.Event{core.BrokerUnavailable{Reason: "broker unreachable: EOF"}}})
 
 	view := renderPlainView(updated.(chatModel))
@@ -146,10 +146,10 @@ func TestBrokerUnavailableReplacesTheStatusBarWithAFailureBar(t *testing.T) {
 func TestCancelKeysInterruptTheRunningTurn(t *testing.T) {
 	for _, cancelKey := range []tea.KeyPressMsg{escKey, ctrlKey('c')} {
 		t.Run(cancelKey.String(), func(t *testing.T) {
-			m := buildTestModel(func(ctx context.Context, _ string) error {
+			m := buildTestModel(ChatActions{RunTurn: func(ctx context.Context, _ string) error {
 				<-ctx.Done()
 				return ctx.Err()
-			})
+			}})
 			m, _ = pressKeys(m, typedKeys("hi")...)
 			m, turn := pressKeys(m, enterKey)
 			finished := make(chan tea.Msg, 1)
@@ -189,10 +189,10 @@ func TestQuitPaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := buildTestModel(func(context.Context, string) error {
+			m := buildTestModel(ChatActions{RunTurn: func(context.Context, string) error {
 				t.Fatal("quitting must not run a turn")
 				return nil
-			})
+			}})
 			_, cmd := pressKeys(m, tt.msgs...)
 			if !isQuitCmd(cmd) {
 				t.Fatal("want the program to quit")
@@ -202,7 +202,7 @@ func TestQuitPaths(t *testing.T) {
 }
 
 func TestRunningTurnDefersEnterAndInputEnd(t *testing.T) {
-	m := buildTestModel(func(context.Context, string) error { return nil })
+	m := buildTestModel(ChatActions{RunTurn: func(context.Context, string) error { return nil }})
 	m, _ = pressKeys(m, typedKeys("first")...)
 	m, turn := pressKeys(m, enterKey)
 
@@ -219,7 +219,7 @@ func TestRunningTurnDefersEnterAndInputEnd(t *testing.T) {
 }
 
 func TestOnlyScrollKeysAndTheWheelMoveTheTranscript(t *testing.T) {
-	m := buildTestModel(func(context.Context, string) error { return nil })
+	m := buildTestModel(ChatActions{RunTurn: func(context.Context, string) error { return nil }})
 	m, _ = pressKeys(m, typedKeys("long")...)
 	m, _ = pressKeys(m, enterKey)
 	m, _ = updateModel(m, eventBatchMsg{events: []core.Event{
@@ -260,8 +260,8 @@ func typedKeys(text string) []tea.Msg {
 	return keys
 }
 
-func buildTestModel(runTurn func(context.Context, string) error) chatModel {
-	return buildChatModel(context.Background(), make(chan core.Event), nil, runTurn, Options{ModelName: "test-model"})
+func buildTestModel(actions ChatActions) chatModel {
+	return buildChatModel(context.Background(), make(chan core.Event), nil, actions, Options{ModelName: "test-model"})
 }
 
 func updateModel(m chatModel, msg tea.Msg) (chatModel, tea.Cmd) {

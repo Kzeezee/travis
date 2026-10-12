@@ -36,12 +36,12 @@ type rewindFinishedMsg struct {
 }
 
 func (m chatModel) requestTurnList() (tea.Model, tea.Cmd) {
-	if m.undo.ListTurns == nil || m.undo.Rewind == nil {
+	if m.actions.Undo.ListTurns == nil || m.actions.Undo.Rewind == nil {
 		m.transcript.addNotice("undo is not available in this session")
 		m.refreshTranscript()
 		return m, nil
 	}
-	listTurns, ctx := m.undo.ListTurns, m.ctx
+	listTurns, ctx := m.actions.Undo.ListTurns, m.ctx
 	return m, func() tea.Msg {
 		turns, err := listTurns(ctx)
 		return turnsListedMsg{turns: turns, err: err}
@@ -79,7 +79,7 @@ func (m chatModel) handleUndoPickerKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd)
 	case "enter":
 		m.undoPicker = nil
 		fromTurn, mode := picker.turns[picker.cursor].Turn, picker.mode
-		rewind, ctx := m.undo.Rewind, m.ctx
+		rewind, ctx := m.actions.Undo.Rewind, m.ctx
 		return m, func() tea.Msg {
 			report, err := rewind(ctx, fromTurn, mode)
 			return rewindFinishedMsg{fromTurn: fromTurn, mode: mode, report: report, err: err}

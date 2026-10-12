@@ -40,7 +40,6 @@ type Options struct {
 	StartupWarnings []string
 	Input           io.Reader
 	Output          io.Writer
-	Undo            UndoActions
 	Questions       <-chan core.QuestionRequest
 }
 
@@ -51,14 +50,23 @@ type UndoActions struct {
 	Rewind    func(ctx context.Context, fromTurn core.ID, mode core.RewindMode) (core.RewindReport, error)
 }
 
-// RunChat runs the interactive chat until the user quits or input ends. runTurn is the
-// assistant-turn operation; the frontend calls it without knowing what implements it.
+// ChatActions are the operations the chat can ask of the session; the frontend calls them
+// without knowing what implements them.
+type ChatActions struct {
+	RunTurn      func(ctx context.Context, prompt string) error
+	ResetHistory func()
+	SelectModel  func(name string)
+	ToolNames    []string
+	Undo         UndoActions
+}
+
+// RunChat runs the interactive chat until the user quits or input ends.
 // approvals delivers pending Ask decisions for the modal to answer (D-10).
 func RunChat(
 	ctx context.Context,
 	events <-chan core.Event,
 	approvals <-chan core.ApprovalRequest,
-	runTurn func(ctx context.Context, prompt string) error,
+	actions ChatActions,
 	opts Options,
 ) error {
 	if !isTerminal(opts.Input) || !isTerminal(opts.Output) {
@@ -71,7 +79,7 @@ func RunChat(
 	// Bubble Tea recovers panics in View, Update, and Cmds, restores the terminal, and prints the
 	// trace (DESIGN.md §5.9); passing tea.WithoutCatchPanics would give that up.
 	program := tea.NewProgram(
-		buildChatModel(ctx, events, approvals, runTurn, opts),
+		buildChatModel(ctx, events, approvals, actions, opts),
 		tea.WithInput(input),
 		tea.WithOutput(opts.Output),
 	)
@@ -197,8 +205,7 @@ type chatModel struct {
 	events    <-chan core.Event
 	approvals <-chan core.ApprovalRequest
 	questions <-chan core.QuestionRequest
-	runTurn   func(context.Context, string) error
-	undo      UndoActions
+	actions   ChatActions
 	modelName string
 
 	transcript      transcript
@@ -223,7 +230,7 @@ func buildChatModel(
 	ctx context.Context,
 	events <-chan core.Event,
 	approvals <-chan core.ApprovalRequest,
-	runTurn func(context.Context, string) error,
+	actions ChatActions,
 	opts Options,
 ) chatModel {
 	input := textinput.New()
@@ -232,7 +239,7 @@ func buildChatModel(
 	input.Focus()
 
 	m := chatModel{
-		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, runTurn: runTurn, undo: opts.Undo, modelName: opts.ModelName,
+		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, actions: actions, modelName: opts.ModelName,
 		viewport: viewport.New(), input: input,
 	}
 	m.transcript.warnings = opts.StartupWarnings
@@ -417,7 +424,7 @@ func (m chatModel) submitPrompt() (tea.Model, tea.Cmd) {
 	m.refreshTranscript()
 	m.viewport.GotoBottom()
 
-	runTurn := m.runTurn
+	runTurn := m.actions.RunTurn
 	return m, func() tea.Msg {
 		return turnFinishedMsg{turnNumber: turnNumber, err: runTurn(turnCtx, prompt)}
 	}
