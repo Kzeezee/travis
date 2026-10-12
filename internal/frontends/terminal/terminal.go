@@ -20,8 +20,6 @@ import (
 )
 
 const (
-	quitCommand = "/quit"
-	undoCommand = "/undo"
 	// coalesceWindow turns a token stream into at most one render per frame, 30 fps (DESIGN.md §5.9.1, R-07).
 	coalesceWindow = 33 * time.Millisecond
 	// Used until the terminal reports its size, and for outputs that never do.
@@ -206,6 +204,7 @@ type chatModel struct {
 	approvals <-chan core.ApprovalRequest
 	questions <-chan core.QuestionRequest
 	actions   ChatActions
+	commands  []slashCommand
 	modelName string
 
 	transcript      transcript
@@ -239,7 +238,7 @@ func buildChatModel(
 	input.Focus()
 
 	m := chatModel{
-		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, actions: actions, modelName: opts.ModelName,
+		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, actions: actions, commands: buildSlashCommands(), modelName: opts.ModelName,
 		viewport: viewport.New(), input: input,
 	}
 	m.transcript.warnings = opts.StartupWarnings
@@ -409,13 +408,11 @@ func (m chatModel) handleApprovalKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m chatModel) submitPrompt() (tea.Model, tea.Cmd) {
 	prompt := strings.TrimSpace(m.input.Value())
 	m.input.Reset()
-	switch prompt {
-	case "":
+	if prompt == "" {
 		return m, nil
-	case quitCommand:
-		return m, tea.Quit
-	case undoCommand:
-		return m.requestTurnList()
+	}
+	if strings.HasPrefix(prompt, "/") {
+		return m.runSlashCommand(prompt)
 	}
 
 	turnCtx, cancel := context.WithCancel(m.ctx)

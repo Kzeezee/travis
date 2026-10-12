@@ -35,7 +35,7 @@ type rewindFinishedMsg struct {
 	err      error
 }
 
-func (m chatModel) requestTurnList() (tea.Model, tea.Cmd) {
+func (m chatModel) requestTurnList() (chatModel, tea.Cmd) {
 	if m.actions.Undo.ListTurns == nil || m.actions.Undo.Rewind == nil {
 		m.transcript.addNotice("undo is not available in this session")
 		m.refreshTranscript()
