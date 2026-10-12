@@ -12,6 +12,8 @@ import (
 type transcript struct {
 	warnings []string
 	turns    []chatTurn
+	// usage totals TurnCompleted facts across the session for /cost.
+	usage core.Usage
 	// observedTurns counts UserMessageSubmitted facts. Streamed events belong to that turn, so a
 	// chunk that arrives after its turn finished can never land in the next one.
 	observedTurns int
@@ -70,6 +72,11 @@ func (t *transcript) startTurn(prompt string) int {
 	return len(t.turns)
 }
 
+// resetTranscript forgets the conversation but keeps startup warnings and the session usage total.
+func (t *transcript) resetTranscript() {
+	t.turns, t.observedTurns = nil, 0
+}
+
 func (t *transcript) finishTurn(turnNumber int, outcome turnOutcome, failure string) {
 	turn := &t.turns[turnNumber-1]
 	turn.outcome, turn.failure = outcome, failure
@@ -81,6 +88,11 @@ func (t *transcript) applyEvent(event core.Event) {
 		if t.observedTurns <= len(t.turns) {
 			t.turns[t.observedTurns-1].turnID = submitted.TurnID
 		}
+		return
+	}
+	if completed, isCompleted := event.(core.TurnCompleted); isCompleted {
+		t.usage.InputTokens += completed.Usage.InputTokens
+		t.usage.OutputTokens += completed.Usage.OutputTokens
 		return
 	}
 	if t.observedTurns < 1 || t.observedTurns > len(t.turns) {
