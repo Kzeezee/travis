@@ -63,6 +63,8 @@ type SessionLaunch struct {
 	ReadyTimeout time.Duration
 	// Client is where the connected RemoteBroker reports denials and asks for approvals.
 	Client RemoteOptions
+	// Env is the broker's environment; nil inherits travis's own.
+	Env []string
 }
 
 // SessionBroker is one running broker process and travis's connection to it.
@@ -98,6 +100,7 @@ func StartSessionBroker(ctx context.Context, launch SessionLaunch) (*SessionBrok
 		"-client-pid", strconv.Itoa(os.Getpid()),
 		"-profile", launch.Profile)
 	brokerProcess.Dir = launch.WorkspaceDir
+	brokerProcess.Env = launch.Env
 	brokerProcess.Stdout = readyWriter
 	brokerProcess.Stderr = launch.Diagnostics
 	startErr := brokerProcess.Start()

@@ -1,6 +1,10 @@
 package config
 
-import "os"
+import (
+	"os"
+	"slices"
+	"strings"
+)
 
 // providerAuthEnvVar matches the reference DESIGN.md 5.2 uses in its own example,
 // `ref = "env://OPENAI_API_KEY"`.
@@ -19,4 +23,18 @@ func ResolveProviderAPIKey() string {
 
 func resolveProviderAPIKey(lookup envLookup) string {
 	return readTrimmedEnvValue(lookup, providerAuthEnvVar)
+}
+
+// BuildEnvironmentWithoutSecrets is this process's environment minus the provider credential,
+// for a child process, such as the broker, that has no use for it.
+func BuildEnvironmentWithoutSecrets() []string {
+	return removeProviderCredential(os.Environ())
+}
+
+// removeProviderCredential matches the name case-insensitively, as Windows looks it up.
+func removeProviderCredential(environ []string) []string {
+	return slices.DeleteFunc(environ, func(entry string) bool {
+		name, _, _ := strings.Cut(entry, "=")
+		return strings.EqualFold(name, providerAuthEnvVar)
+	})
 }

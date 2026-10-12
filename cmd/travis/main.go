@@ -171,6 +171,8 @@ func startSessionBroker(paths config.PathSet, diagnostics io.Writer, client brok
 		Profile:     "default",
 		Diagnostics: diagnostics,
 		Client:      client,
+		// The broker performs file effects only; the provider credential stays in travis.
+		Env: config.BuildEnvironmentWithoutSecrets(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start the security broker: %w", err)
