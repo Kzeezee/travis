@@ -110,7 +110,7 @@ func TestFileReadThroughTheBrokerProcessIsRefusedByPolicy(t *testing.T) {
 	fileBroker := startTestSessionBroker(t, config.PathSet{WorkspaceDir: workspace, RuntimeDir: buildShortRuntimeDir(t)}, &diagnostics, broker.RemoteOptions{Events: bus})
 	fileRead := builtin.BuildFileReadTool(fileBroker, workspace, defaultMaxReadBytes)
 
-	refused, err := fileRead.Invoke(context.Background(), json.RawMessage(`{"path":".env"}`))
+	refused, err := fileRead.Invoke(core.WithToolCallID(context.Background(), "call-env"), json.RawMessage(`{"path":".env"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,8 +124,8 @@ func TestFileReadThroughTheBrokerProcessIsRefusedByPolicy(t *testing.T) {
 			denials = append(denials, denied)
 		}
 	}
-	if len(denials) == 0 || denials[0].Capability.Kind != core.CapabilityFSRead || !strings.Contains(denials[0].Rule, "deny") {
-		t.Fatalf("PolicyDenied events = %+v, want an fs_read denial naming its rule", denials)
+	if len(denials) == 0 || denials[0].CallID != "call-env" || denials[0].Capability.Kind != core.CapabilityFSRead || !strings.Contains(denials[0].Rule, "deny") {
+		t.Fatalf("PolicyDenied events = %+v, want call-env's fs_read denial naming its rule", denials)
 	}
 
 	allowed, err := fileRead.Invoke(context.Background(), json.RawMessage(`{"path":"notes.md"}`))

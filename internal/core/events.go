@@ -101,9 +101,10 @@ func (TurnCompleted) ReportEventType() EventType {
 
 // PolicyDenied records that the broker refused an effect, naming the rule that decided it
 // (D-29: a red-team case asserts this event fired, not merely that the effect is absent).
-// It carries no call id yet, because no tool call identity reaches the broker seam.
+// CallID is the tool call that asked, empty for an effect outside one.
 type PolicyDenied struct {
 	EventHeader
+	CallID     ID         `json:"call_id,omitempty"`
 	Capability Capability `json:"capability"`
 	Rule       string     `json:"rule"`
 }

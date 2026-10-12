@@ -243,7 +243,7 @@ func (c *AssistantConversation) invokeTool(ctx context.Context, call core.ToolCa
 			err = nil
 		}
 	}()
-	return tool.Invoke(ctx, call.Arguments)
+	return tool.Invoke(core.WithToolCallID(ctx, call.ID), call.Arguments)
 }
 
 func (c *AssistantConversation) lookupTool(name string) (core.Tool, bool) {

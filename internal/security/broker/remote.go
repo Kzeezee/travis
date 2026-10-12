@@ -130,7 +130,7 @@ func (r *RemoteBroker) exchangeEffect(ctx context.Context, kind core.CapabilityK
 		resp, err = r.exchange(ctx, req)
 	}
 	if errors.Is(err, core.ErrDenied) {
-		r.publish(ctx, core.PolicyDenied{EventHeader: r.buildEventHeader(), Capability: core.Capability{Kind: kind, Scope: req.Path}, Rule: err.Error()})
+		r.publish(ctx, core.PolicyDenied{EventHeader: r.buildEventHeader(), CallID: core.ReportToolCallID(ctx), Capability: core.Capability{Kind: kind, Scope: req.Path}, Rule: err.Error()})
 	}
 	return resp, err
 }

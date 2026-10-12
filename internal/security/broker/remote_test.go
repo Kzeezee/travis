@@ -304,11 +304,14 @@ func TestRemoteBrokerWritesThroughTheEnforcedBroker(t *testing.T) {
 	if content, err := os.ReadFile(filepath.Join(workspace, "notes", "new.md")); err != nil || string(content) != "hello" {
 		t.Fatalf("written content = %q, %v", content, err)
 	}
-	if _, err := remote.WriteFile(ctx, ".travis/decisions.toml", []byte("[[rule]]")); !errors.Is(err, core.ErrDenied) {
+	if _, err := remote.WriteFile(core.WithToolCallID(ctx, "call-7"), ".travis/decisions.toml", []byte("[[rule]]")); !errors.Is(err, core.ErrDenied) {
 		t.Fatalf("WriteFile(.travis) = %v, want ErrDenied", err)
 	}
 	if types := events.reportEventTypes(); len(types) != 1 || types[0] != core.EventPolicyDenied {
 		t.Fatalf("events = %v, want one PolicyDenied", types)
+	}
+	if denied := events.events[0].(core.PolicyDenied); denied.CallID != "call-7" || denied.Capability.Kind != core.CapabilityFSWrite {
+		t.Fatalf("PolicyDenied = %+v, want call-7's fs_write", denied)
 	}
 	if _, err := remote.WriteFile(ctx, "big.bin", make([]byte, broker.MaxWriteFileBytes+1)); !errors.Is(err, core.ErrInvalid) {
 		t.Fatalf("oversize WriteFile = %v, want ErrInvalid", err)

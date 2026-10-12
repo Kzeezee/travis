@@ -28,6 +28,20 @@ type ToolCall struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
+type toolCallIDKey struct{}
+
+// WithToolCallID marks ctx as serving one tool call, so effects deep below the tool (a broker
+// refusal) can name the call that caused them without every signature carrying it.
+func WithToolCallID(ctx context.Context, id ID) context.Context {
+	return context.WithValue(ctx, toolCallIDKey{}, id)
+}
+
+// ReportToolCallID is the call ctx serves, or "" outside a tool call.
+func ReportToolCallID(ctx context.Context) ID {
+	id, _ := ctx.Value(toolCallIDKey{}).(ID)
+	return id
+}
+
 type ToolOutput struct {
 	Content string
 	Display string
