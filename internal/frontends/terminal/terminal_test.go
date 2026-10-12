@@ -304,3 +304,18 @@ func TestRenderTurnLabelsOnlyRepliesNeverWorkOrBlankText(t *testing.T) {
 		t.Fatalf("got\n%s\nwant a label on each reply only, none on the blank chunk, card, or thought", got)
 	}
 }
+
+func TestPaletteTypedDuringATurnOpensWhenItFinishes(t *testing.T) {
+	m := buildTestModel(ChatActions{RunTurn: func(context.Context, string) error { return nil }})
+	idleHeight := m.viewport.Height()
+	m, _ = pressKeys(m, typedKeys("hi")...)
+	m, turn := pressKeys(m, enterKey)
+	m, _ = pressKeys(m, typedKeys("/m")...)
+	if m.viewport.Height() != idleHeight {
+		t.Fatal("the palette must stay closed while a turn runs")
+	}
+	m, _ = updateModel(m, turn())
+	if m.viewport.Height() != idleHeight-1 {
+		t.Fatalf("got viewport height %d, want %d to make room for the palette", m.viewport.Height(), idleHeight-1)
+	}
+}

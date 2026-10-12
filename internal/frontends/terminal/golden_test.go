@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/exp/teatest/v2"
 
 	"github.com/Kzeezee/travis/internal/core"
@@ -54,4 +55,12 @@ func TestGoldenFrames(t *testing.T) {
 			teatest.RequireEqualOutput(t, []byte(renderPlainView(final)))
 		})
 	}
+
+	t.Run("palette_width_80", func(t *testing.T) {
+		m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "gpt-4o-mini"})
+		m.resize(80, 16)
+		m, _ = pressKeys(m, typedKeys("/")...)
+		m, _ = pressKeys(m, tea.KeyPressMsg{Code: tea.KeyDown})
+		teatest.RequireEqualOutput(t, []byte(renderPlainView(m)))
+	})
 }

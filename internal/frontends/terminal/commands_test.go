@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/Kzeezee/travis/internal/core"
 )
 
@@ -158,4 +160,69 @@ func runTestTurn(t *testing.T, m chatModel, prompt string) chatModel {
 	m, turn := pressKeys(m, append(typedKeys(prompt), enterKey)...)
 	m, _ = updateModel(m, turn())
 	return m
+}
+
+func TestPaletteListsAndCompletesCommands(t *testing.T) {
+	m := buildTestModel(ChatActions{})
+
+	m, _ = pressKeys(m, typedKeys("/")...)
+	if rows := m.listPaletteRows(); len(rows) != len(m.commands) {
+		t.Fatalf("got %d rows for /, want every command (%d)", len(rows), len(m.commands))
+	}
+	m, _ = pressKeys(m, typedKeys("m")...)
+	if rows := m.listPaletteRows(); len(rows) != 1 || rows[0].name != "model" {
+		t.Fatalf("got rows %v for /m, want only /model", rows)
+	}
+	if view := renderPlainView(m); !strings.Contains(view, "› /model [name]") {
+		t.Fatalf("want /model shown selected, got:\n%s", view)
+	}
+
+	m, _ = pressKeys(m, tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.input.Value() != "/model " {
+		t.Fatalf("got input %q, want tab to complete /model", m.input.Value())
+	}
+	if len(m.listPaletteRows()) != 0 {
+		t.Fatal("the palette should close once arguments start")
+	}
+}
+
+func TestPaletteKeysMoveSelectionAndEscClears(t *testing.T) {
+	m := buildTestModel(ChatActions{})
+	m, _ = pressKeys(m, typedKeys("/")...)
+	fullHeight := m.viewport.Height()
+
+	m, _ = pressKeys(m, tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.paletteIndex != 0 {
+		t.Fatalf("got index %d, want up clamped at 0", m.paletteIndex)
+	}
+	for range len(m.commands) + 2 {
+		m, _ = pressKeys(m, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	if want := len(m.listPaletteRows()) - 1; m.paletteIndex != want {
+		t.Fatalf("got index %d, want down clamped at %d", m.paletteIndex, want)
+	}
+	m, _ = pressKeys(m, tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.input.Value() != "/"+m.commands[len(m.commands)-1].name+" " {
+		t.Fatalf("got input %q, want the selected command completed", m.input.Value())
+	}
+
+	m.input.Reset()
+	m, _ = pressKeys(m, typedKeys("/")...)
+	m, _ = pressKeys(m, escKey)
+	if m.input.Value() != "" || m.viewport.Height() <= fullHeight {
+		t.Fatal("esc should clear the input and give the rows back to the transcript")
+	}
+}
+
+func TestPaletteEnterRunsTheSelectedCommand(t *testing.T) {
+	recorder := &recordingActions{}
+	m := buildTestModel(recorder.buildChatActions())
+	m, _ = pressKeys(m, typedKeys("/n")...)
+	m, _ = pressKeys(m, enterKey)
+	if recorder.resets != 1 || len(recorder.prompts) != 0 {
+		t.Fatalf("got %d resets and prompts %v, want /new run and nothing sent to the model", recorder.resets, recorder.prompts)
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("got input %q, want it cleared", m.input.Value())
+	}
 }
