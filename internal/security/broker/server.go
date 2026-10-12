@@ -24,7 +24,12 @@ func ServeConnection(ctx context.Context, conn net.Conn, effects core.Broker) er
 		req, err := ReadRequest(conn)
 		switch {
 		case err == nil:
-			if err := WriteResponse(conn, session.answer(ctx, req)); err != nil {
+			err := WriteResponse(conn, session.answer(ctx, req))
+			if errors.Is(err, errFrameTooLarge) {
+				// Nothing was written, so refuse just this request and keep serving.
+				err = WriteResponse(conn, Response{ID: req.ID, Error: BuildErrorBody(err)})
+			}
+			if err != nil {
 				return reportServeEnd(ctx, err)
 			}
 		case isFramingError(err):
@@ -58,12 +63,24 @@ type onceApprover interface {
 	ApproveOnce(ctx context.Context, approved core.Capability) error
 }
 
-// connectionSession holds the files one client has open; handles are only valid on their connection.
+// connectionSession holds the files one client has open, and the listing it is paging through;
+// both are only valid on their connection.
 type connectionSession struct {
 	effects    core.Broker
 	openFiles  map[uint64]io.ReadCloser
 	nextHandle uint64
+	listing    pagedListing
 }
+
+// pagedListing is a directory listing too large for one frame, kept so later pages come from the
+// same authorized snapshot.
+type pagedListing struct {
+	path    string
+	entries []core.PathInfo
+}
+
+// listPageBudgetBytes keeps one list_directory page well inside a frame, whatever the path lengths.
+const listPageBudgetBytes = MaxFrameBytes / 2
 
 func (s *connectionSession) answer(ctx context.Context, req Request) Response {
 	resp, err := s.perform(ctx, req)
@@ -84,15 +101,7 @@ func (s *connectionSession) perform(ctx context.Context, req Request) (Response,
 		msg := BuildPathInfoMessage(info)
 		return Response{Info: &msg}, nil
 	case OpListDirectory:
-		entries, err := s.effects.ListDirectory(ctx, req.Path)
-		if err != nil {
-			return Response{}, err
-		}
-		msgs := make([]PathInfo, 0, len(entries))
-		for _, entry := range entries {
-			msgs = append(msgs, BuildPathInfoMessage(entry))
-		}
-		return Response{Entries: msgs}, nil
+		return s.listDirectoryPage(ctx, req.Path, req.Offset)
 	case OpOpenFile:
 		opened, err := s.effects.OpenFile(ctx, req.Path)
 		if err != nil {
@@ -128,6 +137,37 @@ func (s *connectionSession) perform(ctx context.Context, req Request) (Response,
 		return Response{}, s.effects.AddDecisionRule(ctx, ConvertDecisionRuleMessage(*req.Rule))
 	}
 	return Response{}, fmt.Errorf("unknown op %q: %w", req.Op, core.ErrInvalid)
+}
+
+// listDirectoryPage lists path at offset zero and answers later offsets from that listing, so a
+// directory is authorized once however many pages it takes.
+func (s *connectionSession) listDirectoryPage(ctx context.Context, path string, offset uint32) (Response, error) {
+	if offset == 0 {
+		entries, err := s.effects.ListDirectory(ctx, path)
+		if err != nil {
+			return Response{}, err
+		}
+		s.listing = pagedListing{path: path, entries: entries}
+	} else if s.listing.path != path || int(offset) >= len(s.listing.entries) {
+		return Response{}, fmt.Errorf("no listing of %q to continue at %d: %w", path, offset, core.ErrInvalid)
+	}
+
+	entries, next := s.listing.entries, int(offset)
+	page := []PathInfo{}
+	for budget := listPageBudgetBytes; next < len(entries); next++ {
+		msg := BuildPathInfoMessage(entries[next])
+		size := len(msg.Path) + len(msg.WorkspacePath) + len(msg.Kind) + 64 // field names and headers
+		if len(page) > 0 && size > budget {
+			break
+		}
+		budget -= size
+		page = append(page, msg)
+	}
+	if next == len(entries) {
+		s.listing = pagedListing{}
+		return Response{Entries: page}, nil
+	}
+	return Response{Entries: page, NextOffset: uint32(next)}, nil //nolint:gosec // next < len(entries), a directory's entry count
 }
 
 func (s *connectionSession) readOpenFile(handle uint64, maxBytes uint32) (Response, error) {

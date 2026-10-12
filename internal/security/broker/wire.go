@@ -18,7 +18,8 @@ import (
 )
 
 // ProtocolVersion is carried on every request; a broker refuses any version it does not speak.
-// Version 2 added write_file, approve_once, add_decision_rule and the needs_approval error.
+// Version 2 added write_file, approve_once, add_decision_rule, the needs_approval error and
+// list_directory paging.
 const ProtocolVersion uint16 = 2
 
 const (
@@ -56,6 +57,8 @@ type Request struct {
 	Handle   uint64 `msgpack:"handle,omitempty"`
 	MaxBytes uint32 `msgpack:"max_bytes,omitempty"`
 	Data     []byte `msgpack:"data,omitempty"`
+	// Offset asks list_directory for the page starting at a Response.NextOffset.
+	Offset uint32 `msgpack:"offset,omitempty"`
 	// Capability is what approve_once lets through; Rule is what add_decision_rule persists.
 	Capability *CapabilityMessage   `msgpack:"capability,omitempty"`
 	Rule       *DecisionRuleMessage `msgpack:"rule,omitempty"`
@@ -83,6 +86,8 @@ type Response struct {
 	Handle  uint64     `msgpack:"handle,omitempty"`
 	Data    []byte     `msgpack:"data,omitempty"`
 	IsEOF   bool       `msgpack:"eof,omitempty"`
+	// NextOffset is where list_directory's next page starts; zero means the listing is complete.
+	NextOffset uint32 `msgpack:"next_offset,omitempty"`
 }
 
 type PathInfo struct {
@@ -118,6 +123,9 @@ type OperationMessage struct {
 }
 
 var errMalformedFrame = fmt.Errorf("malformed broker frame: %w", core.ErrInvalid)
+
+// errFrameTooLarge is refused before any byte is written, so the stream stays usable.
+var errFrameTooLarge = fmt.Errorf("broker frame too large: %w", core.ErrInvalid)
 
 func WriteRequest(w io.Writer, req Request) error {
 	return writeFrame(w, req)
@@ -254,7 +262,7 @@ func writeFrame(w io.Writer, msg any) error {
 		return err
 	}
 	if len(payload) > MaxFrameBytes {
-		return fmt.Errorf("broker frame of %d bytes exceeds %d: %w", len(payload), MaxFrameBytes, core.ErrInvalid)
+		return fmt.Errorf("%d bytes exceeds %d: %w", len(payload), MaxFrameBytes, errFrameTooLarge)
 	}
 	frame := make([]byte, frameHeaderBytes, frameHeaderBytes+len(payload))
 	binary.BigEndian.PutUint32(frame, uint32(len(payload))) //nolint:gosec // bounded by MaxFrameBytes above

@@ -64,20 +64,29 @@ func (r *RemoteBroker) DescribePath(ctx context.Context, path string) (core.Path
 	return convertRequiredPathInfo(resp)
 }
 
+// ListDirectory collects every page of the listing; a large directory spans several frames.
 func (r *RemoteBroker) ListDirectory(ctx context.Context, path string) ([]core.PathInfo, error) {
-	resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, Request{Op: OpListDirectory, Path: path})
-	if err != nil {
-		return nil, err
-	}
-	entries := make([]core.PathInfo, 0, len(resp.Entries))
-	for _, msg := range resp.Entries {
-		entry, err := ConvertPathInfoMessage(msg)
+	entries := []core.PathInfo{}
+	for offset := uint32(0); ; {
+		resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, Request{Op: OpListDirectory, Path: path, Offset: offset})
 		if err != nil {
 			return nil, err
 		}
-		entries = append(entries, entry)
+		for _, msg := range resp.Entries {
+			entry, err := ConvertPathInfoMessage(msg)
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, entry)
+		}
+		if resp.NextOffset == 0 {
+			return entries, nil
+		}
+		if resp.NextOffset <= offset {
+			return nil, fmt.Errorf("list_directory page at %d points back to %d: %w", offset, resp.NextOffset, errMalformedFrame)
+		}
+		offset = resp.NextOffset
 	}
-	return entries, nil
 }
 
 func (r *RemoteBroker) OpenFile(ctx context.Context, path string) (core.OpenedFile, error) {
@@ -186,6 +195,9 @@ func (r *RemoteBroker) exchange(ctx context.Context, req Request) (Response, err
 	r.nextID++
 	req.Version, req.ID = ProtocolVersion, r.nextID
 	resp, err := r.sendAndReceive(req)
+	if errors.Is(err, errFrameTooLarge) {
+		return Response{}, err
+	}
 	if err != nil {
 		// A half-sent request or half-read response leaves the stream unusable for everyone.
 		r.brokenErr = fmt.Errorf("broker unreachable: %w", err)

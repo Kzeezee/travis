@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -333,5 +334,41 @@ func TestRemoteBrokerReportsTheBrokerUnavailableOnce(t *testing.T) {
 	}
 	if types := events.reportEventTypes(); len(types) != 1 || types[0] != core.EventBrokerUnavailable {
 		t.Fatalf("events = %v, want exactly one BrokerUnavailable", types)
+	}
+}
+
+func TestRemoteBrokerListsADirectoryLargerThanOneFrame(t *testing.T) {
+	root := t.TempDir()
+	const fileCount = 8000
+	for i := range fileCount {
+		writeWorkspaceFile(t, root, fmt.Sprintf("node_modules/package-%05d-with-a-longish-name.js", i), "")
+	}
+	remote, _ := startPipedBroker(t, broker.BuildLocalBroker(root, core.SystemClock{}))
+
+	entries, err := remote.ListDirectory(context.Background(), "node_modules")
+	if err != nil || len(entries) != fileCount {
+		t.Fatalf("ListDirectory = %d entries, %v; want %d", len(entries), err, fileCount)
+	}
+	if entries[fileCount-1].WorkspacePath != fmt.Sprintf("node_modules/package-%05d-with-a-longish-name.js", fileCount-1) {
+		t.Fatalf("last entry = %+v, want the pages in order", entries[fileCount-1])
+	}
+	if _, err := remote.DescribePath(context.Background(), "."); err != nil {
+		t.Fatalf("a large listing broke the session: %v", err)
+	}
+}
+
+// Neither an oversize request nor an oversize answer is ever written, so neither breaks the stream.
+func TestRemoteBrokerRefusesOversizeFramesWithoutBreaking(t *testing.T) {
+	remote, _ := startPipedBroker(t, broker.BuildLocalBroker(t.TempDir(), core.SystemClock{}))
+	for name, path := range map[string]string{
+		"request over the frame limit":       strings.Repeat("a", broker.MaxFrameBytes),
+		"request whose error answer is over": strings.Repeat("a", broker.MaxFrameBytes-256),
+	} {
+		if _, err := remote.DescribePath(context.Background(), path); !errors.Is(err, core.ErrInvalid) {
+			t.Errorf("%s: DescribePath error = %.200v, want ErrInvalid", name, err)
+		}
+		if _, err := remote.DescribePath(context.Background(), "."); err != nil {
+			t.Fatalf("%s broke the session: %v", name, err)
+		}
 	}
 }
