@@ -313,3 +313,29 @@ func TestPolicyEnforcedBrokerApprovesAnUntrustedStepsAsk(t *testing.T) {
 		t.Fatalf("the always rule was not persisted: %v", err)
 	}
 }
+
+// A workspace reached through a symlink (macOS /tmp, a linked project folder) still answers to the
+// absolute paths travis reports for it, and its deny rules still hold.
+func TestPolicyEnforcedBrokerAcceptsAbsolutePathsThroughASymlinkedWorkspace(t *testing.T) {
+	base := t.TempDir()
+	realDir, linked := filepath.Join(base, "real"), filepath.Join(base, "linked")
+	writeWorkspaceFile(t, realDir, "a.txt", "a")
+	writeWorkspaceFile(t, realDir, ".env", "TOKEN=secret")
+	createSymlinkOrSkip(t, realDir, linked)
+	paths := config.PathSet{WorkspaceDir: linked, StateDir: filepath.Join(base, "state")}
+	sessionPolicy, err := broker.BuildSessionPolicy("default", broker.SessionRoots{Paths: paths, Home: base, Temp: filepath.Join(base, "temp")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enforced := broker.BuildPolicyEnforcedBroker(linked, sessionPolicy, core.SystemClock{})
+
+	if _, err := enforced.DescribePath(context.Background(), filepath.Join(linked, "a.txt")); err != nil {
+		t.Fatalf("DescribePath(absolute through the link) = %v", err)
+	}
+	if _, err := enforced.WriteFile(context.Background(), filepath.Join(linked, "b.txt"), []byte("b")); err != nil {
+		t.Fatalf("WriteFile(absolute through the link) = %v", err)
+	}
+	if _, err := enforced.OpenFile(context.Background(), filepath.Join(linked, ".env")); !errors.Is(err, core.ErrDenied) {
+		t.Fatalf("OpenFile(.env through the link) = %v, want ErrDenied", err)
+	}
+}

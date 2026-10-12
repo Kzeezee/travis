@@ -248,6 +248,12 @@ func (b *LocalBroker) resolveAuthorizedAsWritten(ctx context.Context, requested 
 	if !filepath.IsAbs(resolved) {
 		return "", fmt.Errorf("%q does not resolve to an absolute path: %w", requested, core.ErrDenied)
 	}
+	// travis names the workspace as the user reached it, perhaps through a symlink; rules are
+	// anchored at the resolved root, so a path under the named root moves there first.
+	if b.root != b.resolvedRoot && isInsideRoot(b.root, resolved) {
+		rel, _ := filepath.Rel(b.root, resolved) // isInsideRoot already proved Rel succeeds
+		resolved = filepath.Join(b.resolvedRoot, rel)
+	}
 	if err := authorize(ctx, resolved); err != nil {
 		return "", err
 	}
