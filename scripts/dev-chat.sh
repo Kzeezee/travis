@@ -16,4 +16,6 @@ if ! curl --silent --fail --max-time 2 "http://${HOST}:${PORT}/health" >/dev/nul
 fi
 
 cd "$REPO_ROOT"
-exec go run ./cmd/travis chat -base-url "$BASE_URL" -model "$MODEL_NAME" "$@"
+# Not `go run`: travis only starts a broker whose hash `make build` stamped into it (R-23).
+make --no-print-directory -s build
+exec ./bin/travis chat -base-url "$BASE_URL" -model "$MODEL_NAME" "$@"

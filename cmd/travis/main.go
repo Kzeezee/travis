@@ -32,12 +32,16 @@ const (
 	// defaultMaxReadBytes is fs_read's own cap. It isn't a key in DESIGN.md 5.5's
 	// [tools] example, so it stays a compiled constant rather than a Config field.
 	defaultMaxReadBytes = 256 << 10
-	// defaultMaxWriteBytes matches the read cap so a future wire write_file fits in one frame.
+	// defaultMaxWriteBytes matches the read cap and fits inside broker.MaxWriteFileBytes.
 	defaultMaxWriteBytes = 256 << 10
 )
 
 // Overridden at release time via: go build -ldflags "-X main.version=v0.1.0"
 var version = "dev"
+
+// brokerSHA256 is travis-broker's hex hash, stamped by `make build` with
+// -ldflags "-X main.brokerSHA256=..."; chat refuses any other broker binary, or none (R-23).
+var brokerSHA256 string
 
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
@@ -105,8 +109,25 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		return err
 	}
 	apiKey := config.ResolveProviderAPIKey()
+	redactor := redact.New(apiKey)
+	bus := buildSessionBus(os.Stderr)
+	approvals := make(chan core.ApprovalRequest)
+	sessionBroker, err := startSessionBroker(paths, os.Stderr, broker.RemoteOptions{
+		Events:   redact.WrapSink(bus, redactor),
+		Approver: terminal.BuildApprover(approvals),
+		Clock:    core.SystemClock{},
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := sessionBroker.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "travis: %v\n", closeErr)
+		}
+	}()
+
 	provider := openaicompat.BuildProvider(profile.BaseURL, apiKey, nil, core.SystemClock{})
-	session, err := assembleChatSession(cfg, paths, provider, profile.Model, os.Stderr, redact.New(apiKey))
+	session, err := assembleChatSession(cfg, paths, provider, sessionBroker.Remote, bus, redactor, profile.Model, os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -114,10 +135,6 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	events, unsubscribe := session.bus.Subscribe(nil)
 	defer unsubscribe()
 
-	// session.approver is unused until 2B drives real Ask decisions through it; wiring it
-	// here means the modal is already end to end once that call site exists.
-	approvals := make(chan core.ApprovalRequest)
-	session.approver = terminal.BuildApprover(approvals)
 	chatErr := terminal.RunChat(context.Background(), events, approvals, session.conversation.RunAssistantTurn,
 		terminal.Options{ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out})
 	session.close()
@@ -130,18 +147,44 @@ type chatSession struct {
 	conversation *loop.AssistantConversation
 	bus          *core.Bus
 	waitForTrace func()
-	// approver is set by runChat once it creates the approval channel; 2B's broker-side
-	// policy loop will call it wherever a decision evaluates to Ask.
-	approver core.Approver
+}
+
+// buildSessionBus is the bus one chat session publishes to; diagnostics receives its warnings.
+func buildSessionBus(diagnostics io.Writer) *core.Bus {
+	return core.BuildEventBus(log.BuildTextLogger(diagnostics, log.LevelWarn), subscriberEventCapacity)
+}
+
+// startSessionBroker launches this session's travis-broker and connects to it. A chat never
+// runs without one: there is no unenforced fallback (§5.12.5).
+func startSessionBroker(paths config.PathSet, diagnostics io.Writer, client broker.RemoteOptions) (*broker.SessionBroker, error) {
+	brokerExecutable, err := broker.ResolveBrokerExecutable()
+	if err != nil {
+		return nil, fmt.Errorf("start the security broker: %w", err)
+	}
+	sessionBroker, err := broker.StartSessionBroker(context.Background(), broker.SessionLaunch{
+		Executable:     brokerExecutable,
+		ExpectedSHA256: brokerSHA256,
+		WorkspaceDir:   paths.WorkspaceDir,
+		RuntimeDir:     paths.RuntimeDir,
+		// Not cfg.Profile: the workspace config layer can set that, and a cloned repo must not
+		// choose its own security profile. Selectable once [security] config exists.
+		Profile:     "default",
+		Diagnostics: diagnostics,
+		Client:      client,
+		// The broker performs file effects only; the provider credential stays in travis.
+		Env: config.BuildEnvironmentWithoutSecrets(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("start the security broker: %w", err)
+	}
+	return sessionBroker, nil
 }
 
 // assembleChatSession wires the registry, built-in tools, bus, trace and conversation for
-// one session. The provider is a parameter so the end-to-end test can script it while
-// everything else stays real; diagnostics receives bus warnings and trace status lines.
-func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core.Provider, model string, diagnostics io.Writer, redactor redact.Redactor) (*chatSession, error) {
+// one session. The provider, file broker and bus are parameters so the end-to-end test can
+// script the model while everything else stays real; diagnostics receives trace status lines.
+func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core.Provider, fileBroker core.Broker, bus *core.Bus, redactor redact.Redactor, model string, diagnostics io.Writer) (*chatSession, error) {
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
-	// In-process and workspace-confined, with no policy until the broker process replaces it (D-18).
-	fileBroker := broker.BuildLocalBroker(paths.WorkspaceDir, core.SystemClock{})
 	for _, tool := range []core.Tool{
 		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes),
 		builtin.BuildGrepTool(fileBroker, paths.WorkspaceDir),
@@ -153,7 +196,6 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core
 		}
 	}
 
-	bus := core.BuildEventBus(log.BuildTextLogger(diagnostics, log.LevelWarn), subscriberEventCapacity)
 	clock := core.SystemClock{}
 	ids := id.BuildULIDGenerator(clock)
 	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: redact.WrapSink(bus, redactor), Clock: clock, IDs: ids}

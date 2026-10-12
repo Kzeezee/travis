@@ -21,6 +21,7 @@ var (
 	dimStyle            = lipgloss.NewStyle().Faint(true)
 	errorStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	warningStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	failureBarStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("1"))
 )
 
 func (m chatModel) View() tea.View {
@@ -31,12 +32,18 @@ func (m chatModel) View() tea.View {
 	if m.pendingApproval != nil {
 		inputLine = renderApprovalModal(*m.pendingApproval, m.width)
 	}
+	statusLine := dimStyle.Render(ansi.Truncate(statusBar, m.width, ellipsis))
+	if m.brokerFailure != "" {
+		// Fail closed, visibly (§5.12.5): the red bar replaces the status bar for the rest of the session.
+		failure := " security broker unreachable, every tool will fail; restart travis · " + m.brokerFailure
+		statusLine = failureBarStyle.Width(m.width).Render(ansi.Truncate(failure, m.width, ellipsis))
+	}
 	view := tea.NewView(strings.Join([]string{
 		m.viewport.View(),
 		separator,
 		inputLine,
 		separator,
-		dimStyle.Render(ansi.Truncate(statusBar, m.width, ellipsis)),
+		statusLine,
 	}, "\n"))
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion

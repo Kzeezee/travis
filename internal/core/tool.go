@@ -28,6 +28,34 @@ type ToolCall struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
+type toolCallIDKey struct{}
+
+// WithToolCallID marks ctx as serving one tool call, so effects deep below the tool (a broker
+// refusal) can name the call that caused them without every signature carrying it.
+func WithToolCallID(ctx context.Context, id ID) context.Context {
+	return context.WithValue(ctx, toolCallIDKey{}, id)
+}
+
+// ReportToolCallID is the call ctx serves, or "" outside a tool call.
+func ReportToolCallID(ctx context.Context) ID {
+	id, _ := ctx.Value(toolCallIDKey{}).(ID)
+	return id
+}
+
+type untrustedStepKey struct{}
+
+// MarkUntrustedStep marks ctx as serving a step with untrusted intake (§5.12.4), so policy asks
+// a human before that step's effects instead of allowing them outright.
+func MarkUntrustedStep(ctx context.Context) context.Context {
+	return context.WithValue(ctx, untrustedStepKey{}, true)
+}
+
+// ReportIsFromUntrustedStep reports whether ctx serves a step MarkUntrustedStep marked.
+func ReportIsFromUntrustedStep(ctx context.Context) bool {
+	isUntrusted, _ := ctx.Value(untrustedStepKey{}).(bool)
+	return isUntrusted
+}
+
 type ToolOutput struct {
 	Content string
 	Display string

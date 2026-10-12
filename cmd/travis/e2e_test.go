@@ -16,6 +16,7 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/providers/cassette"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
+	"github.com/Kzeezee/travis/internal/security/broker"
 	"github.com/Kzeezee/travis/internal/security/redact"
 )
 
@@ -208,14 +209,16 @@ func runNotesTask(t *testing.T, provider core.Provider, model string) notesTaskR
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths := config.PathSet{WorkspaceDir: workspace, StateDir: t.TempDir()}
+	paths := config.PathSet{WorkspaceDir: workspace, StateDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t)}
 	cfg := &config.Config{
 		Brain: config.BrainCfg{MaxSteps: e2eMaxSteps},
 		Tools: config.ToolsCfg{MaxExposed: 60},
 		Eval:  config.EvalCfg{Traces: true},
 	}
 	var diagnostics strings.Builder
-	session, err := assembleChatSession(cfg, paths, provider, model, &diagnostics, redact.New())
+	bus := buildSessionBus(&diagnostics)
+	fileBroker := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
+	session, err := assembleChatSession(cfg, paths, provider, fileBroker, bus, redact.New(), model, &diagnostics)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +356,11 @@ func TestWriteTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
 	}}
 
 	cfg := &config.Config{Brain: config.BrainCfg{MaxSteps: e2eMaxSteps}, Tools: config.ToolsCfg{MaxExposed: 60}}
-	session, err := assembleChatSession(cfg, config.PathSet{WorkspaceDir: workspace, StateDir: t.TempDir()}, provider, "scripted-model", io.Discard, redact.New())
+	paths := config.PathSet{WorkspaceDir: workspace, StateDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t)}
+	var diagnostics strings.Builder
+	bus := buildSessionBus(io.Discard)
+	fileBroker := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
+	session, err := assembleChatSession(cfg, paths, provider, fileBroker, bus, redact.New(), "scripted-model", io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}

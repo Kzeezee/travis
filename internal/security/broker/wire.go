@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/vmihailenco/msgpack/v5"
 
@@ -17,13 +18,17 @@ import (
 )
 
 // ProtocolVersion is carried on every request; a broker refuses any version it does not speak.
-const ProtocolVersion uint16 = 1
+// Version 2 added write_file, approve_once, add_decision_rule, the needs_approval error and
+// list_directory paging.
+const ProtocolVersion uint16 = 2
 
 const (
 	// MaxFrameBytes bounds what either side allocates for one message.
 	MaxFrameBytes = 1 << 20
 	// MaxReadChunkBytes bounds the data one read_file response carries, well inside a frame.
 	MaxReadChunkBytes = 256 << 10
+	// MaxWriteFileBytes bounds one write_file's content, leaving the rest of a frame for the envelope.
+	MaxWriteFileBytes = 512 << 10
 	frameHeaderBytes  = 4
 )
 
@@ -36,6 +41,11 @@ const (
 	OpOpenFile  Op = "open_file"
 	OpReadFile  Op = "read_file"
 	OpCloseFile Op = "close_file"
+	// OpWriteFile replaces a file with Data; the bytes must fit in one frame.
+	OpWriteFile Op = "write_file"
+	// OpApproveOnce and OpAddDecisionRule report the human's answer to a needs_approval error.
+	OpApproveOnce     Op = "approve_once"
+	OpAddDecisionRule Op = "add_decision_rule"
 )
 
 type Request struct {
@@ -46,6 +56,28 @@ type Request struct {
 	Path     string `msgpack:"path,omitempty"`
 	Handle   uint64 `msgpack:"handle,omitempty"`
 	MaxBytes uint32 `msgpack:"max_bytes,omitempty"`
+	Data     []byte `msgpack:"data,omitempty"`
+	// IsFromUntrustedStep carries core.MarkUntrustedStep across the wire. It can only tighten
+	// policy, Allow to Ask, so a client that omits it gains nothing.
+	IsFromUntrustedStep bool `msgpack:"from_untrusted_step,omitempty"`
+	// Offset asks list_directory for the page starting at a Response.NextOffset.
+	Offset uint32 `msgpack:"offset,omitempty"`
+	// Capability is what approve_once lets through; Rule is what add_decision_rule persists.
+	Capability *CapabilityMessage   `msgpack:"capability,omitempty"`
+	Rule       *DecisionRuleMessage `msgpack:"rule,omitempty"`
+}
+
+type CapabilityMessage struct {
+	Kind  string `msgpack:"kind"`
+	Scope string `msgpack:"scope"`
+}
+
+type DecisionRuleMessage struct {
+	Kind     string    `msgpack:"kind"`
+	Scope    string    `msgpack:"scope"`
+	Decision string    `msgpack:"decision"`
+	Source   string    `msgpack:"source"`
+	AddedAt  time.Time `msgpack:"added_at,omitempty"`
 }
 
 type Response struct {
@@ -57,6 +89,8 @@ type Response struct {
 	Handle  uint64     `msgpack:"handle,omitempty"`
 	Data    []byte     `msgpack:"data,omitempty"`
 	IsEOF   bool       `msgpack:"eof,omitempty"`
+	// NextOffset is where list_directory's next page starts; zero means the listing is complete.
+	NextOffset uint32 `msgpack:"next_offset,omitempty"`
 }
 
 type PathInfo struct {
@@ -73,16 +107,28 @@ const (
 	ErrorIsDirectory        ErrorCode = "is_directory"
 	ErrorInvalid            ErrorCode = "invalid"
 	ErrorUnsupportedVersion ErrorCode = "unsupported_version"
+	// ErrorNeedsApproval comes with Approval: the operation to put to the human.
+	ErrorNeedsApproval ErrorCode = "needs_approval"
 	// ErrorFailed is any failure without a more specific code; Message carries the detail.
 	ErrorFailed ErrorCode = "failed"
 )
 
 type ErrorBody struct {
-	Code    ErrorCode `msgpack:"code"`
-	Message string    `msgpack:"message"`
+	Code     ErrorCode         `msgpack:"code"`
+	Message  string            `msgpack:"message"`
+	Approval *OperationMessage `msgpack:"approval,omitempty"`
+}
+
+type OperationMessage struct {
+	Kind        string `msgpack:"kind"`
+	Target      string `msgpack:"target"`
+	Explanation string `msgpack:"explanation"`
 }
 
 var errMalformedFrame = fmt.Errorf("malformed broker frame: %w", core.ErrInvalid)
+
+// errFrameTooLarge is refused before any byte is written, so the stream stays usable.
+var errFrameTooLarge = fmt.Errorf("broker frame too large: %w", core.ErrInvalid)
 
 func WriteRequest(w io.Writer, req Request) error {
 	return writeFrame(w, req)
@@ -122,6 +168,10 @@ func validateRequest(req Request) error {
 		if req.Path == "" {
 			return fmt.Errorf("%s needs a path: %w", req.Op, core.ErrInvalid)
 		}
+	case OpWriteFile:
+		if req.Path == "" || len(req.Data) > MaxWriteFileBytes {
+			return fmt.Errorf("%s needs a path and at most %d bytes: %w", req.Op, MaxWriteFileBytes, core.ErrInvalid)
+		}
 	case OpReadFile:
 		if req.Handle == 0 || req.MaxBytes == 0 || req.MaxBytes > MaxReadChunkBytes {
 			return fmt.Errorf("%s needs a handle and 1..%d max_bytes: %w", req.Op, MaxReadChunkBytes, core.ErrInvalid)
@@ -129,6 +179,14 @@ func validateRequest(req Request) error {
 	case OpCloseFile:
 		if req.Handle == 0 {
 			return fmt.Errorf("%s needs a handle: %w", req.Op, core.ErrInvalid)
+		}
+	case OpApproveOnce:
+		if req.Capability == nil || req.Capability.Kind == "" || req.Capability.Scope == "" {
+			return fmt.Errorf("%s needs a capability kind and scope: %w", req.Op, core.ErrInvalid)
+		}
+	case OpAddDecisionRule:
+		if req.Rule == nil {
+			return fmt.Errorf("%s needs a rule: %w", req.Op, core.ErrInvalid)
 		}
 	default:
 		return fmt.Errorf("unknown op %q: %w", req.Op, core.ErrInvalid)
@@ -154,6 +212,13 @@ func ConvertPathInfoMessage(msg PathInfo) (core.PathInfo, error) {
 
 // BuildErrorBody classifies a broker error for the wire; the cause's text travels as Message.
 func BuildErrorBody(err error) *ErrorBody {
+	var approvalRequired *core.ApprovalRequiredError
+	if errors.As(err, &approvalRequired) {
+		op := approvalRequired.Operation
+		return &ErrorBody{Code: ErrorNeedsApproval, Message: err.Error(), Approval: &OperationMessage{
+			Kind: string(op.Kind), Target: op.Target, Explanation: op.Explanation,
+		}}
+	}
 	code := ErrorFailed
 	switch {
 	case errors.Is(err, core.ErrDenied):
@@ -170,8 +235,17 @@ func BuildErrorBody(err error) *ErrorBody {
 	return &ErrorBody{Code: code, Message: err.Error()}
 }
 
-// ConvertErrorBody turns a wire error back into an error carrying the matching core kind.
+// ConvertErrorBody turns a wire error back into an error carrying the matching core kind. A
+// needs_approval without its operation is refused, since there is nothing to ask.
 func ConvertErrorBody(body ErrorBody) error {
+	if body.Code == ErrorNeedsApproval {
+		if body.Approval == nil {
+			return fmt.Errorf("broker: %s without an operation: %w", body.Message, core.ErrDenied)
+		}
+		return &core.ApprovalRequiredError{Operation: core.Operation{
+			Kind: core.CapabilityKind(body.Approval.Kind), Target: body.Approval.Target, Explanation: body.Approval.Explanation,
+		}}
+	}
 	kinds := map[ErrorCode]error{
 		ErrorDenied:             core.ErrDenied,
 		ErrorNotFound:           core.ErrNotFound,
@@ -191,7 +265,7 @@ func writeFrame(w io.Writer, msg any) error {
 		return err
 	}
 	if len(payload) > MaxFrameBytes {
-		return fmt.Errorf("broker frame of %d bytes exceeds %d: %w", len(payload), MaxFrameBytes, core.ErrInvalid)
+		return fmt.Errorf("%d bytes exceeds %d: %w", len(payload), MaxFrameBytes, errFrameTooLarge)
 	}
 	frame := make([]byte, frameHeaderBytes, frameHeaderBytes+len(payload))
 	binary.BigEndian.PutUint32(frame, uint32(len(payload))) //nolint:gosec // bounded by MaxFrameBytes above
@@ -224,4 +298,17 @@ func readFrame(r io.Reader, msg any) error {
 		return fmt.Errorf("trailing data in frame: %w", errMalformedFrame)
 	}
 	return nil
+}
+
+// BuildDecisionRuleMessage converts a durable rule for the wire.
+func BuildDecisionRuleMessage(rule core.DecisionRule) *DecisionRuleMessage {
+	return &DecisionRuleMessage{Kind: string(rule.Kind), Scope: rule.Scope, Decision: string(rule.Decision), Source: rule.Source, AddedAt: rule.AddedAt}
+}
+
+// ConvertDecisionRuleMessage is the inverse; the receiving broker still validates the rule.
+func ConvertDecisionRuleMessage(msg DecisionRuleMessage) core.DecisionRule {
+	return core.DecisionRule{
+		Kind: core.CapabilityKind(msg.Kind), Scope: msg.Scope, Decision: core.DecisionOutcome(msg.Decision),
+		Source: msg.Source, AddedAt: msg.AddedAt,
+	}
 }

@@ -10,9 +10,12 @@ import (
 )
 
 type PathSet struct {
-	ConfigDir           string
-	StateDir            string
-	CacheDir            string
+	ConfigDir string
+	StateDir  string
+	CacheDir  string
+	// RuntimeDir holds per-session broker sockets. It is OS-chosen and short, even under
+	// TRAVIS_HOME, because Unix socket paths are limited to about 104 bytes.
+	RuntimeDir          string
 	SystemConfigFile    string
 	WorkspaceDir        string
 	WorkspaceConfigFile string
@@ -40,6 +43,27 @@ func BuildCurrentPathSet() (PathSet, error) {
 }
 
 func buildPathSetFromInputs(lookup envLookup, home, cwd string) (PathSet, error) {
+	paths, err := buildPersistentPathSet(lookup, home, cwd)
+	if err != nil {
+		return PathSet{}, err
+	}
+	if paths.RuntimeDir, err = cleanAbsolutePath("runtime directory", selectRuntimeDir(lookup)); err != nil {
+		return PathSet{}, err
+	}
+	return paths, nil
+}
+
+// selectRuntimeDir prefers the per-user XDG runtime dir, which Linux sets; elsewhere it is the
+// temp dir, which macOS makes private to the user and Windows pipes never use. The fallback is
+// the temp dir itself, not a shared subdirectory another user could create first.
+func selectRuntimeDir(lookup envLookup) string {
+	if runtimeRoot := readTrimmedEnvValue(lookup, "XDG_RUNTIME_DIR"); runtimeRoot != "" {
+		return filepath.Join(filepath.Clean(normalizeConfigPath(runtimeRoot)), "travis")
+	}
+	return os.TempDir()
+}
+
+func buildPersistentPathSet(lookup envLookup, home, cwd string) (PathSet, error) {
 	workspaceDir, err := cleanAbsolutePath("workspace directory", cwd)
 	if err != nil {
 		return PathSet{}, err

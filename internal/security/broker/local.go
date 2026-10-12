@@ -1,5 +1,6 @@
 // Package broker performs effects on behalf of tools and owns the frozen wire protocol the
-// broker process speaks. LocalBroker is the in-process Phase 1 broker (D-18).
+// broker process speaks. LocalBroker performs effects in the calling process; RemoteBroker
+// forwards them to a broker process, which enforces policy before acting (D-18).
 package broker
 
 import (
@@ -15,20 +16,33 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 )
 
-// LocalBroker does direct IO confined to one workspace, with no IPC and no policy (D-18).
-// Confinement is checked on the symlink-resolved path, so a link cannot lead outside.
+// LocalBroker does direct IO in the calling process, on paths its access rules allow. A rule
+// is checked on the path as written and again once symlinks are followed, so a link cannot
+// lead somewhere the rule refuses.
 type LocalBroker struct {
 	paths config.PathSet
 	root  string
 	// resolvedRoot is root with symlinks evaluated, so confinement compares like with like.
 	resolvedRoot string
+	// authorizeRead and authorizeWrite refuse an absolute path with an error wrapping
+	// core.ErrDenied or a *core.ApprovalRequiredError. Workspace confinement is the default rule;
+	// BuildPolicyEnforcedBroker replaces it with the session policy.
+	authorizeRead  func(ctx context.Context, path string) error
+	authorizeWrite func(ctx context.Context, path string) error
 	// clock stamps AddDecisionRule's AddedAt; injected so tests can use a FixedClock.
 	clock core.Clock
 }
 
 var _ core.Broker = (*LocalBroker)(nil)
 
+// BuildLocalBroker is the Phase 1 broker: confined to one workspace, with no policy (D-18).
 func BuildLocalBroker(workspaceDir string, clock core.Clock) *LocalBroker {
+	b := buildLocalBrokerForWorkspace(workspaceDir, clock)
+	b.authorizeRead, b.authorizeWrite = b.confineToWorkspace, b.confineToWorkspace
+	return b
+}
+
+func buildLocalBrokerForWorkspace(workspaceDir string, clock core.Clock) *LocalBroker {
 	root := filepath.Clean(workspaceDir)
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -37,11 +51,20 @@ func BuildLocalBroker(workspaceDir string, clock core.Clock) *LocalBroker {
 	return &LocalBroker{paths: config.PathSet{WorkspaceDir: root}, root: root, resolvedRoot: resolvedRoot, clock: clock}
 }
 
+// confineToWorkspace accepts either form of the root, since paths this broker reported back
+// are already resolved.
+func (b *LocalBroker) confineToWorkspace(_ context.Context, path string) error {
+	if isInsideRoot(b.root, path) || isInsideRoot(b.resolvedRoot, path) {
+		return nil
+	}
+	return b.reportOutsideWorkspace(path)
+}
+
 func (b *LocalBroker) DescribePath(ctx context.Context, path string) (core.PathInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return core.PathInfo{}, err
 	}
-	resolved, err := b.resolveInsideWorkspace(path)
+	resolved, err := b.resolveReadablePath(ctx, path)
 	if err != nil {
 		return core.PathInfo{}, err
 	}
@@ -56,7 +79,7 @@ func (b *LocalBroker) ListDirectory(ctx context.Context, path string) ([]core.Pa
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	resolved, err := b.resolveInsideWorkspace(path)
+	resolved, err := b.resolveReadablePath(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +117,7 @@ func (b *LocalBroker) WriteFile(ctx context.Context, path string, content []byte
 	if err := ctx.Err(); err != nil {
 		return core.PathInfo{}, err
 	}
-	target, err := b.resolveWritableInsideWorkspace(path)
+	target, err := b.resolveWritablePath(ctx, path)
 	if err != nil {
 		return core.PathInfo{}, err
 	}
@@ -166,10 +189,10 @@ func syncDirectory(dir string) {
 	_ = handle.Close()
 }
 
-// resolveInsideWorkspace turns a requested path into a real path on disk, allowed only if it
-// stays inside the workspace both as written and once symlinks are followed.
-func (b *LocalBroker) resolveInsideWorkspace(requested string) (string, error) {
-	resolved, err := b.resolveWrittenInsideWorkspace(requested)
+// resolveReadablePath turns a requested path into a real path on disk, allowed only if the
+// read rule accepts it both as written and once symlinks are followed.
+func (b *LocalBroker) resolveReadablePath(ctx context.Context, requested string) (string, error) {
+	resolved, err := b.resolveAuthorizedAsWritten(ctx, requested, b.authorizeRead)
 	if err != nil {
 		return "", err
 	}
@@ -177,31 +200,16 @@ func (b *LocalBroker) resolveInsideWorkspace(requested string) (string, error) {
 	if err != nil {
 		return "", translatePathError(requested, err)
 	}
-	if !isInsideRoot(b.resolvedRoot, evaluated) {
-		return "", b.reportOutsideWorkspace(requested)
+	if err := b.authorizeRead(ctx, evaluated); err != nil {
+		return "", err
 	}
 	return evaluated, nil
 }
 
-// resolveWrittenInsideWorkspace checks the path as written, before any symlink is followed, so a
-// path outside cannot reveal whether it exists; either form of the root is accepted, since
-// paths this broker reported back are resolved.
-func (b *LocalBroker) resolveWrittenInsideWorkspace(requested string) (string, error) {
-	resolved, err := b.paths.Resolve(requested)
-	if err != nil {
-		return "", err
-	}
-	isWrittenInside := isInsideRoot(b.root, resolved) || isInsideRoot(b.resolvedRoot, resolved)
-	if !filepath.IsAbs(resolved) || !isWrittenInside {
-		return "", b.reportOutsideWorkspace(requested)
-	}
-	return resolved, nil
-}
-
-// resolveWritableInsideWorkspace is resolveInsideWorkspace for a target that may not exist yet:
-// it follows symlinks only up to the nearest existing ancestor and never through the final name.
-func (b *LocalBroker) resolveWritableInsideWorkspace(requested string) (string, error) {
-	resolved, err := b.resolveWrittenInsideWorkspace(requested)
+// resolveWritablePath is resolveReadablePath for a target that may not exist yet: it follows
+// symlinks only up to the nearest existing ancestor and never through the final name.
+func (b *LocalBroker) resolveWritablePath(ctx context.Context, requested string) (string, error) {
+	resolved, err := b.resolveAuthorizedAsWritten(ctx, requested, b.authorizeWrite)
 	if err != nil {
 		return "", err
 	}
@@ -224,10 +232,32 @@ func (b *LocalBroker) resolveWritableInsideWorkspace(requested string) (string, 
 		return "", translatePathError(requested, err)
 	}
 	target := filepath.Join(evaluatedAncestor, missingTail)
-	if !isInsideRoot(b.resolvedRoot, target) {
-		return "", b.reportOutsideWorkspace(requested)
+	if err := b.authorizeWrite(ctx, target); err != nil {
+		return "", err
 	}
 	return target, nil
+}
+
+// resolveAuthorizedAsWritten checks the path before any symlink is followed, so a refused path
+// cannot reveal whether it exists.
+func (b *LocalBroker) resolveAuthorizedAsWritten(ctx context.Context, requested string, authorize func(context.Context, string) error) (string, error) {
+	resolved, err := b.paths.Resolve(requested)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(resolved) {
+		return "", fmt.Errorf("%q does not resolve to an absolute path: %w", requested, core.ErrDenied)
+	}
+	// travis names the workspace as the user reached it, perhaps through a symlink; rules are
+	// anchored at the resolved root, so a path under the named root moves there first.
+	if b.root != b.resolvedRoot && isInsideRoot(b.root, resolved) {
+		rel, _ := filepath.Rel(b.root, resolved) // isInsideRoot already proved Rel succeeds
+		resolved = filepath.Join(b.resolvedRoot, rel)
+	}
+	if err := authorize(ctx, resolved); err != nil {
+		return "", err
+	}
+	return resolved, nil
 }
 
 func (b *LocalBroker) reportOutsideWorkspace(requested string) error {

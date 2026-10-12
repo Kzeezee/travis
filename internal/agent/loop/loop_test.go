@@ -102,6 +102,7 @@ func (s *recordingSink) findToolResults() []core.ToolResult {
 // echoTool strictly decodes {"text": "..."} and answers with the text.
 type echoTool struct {
 	invocations int
+	seenCallID  core.ID
 }
 
 func (*echoTool) Name() string { return "echo" }
@@ -110,8 +111,9 @@ func (*echoTool) Describe() core.ToolSpec {
 	return core.ToolSpec{Name: "echo", Description: "repeats text", InputSchema: json.RawMessage(`{"type":"object"}`)}
 }
 
-func (t *echoTool) Invoke(_ context.Context, arguments json.RawMessage) (core.ToolOutput, error) {
+func (t *echoTool) Invoke(ctx context.Context, arguments json.RawMessage) (core.ToolOutput, error) {
 	t.invocations++
+	t.seenCallID = core.ReportToolCallID(ctx)
 	var input struct {
 		Text string `json:"text"`
 	}
@@ -264,6 +266,9 @@ func TestRunDispatchesAToolCallAndSendsTheResultBack(t *testing.T) {
 
 	if echo.invocations != 1 {
 		t.Fatalf("got %d invocations, want 1", echo.invocations)
+	}
+	if echo.seenCallID != "call-1" {
+		t.Fatalf("tool saw call id %q in its context, want call-1", echo.seenCallID)
 	}
 	if !firstStream.closed {
 		t.Fatal("first step's stream was left open")

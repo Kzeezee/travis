@@ -123,6 +123,13 @@ func (r Redactor) RedactEvent(event core.Event) core.Event {
 		e.Result.Content = r.RedactText(e.Result.Content)
 		e.Display = r.RedactText(e.Display)
 		return e
+	case core.PolicyDenied:
+		e.Rule = r.RedactText(e.Rule)
+		e.Capability.Scope = r.RedactText(e.Capability.Scope)
+		return e
+	case core.BrokerUnavailable:
+		e.Reason = r.RedactText(e.Reason)
+		return e
 	default:
 		return event
 	}

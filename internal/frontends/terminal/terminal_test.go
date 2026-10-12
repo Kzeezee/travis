@@ -109,6 +109,16 @@ func TestStartupWarningsShowInTheFirstFrame(t *testing.T) {
 	}
 }
 
+func TestBrokerUnavailableReplacesTheStatusBarWithAFailureBar(t *testing.T) {
+	m := buildChatModel(context.Background(), make(chan core.Event), nil, nil, Options{ModelName: "test-model"})
+	updated, _ := m.Update(eventBatchMsg{events: []core.Event{core.BrokerUnavailable{Reason: "broker unreachable: EOF"}}})
+
+	view := renderPlainView(updated.(chatModel))
+	if !strings.Contains(view, "security broker unreachable") || strings.Contains(view, "last turn:") {
+		t.Fatalf("got view\n%s\nwant the failure bar in place of the status bar", view)
+	}
+}
+
 func TestCancelKeysInterruptTheRunningTurn(t *testing.T) {
 	for _, cancelKey := range []tea.KeyPressMsg{escKey, ctrlKey('c')} {
 		t.Run(cancelKey.String(), func(t *testing.T) {

@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestResolveProviderAPIKeyReadsTheConfiguredEnvironmentValue(t *testing.T) {
 	lookup := func(key string) (string, bool) {
@@ -20,5 +23,14 @@ func TestResolveProviderAPIKeyIsEmptyWhenUnset(t *testing.T) {
 
 	if got := resolveProviderAPIKey(lookup); got != "" {
 		t.Fatalf("got %q, want an empty credential", got)
+	}
+}
+
+func TestRemoveProviderCredentialKeepsEverythingElse(t *testing.T) {
+	environ := []string{"PATH=/bin", providerAuthEnvVar + "=sk-test", "openai_api_key=sk-lower", "TRAVIS_HOME=/t", "=C:=C:\\"}
+
+	got := removeProviderCredential(environ)
+	if want := []string{"PATH=/bin", "TRAVIS_HOME=/t", "=C:=C:\\"}; !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }

@@ -219,13 +219,18 @@ CI's order: `build vet lint test-race tidy vuln`. Run it before pushing.
 
 | Target | What it is |
 | --- | --- |
-| `make build` | `go build ./...` |
+| `make build` | `go build ./...`, then `bin/travis` and `bin/travis-broker` with the broker's hash stamped in |
 | `make test` / `make test-race` | unit tests; `-race` is what CI runs |
 | `make lint` | `golangci-lint run` at the version pinned in `.golangci-lint-version` |
 | `make fmt` | `gofmt` + `goimports` — the same formatters gopls applies on save |
 | `make vet` | `go vet` for this OS **and** `GOOS=windows` / `GOOS=darwin` |
 | `make tidy` | `go mod verify` and `go mod tidy -diff` |
 | `make vuln` | `govulncheck ./...` |
+
+**Run chat from `bin/`.** `travis` checks `travis-broker`'s SHA-256 before every session
+and refuses a mismatch, or a `travis` built without the hash (R-23), so `go run ./cmd/travis`
+and a plain `go build` cannot start a chat. Without make (Windows), do what `make build` does:
+build `travis-broker`, then build `travis` with `-ldflags "-X main.brokerSHA256=<its sha256>"`.
 
 `lint` and `vuln` install their pinned tool into `$(go env GOPATH)/bin` on first use.
 Bump a pin by editing `.golangci-lint-version` or `GOVULNCHECK_VERSION`, never by

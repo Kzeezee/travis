@@ -180,6 +180,9 @@ type chatModel struct {
 	input           textinput.Model
 	width           int
 	pendingApproval *core.ApprovalRequest
+	// brokerFailure is set once the broker connection breaks; it never clears, since every
+	// later effect fails closed until travis restarts.
+	brokerFailure string
 
 	cancelTurn        context.CancelFunc // set only while a turn runs
 	isCancelRequested bool
@@ -224,6 +227,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case eventBatchMsg:
 		for _, event := range msg.events {
+			if unavailable, isUnavailable := event.(core.BrokerUnavailable); isUnavailable {
+				m.brokerFailure = unavailable.Reason
+			}
 			m.transcript.applyEvent(event)
 		}
 		m.refreshTranscript()

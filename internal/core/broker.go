@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -21,7 +22,7 @@ type Broker interface {
 	OpenFile(ctx context.Context, path string) (OpenedFile, error)
 	// AddDecisionRule durably narrows one future Ask verdict to Allow (D-30). Callers must
 	// reach this only through a real keypress in the approval modal — see
-	// internal/security/rules for why nothing else may construct a DecisionRule.
+	// PolicyEnforcedBroker for why a rule can only narrow an Ask.
 	AddDecisionRule(ctx context.Context, rule DecisionRule) error
 	// WriteFile creates or atomically replaces a regular file inside the workspace, creating parent dirs; never follows a final symlink.
 	WriteFile(ctx context.Context, path string, content []byte) (PathInfo, error)
@@ -58,3 +59,14 @@ var (
 	// ErrIsDirectory means a file operation was asked of a directory.
 	ErrIsDirectory = errors.New("is_directory")
 )
+
+// ApprovalRequiredError means policy evaluated the effect to Ask: it is neither allowed nor
+// refused until a human answers, so it is not an ErrDenied. It carries the Operation a client
+// must put to the human before retrying (§6.4).
+type ApprovalRequiredError struct {
+	Operation Operation
+}
+
+func (e *ApprovalRequiredError) Error() string {
+	return fmt.Sprintf("%s %q needs approval", e.Operation.Kind, e.Operation.Target)
+}

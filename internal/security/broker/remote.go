@@ -1,0 +1,300 @@
+package broker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/Kzeezee/travis/internal/core"
+)
+
+// RemoteBroker forwards every effect to a broker process over one connection (D-18). It fails
+// closed: once the connection breaks, every call errors, and nothing falls back to local IO.
+// When the broker answers needs_approval, it puts the question to the human and retries.
+type RemoteBroker struct {
+	mu     sync.Mutex
+	conn   net.Conn
+	nextID uint64
+	// brokenErr is set by the first transport failure; after it the stream cannot be trusted.
+	brokenErr error
+	// isClosing is set by Close before it closes conn, so failures Close itself causes are not
+	// reported as the broker becoming unavailable.
+	isClosing atomic.Bool
+	options   RemoteOptions
+}
+
+// RemoteOptions are what a RemoteBroker reports to and asks. Nil Events drops the facts; a nil
+// Approver refuses every Ask, which is the fail-closed answer.
+type RemoteOptions struct {
+	Events   core.EventSink
+	Approver core.Approver
+	Clock    core.Clock
+}
+
+// brokerExchangeTimeout is how long a broker may take to answer one request before the
+// connection is declared broken.
+const brokerExchangeTimeout = 30 * time.Second
+
+// maxApprovalsPerEffect covers an effect whose as-written and resolved paths each Ask.
+const maxApprovalsPerEffect = 2
+
+// decisionRuleSource is the audit text on rules the approval modal creates.
+const decisionRuleSource = "approval modal"
+
+var _ core.Broker = (*RemoteBroker)(nil)
+
+func BuildRemoteBroker(conn net.Conn, options RemoteOptions) *RemoteBroker {
+	if options.Clock == nil {
+		options.Clock = core.SystemClock{}
+	}
+	return &RemoteBroker{conn: conn, options: options}
+}
+
+// Close ends the connection. conn is closed before taking the lock, so an exchange stuck on a
+// hung broker returns instead of holding Close up.
+func (r *RemoteBroker) Close() error {
+	r.isClosing.Store(true)
+	closeErr := r.conn.Close()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.brokenErr == nil {
+		r.brokenErr = fmt.Errorf("broker connection closed: %w", net.ErrClosed)
+	}
+	return closeErr
+}
+
+// reportBrokerExit marks the connection broken as soon as the broker process exits, so the red
+// bar does not wait for the next effect to find out.
+func (r *RemoteBroker) reportBrokerExit(exitErr error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.brokenErr == nil {
+		r.markBrokenLocked(context.Background(), errors.Join(errors.New("broker process exited"), exitErr))
+	}
+}
+
+// markBrokenLocked records that the stream is unusable and reports it; r.mu must be held.
+func (r *RemoteBroker) markBrokenLocked(ctx context.Context, cause error) {
+	r.brokenErr = fmt.Errorf("broker unreachable: %w", cause)
+	r.publishUnavailableLocked(ctx)
+}
+
+// publishUnavailableLocked reports the broken connection, unless Close broke it on purpose.
+func (r *RemoteBroker) publishUnavailableLocked(ctx context.Context) {
+	if !r.isClosing.Load() {
+		r.publish(ctx, core.BrokerUnavailable{EventHeader: r.buildEventHeader(), Reason: r.brokenErr.Error()})
+	}
+}
+
+func (r *RemoteBroker) DescribePath(ctx context.Context, path string) (core.PathInfo, error) {
+	resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, Request{Op: OpDescribePath, Path: path})
+	if err != nil {
+		return core.PathInfo{}, err
+	}
+	return convertRequiredPathInfo(resp)
+}
+
+// ListDirectory collects every page of the listing; a large directory spans several frames.
+func (r *RemoteBroker) ListDirectory(ctx context.Context, path string) ([]core.PathInfo, error) {
+	entries := []core.PathInfo{}
+	for offset := uint32(0); ; {
+		resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, Request{Op: OpListDirectory, Path: path, Offset: offset})
+		if err != nil {
+			return nil, err
+		}
+		for _, msg := range resp.Entries {
+			entry, err := ConvertPathInfoMessage(msg)
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, entry)
+		}
+		if resp.NextOffset == 0 {
+			return entries, nil
+		}
+		if resp.NextOffset <= offset {
+			return nil, fmt.Errorf("list_directory page at %d points back to %d: %w", offset, resp.NextOffset, errMalformedFrame)
+		}
+		offset = resp.NextOffset
+	}
+}
+
+func (r *RemoteBroker) OpenFile(ctx context.Context, path string) (core.OpenedFile, error) {
+	resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, Request{Op: OpOpenFile, Path: path})
+	if err != nil {
+		return core.OpenedFile{}, err
+	}
+	info, err := convertRequiredPathInfo(resp)
+	if err != nil {
+		return core.OpenedFile{}, err
+	}
+	if resp.Handle == 0 {
+		return core.OpenedFile{}, fmt.Errorf("broker opened %q without a handle: %w", path, core.ErrInvalid)
+	}
+	return core.OpenedFile{Info: info, Content: &remoteFile{broker: r, ctx: ctx, handle: resp.Handle}}, nil
+}
+
+func (r *RemoteBroker) WriteFile(ctx context.Context, path string, content []byte) (core.PathInfo, error) {
+	if len(content) > MaxWriteFileBytes {
+		return core.PathInfo{}, fmt.Errorf("%q: %d bytes exceeds the broker's %d-byte write limit: %w", path, len(content), MaxWriteFileBytes, core.ErrInvalid)
+	}
+	resp, err := r.exchangeEffect(ctx, core.CapabilityFSWrite, Request{Op: OpWriteFile, Path: path, Data: content})
+	if err != nil {
+		return core.PathInfo{}, err
+	}
+	return convertRequiredPathInfo(resp)
+}
+
+func (r *RemoteBroker) AddDecisionRule(ctx context.Context, rule core.DecisionRule) error {
+	_, err := r.exchange(ctx, Request{Op: OpAddDecisionRule, Rule: BuildDecisionRuleMessage(rule)})
+	return err
+}
+
+// exchangeEffect is exchange for a request policy decides: an Ask goes to the human and the
+// request is retried on approval, and a refusal is published as PolicyDenied (D-29).
+func (r *RemoteBroker) exchangeEffect(ctx context.Context, kind core.CapabilityKind, req Request) (Response, error) {
+	resp, err := r.exchange(ctx, req)
+	for approvals := 0; ; approvals++ {
+		var required *core.ApprovalRequiredError
+		if !errors.As(err, &required) {
+			break
+		}
+		if approvals == maxApprovalsPerEffect {
+			err = fmt.Errorf("%s still needs approval after %d answers: %w", req.Path, approvals, core.ErrDenied)
+			break
+		}
+		if err = r.putToHuman(ctx, required.Operation); err != nil {
+			break
+		}
+		resp, err = r.exchange(ctx, req)
+	}
+	if errors.Is(err, core.ErrDenied) {
+		r.publish(ctx, core.PolicyDenied{EventHeader: r.buildEventHeader(), CallID: core.ReportToolCallID(ctx), Capability: core.Capability{Kind: kind, Scope: req.Path}, Rule: err.Error()})
+	}
+	return resp, err
+}
+
+// putToHuman asks the approver and reports its answer to the broker; only a real answer can
+// let the effect through (D-10).
+func (r *RemoteBroker) putToHuman(ctx context.Context, op core.Operation) error {
+	if r.options.Approver == nil {
+		return fmt.Errorf("%s %q needs approval and nobody can answer: %w", op.Kind, op.Target, core.ErrDenied)
+	}
+	decision, err := r.options.Approver.RequestApproval(ctx, op)
+	if err != nil {
+		return err
+	}
+	switch decision {
+	case core.ApprovalOnce:
+		_, err := r.exchange(ctx, Request{Op: OpApproveOnce, Capability: &CapabilityMessage{Kind: string(op.Kind), Scope: op.Target}})
+		return err
+	case core.ApprovalAlways:
+		return r.AddDecisionRule(ctx, core.DecisionRule{Kind: op.Kind, Scope: op.Target, Decision: core.DecisionAllow, Source: decisionRuleSource})
+	case core.ApprovalDenied:
+	}
+	return fmt.Errorf("%s %q was denied by the user: %w", op.Kind, op.Target, core.ErrDenied)
+}
+
+func (r *RemoteBroker) publish(ctx context.Context, event core.Event) {
+	if r.options.Events == nil {
+		return
+	}
+	r.options.Events.Publish(ctx, event)
+}
+
+func (r *RemoteBroker) buildEventHeader() core.EventHeader {
+	return core.EventHeader{At: r.options.Clock.ReportCurrentTime()}
+}
+
+// exchange sends one request and waits for its response. A ctx that is already done stops it
+// before sending; once sent, the exchange runs to completion even if ctx ends, because abandoning
+// it mid-frame would leave the stream unusable for every later call. Broker effects are bounded
+// local IO, so only a broker that stops answering for brokerExchangeTimeout breaks the connection.
+func (r *RemoteBroker) exchange(ctx context.Context, req Request) (Response, error) {
+	if err := ctx.Err(); err != nil {
+		return Response{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.brokenErr != nil {
+		// Every refusal repeats the fact: the bus drops events for a full subscriber, and the red
+		// bar must not hang on the first report getting through.
+		r.publishUnavailableLocked(ctx)
+		return Response{}, r.brokenErr
+	}
+
+	_ = r.conn.SetDeadline(r.options.Clock.ReportCurrentTime().Add(brokerExchangeTimeout))
+	r.nextID++
+	req.Version, req.ID = ProtocolVersion, r.nextID
+	req.IsFromUntrustedStep = core.ReportIsFromUntrustedStep(ctx)
+	resp, err := r.sendAndReceive(req)
+	if errors.Is(err, errFrameTooLarge) {
+		return Response{}, err
+	}
+	if err != nil {
+		// A half-sent request or half-read response leaves the stream unusable for everyone.
+		r.markBrokenLocked(ctx, err)
+		return Response{}, r.brokenErr
+	}
+	if resp.Error != nil {
+		return Response{}, ConvertErrorBody(*resp.Error)
+	}
+	return resp, nil
+}
+
+func (r *RemoteBroker) sendAndReceive(req Request) (Response, error) {
+	if err := WriteRequest(r.conn, req); err != nil {
+		return Response{}, err
+	}
+	resp, err := ReadResponse(r.conn)
+	if err != nil {
+		return Response{}, err
+	}
+	if resp.ID != req.ID {
+		return Response{}, fmt.Errorf("response id %d for request %d: %w", resp.ID, req.ID, errMalformedFrame)
+	}
+	return resp, nil
+}
+
+func convertRequiredPathInfo(resp Response) (core.PathInfo, error) {
+	if resp.Info == nil {
+		return core.PathInfo{}, fmt.Errorf("broker response has no path info: %w", core.ErrInvalid)
+	}
+	return ConvertPathInfoMessage(*resp.Info)
+}
+
+// remoteFile streams a file the broker holds open, one read_file chunk at a time.
+type remoteFile struct {
+	broker  *RemoteBroker
+	ctx     context.Context
+	handle  uint64
+	pending []byte
+	isEOF   bool
+}
+
+func (f *remoteFile) Read(p []byte) (int, error) {
+	for len(f.pending) == 0 {
+		if f.isEOF {
+			return 0, io.EOF
+		}
+		resp, err := f.broker.exchange(f.ctx, Request{Op: OpReadFile, Handle: f.handle, MaxBytes: MaxReadChunkBytes})
+		if err != nil {
+			return 0, err
+		}
+		f.pending, f.isEOF = resp.Data, resp.IsEOF
+	}
+	n := copy(p, f.pending)
+	f.pending = f.pending[n:]
+	return n, nil
+}
+
+// Close releases the broker's handle even if the opening context has since ended.
+func (f *remoteFile) Close() error {
+	_, err := f.broker.exchange(context.WithoutCancel(f.ctx), Request{Op: OpCloseFile, Handle: f.handle})
+	return err
+}
