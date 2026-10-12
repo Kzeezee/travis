@@ -113,10 +113,12 @@ func (t *transcript) rewindTurns(fromTurn core.ID, notice string) (string, bool)
 		t.addNotice(notice)
 		return "", false
 	}
+	// Earlier notices on these turns describe history that is now gone; the new notice replaces
+	// them all, so the transcript never shows an older rewind below a newer one.
 	for i := start; i < len(t.turns); i++ {
-		t.turns[i].isRewound = true
+		t.turns[i].isRewound, t.turns[i].notices = true, nil
 	}
-	t.turns[start].notices = append(t.turns[start].notices, notice)
+	t.turns[start].notices = []string{notice}
 	return t.turns[start].prompt, true
 }
 

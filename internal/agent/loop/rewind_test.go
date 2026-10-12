@@ -97,6 +97,9 @@ func TestFilesOnlyRewindTellsTheModelOnce(t *testing.T) {
 		t.Fatalf("request after the rewind = %q, want the kept turn, then a note, then the prompt", afterRewind)
 	}
 	note := afterRewind[2]
+	if !strings.HasSuffix(note, "\n\n") {
+		t.Fatalf("note %q must end its own paragraph: providers join text parts as they are", note)
+	}
 	for _, want := range []string{"reverted files", "a.go", "new.go", "b.go (changed since the agent last wrote it)"} {
 		if !strings.Contains(note, want) {
 			t.Fatalf("note %q does not mention %q", note, want)

@@ -208,3 +208,16 @@ func TestUndoPickerGoldenFrames(t *testing.T) {
 		})
 	}
 }
+
+// A conversation rewind replaces the notices of the turns it hides: an older rewind's notice must
+// not linger below the newer one.
+func TestRewindReplacesTheNoticesOfTheTurnsItHides(t *testing.T) {
+	m := buildTranscriptWithTurns(t)
+	m, _ = updateModel(m, rewindFinishedMsg{fromTurn: "t2", mode: core.RewindFilesOnly, report: core.RewindReport{Files: core.FileReverts{Deleted: []string{"old.md"}}}})
+	m, _ = updateModel(m, rewindFinishedMsg{fromTurn: "t1", mode: core.RewindFilesAndConversation})
+
+	view := renderPlainView(m)
+	if strings.Contains(view, "deleted old.md") || strings.Count(view, "↺") != 1 {
+		t.Fatalf("view\n%s\nwant only the newest rewind's notice", view)
+	}
+}

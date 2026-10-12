@@ -98,7 +98,8 @@ func BuildHistory(entries []core.SessionEntry) []core.Message {
 	for _, entry := range selectVisibleEntries(entries) {
 		switch {
 		case entry.Kind == core.EntryFilesReverted && entry.Rewind.Mode == core.RewindFilesOnly:
-			pendingNotes = append(pendingNotes, core.TextPart{Text: describeFileRevert(*entry.Rewind)})
+			// Providers join a message's text parts as they are, so the note ends its own paragraph.
+			pendingNotes = append(pendingNotes, core.TextPart{Text: describeFileRevert(*entry.Rewind) + "\n\n"})
 		case entry.Kind == core.EntryMessage && entry.Message != nil:
 			message := *entry.Message
 			if message.Role == core.RoleUser && len(pendingNotes) > 0 {
