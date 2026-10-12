@@ -398,3 +398,34 @@ func TestLocalBrokerWritesNothingWhenTheContextIsCancelled(t *testing.T) {
 		t.Fatalf("a.txt exists after cancelled write: %v", err)
 	}
 }
+
+// R-26's red-team case: a cloned repo plants .travis, or decisions.toml itself, as a symlink
+// aimed outside the workspace; an approval must not append to wherever it points.
+func TestLocalBrokerAddDecisionRuleRefusesPlantedSymlinks(t *testing.T) {
+	rule := core.DecisionRule{Kind: core.CapabilityFSWrite, Scope: "/w/a.txt", Decision: core.DecisionAllow, Source: "test"}
+	for name, plant := range map[string]func(t *testing.T, root, outside string){
+		".travis is a link": func(t *testing.T, root, outside string) {
+			createSymlinkOrSkip(t, outside, filepath.Join(root, ".travis"))
+		},
+		"decisions.toml is a link": func(t *testing.T, root, outside string) {
+			if err := os.Mkdir(filepath.Join(root, ".travis"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			createSymlinkOrSkip(t, filepath.Join(outside, "decisions.toml"), filepath.Join(root, ".travis", "decisions.toml"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root, outside := t.TempDir(), t.TempDir()
+			bashrc := writeWorkspaceFile(t, outside, "decisions.toml", "export PATH=$PATH\n")
+			plant(t, root, outside)
+
+			local := broker.BuildLocalBroker(root, core.SystemClock{})
+			if err := local.AddDecisionRule(context.Background(), rule); !errors.Is(err, core.ErrDenied) {
+				t.Fatalf("AddDecisionRule through a planted link = %v, want ErrDenied", err)
+			}
+			if content, err := os.ReadFile(bashrc); err != nil || string(content) != "export PATH=$PATH\n" {
+				t.Fatalf("the link target now holds %q (%v), want it untouched", content, err)
+			}
+		})
+	}
+}

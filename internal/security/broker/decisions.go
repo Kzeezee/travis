@@ -2,8 +2,10 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -41,17 +43,9 @@ func (b *LocalBroker) AddDecisionRule(ctx context.Context, rule core.DecisionRul
 		rule.AddedAt = b.clock.ReportCurrentTime().UTC()
 	}
 
-	path := filepath.Join(b.root, filepath.FromSlash(decisionsRelPath))
-	if err := os.MkdirAll(filepath.Dir(path), decisionsDirMode); err != nil {
-		return fmt.Errorf("decisions: %w", err)
-	}
-	// Opened read-write rather than O_APPEND: on Windows, O_APPEND maps to the
-	// FILE_APPEND_DATA access right, which LockFileEx refuses with ACCESS_DENIED. Locking
-	// first and seeking to end afterward gets the same "append under lock" guarantee on
-	// every OS without relying on a platform-specific append mode.
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, decisionsFileMode)
+	file, err := openDecisionsFile(filepath.Join(b.resolvedRoot, filepath.FromSlash(decisionsRelPath)))
 	if err != nil {
-		return fmt.Errorf("decisions: open: %w", err)
+		return fmt.Errorf("decisions: %w", err)
 	}
 	defer file.Close()
 
@@ -71,6 +65,45 @@ func (b *LocalBroker) AddDecisionRule(ctx context.Context, rule core.DecisionRul
 		return fmt.Errorf("decisions: write: %w", err)
 	}
 	return file.Sync()
+}
+
+// openDecisionsFile opens decisions.toml without following a symlink at .travis or at the file:
+// a cloned repo could plant one aimed at ~/.bashrc, and the append would land there (R-26).
+// Opened read-write rather than O_APPEND: on Windows, O_APPEND maps to the FILE_APPEND_DATA
+// access right, which LockFileEx refuses with ACCESS_DENIED. Locking first and seeking to end
+// afterward gets the same "append under lock" guarantee on every OS.
+func openDecisionsFile(path string) (*os.File, error) {
+	dir := filepath.Dir(path)
+	if err := os.Mkdir(dir, decisionsDirMode); err != nil && !errors.Is(err, fs.ErrExist) {
+		return nil, err
+	}
+	if info, err := os.Lstat(dir); err != nil {
+		return nil, err
+	} else if !info.IsDir() {
+		return nil, fmt.Errorf("%q is not a real folder: %w", dir, core.ErrDenied)
+	}
+
+	// O_EXCL refuses anything already at the name, a symlink included, on every OS.
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, decisionsFileMode)
+	if !errors.Is(err, fs.ErrExist) {
+		return file, err
+	}
+	existing, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !existing.Mode().IsRegular() {
+		return nil, fmt.Errorf("%q is not a regular file: %w", path, core.ErrDenied)
+	}
+	if file, err = os.OpenFile(path, os.O_RDWR, 0); err != nil {
+		return nil, err
+	}
+	// The name could have been swapped for a link between Lstat and open; check what was opened.
+	if opened, err := file.Stat(); err != nil || !os.SameFile(existing, opened) {
+		_ = file.Close()
+		return nil, fmt.Errorf("%q changed while it was being opened: %w", path, core.ErrDenied)
+	}
+	return file, nil
 }
 
 // validateDecisionRule enforces the two guarantees D-30 and D-27 require before anything
