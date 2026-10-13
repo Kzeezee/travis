@@ -113,6 +113,7 @@ func runRedTeamCase(t *testing.T, scenario redTeamCase) {
 		if err := stop(); err != nil {
 			t.Fatal(err)
 		}
+		_, _ = remote.DescribePath(context.Background(), target)
 	}
 	ctx := core.WithToolCallID(core.WithTurnID(context.Background(), "turn-redteam"), "call-redteam")
 	if scenario.Untrusted {

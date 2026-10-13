@@ -48,6 +48,7 @@ const maxApprovalsPerEffect = 3
 const decisionRuleSource = "approval modal"
 
 var errBrokerUnavailable = errors.New("broker unavailable")
+var errBrokerKnownDown = errors.New("broker was already unavailable before the request")
 
 var (
 	_ core.Broker      = (*RemoteBroker)(nil)
@@ -232,7 +233,7 @@ func (r *RemoteBroker) exchangeEffect(ctx context.Context, kind core.CapabilityK
 		}
 		resp, err = r.exchange(ctx, req)
 	}
-	if errors.Is(err, core.ErrDenied) || (errors.Is(err, errBrokerUnavailable) && !r.isClosing.Load()) {
+	if errors.Is(err, core.ErrDenied) || (errors.Is(err, errBrokerKnownDown) && !r.isClosing.Load()) {
 		r.publish(ctx, core.PolicyDenied{EventHeader: r.buildEventHeader(), CallID: core.ReportToolCallID(ctx), Capability: core.Capability{Kind: kind, Scope: req.Path}, Rule: err.Error()})
 	}
 	return resp, err
@@ -284,7 +285,7 @@ func (r *RemoteBroker) exchange(ctx context.Context, req Request) (Response, err
 		// Every refusal repeats the fact: the bus drops events for a full subscriber, and the red
 		// bar must not hang on the first report getting through.
 		r.publishUnavailableLocked(ctx)
-		return Response{}, r.brokenErr
+		return Response{}, errors.Join(r.brokenErr, errBrokerKnownDown)
 	}
 
 	_ = r.conn.SetDeadline(r.options.Clock.ReportCurrentTime().Add(brokerExchangeTimeout))
