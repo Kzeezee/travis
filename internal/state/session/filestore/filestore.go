@@ -88,9 +88,7 @@ func (s *Store) ReadEntries() []core.SessionEntry {
 	return slices.Clone(s.entries)
 }
 
-// replayLog decodes every complete line. A partial or malformed last line is a crash
-// mid-append, so it is truncated away; otherwise the next append would glue onto it. A bad
-// line anywhere else means the log was damaged, and is reported rather than skipped.
+// replayLog drops a torn tail but rejects any corrupt complete line.
 func replayLog(path string) ([]core.SessionEntry, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -108,9 +106,6 @@ func replayLog(path string) ([]core.SessionEntry, error) {
 		}
 		entry, err := decodeEntry(rest[:end])
 		if err != nil {
-			if end+1 == len(rest) {
-				break
-			}
 			return nil, fmt.Errorf("session log: corrupt line at byte %d: %w", validLen, err)
 		}
 		entries = append(entries, entry)

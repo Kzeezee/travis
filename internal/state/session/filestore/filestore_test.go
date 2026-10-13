@@ -111,6 +111,17 @@ func TestCorruptLineInTheMiddleFailsToOpen(t *testing.T) {
 	}
 }
 
+func TestCorruptCompleteLastLineFailsToOpen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s1.jsonl")
+	if err := os.WriteFile(path, []byte("{not json}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := filestore.Open(dir, "s1"); err == nil {
+		t.Fatal("Open discarded a complete but corrupt last line")
+	}
+}
+
 func TestOpenRefusesSessionIDsThatAreNotPlainNames(t *testing.T) {
 	for _, id := range []core.ID{"", "../escape", "a/b"} {
 		if _, err := filestore.Open(t.TempDir(), id); err == nil {
