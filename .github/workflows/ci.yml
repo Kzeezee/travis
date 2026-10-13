@@ -138,6 +138,23 @@ jobs:
       - name: Scan
         run: govulncheck ./...
 
+  red-team:
+    name: red-team (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Assert policy denials and absent effects
+        run: go test -race -timeout 5m -shuffle=on ./internal/security/broker -run '^TestRedTeamGate'
+
   # The single required check. Branch protection names this job and nothing else, so
   # editing the matrix above cannot silently rename a required check away.
   ci:
@@ -145,7 +162,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
-    needs: [test, test-macos, lint, tidy-and-verify, vulncheck]
+    needs: [test, test-macos, lint, tidy-and-verify, vulncheck, red-team]
     steps:
       - name: Assert every job succeeded
         env:
@@ -154,12 +171,13 @@ jobs:
           LINT: ${{ needs.lint.result }}
           TIDY_AND_VERIFY: ${{ needs.tidy-and-verify.result }}
           VULNCHECK: ${{ needs.vulncheck.result }}
+          RED_TEAM: ${{ needs['red-team'].result }}
         run: |
           set -uo pipefail
           status=0
 
           # Explicit, because skipped is not failed and would otherwise pass a `!= failure` test.
-          for job in TEST LINT TIDY_AND_VERIFY VULNCHECK; do
+          for job in TEST LINT TIDY_AND_VERIFY VULNCHECK RED_TEAM; do
             result="${!job}"
             echo "$job: $result"
             if [ "$result" != "success" ]; then
