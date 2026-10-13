@@ -112,6 +112,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	redactor := redact.New(apiKey)
 	bus := buildSessionBus(os.Stderr)
 	approvals := make(chan core.ApprovalRequest)
+	questions := make(chan core.QuestionRequest)
 	sessionID := id.BuildULIDGenerator(core.SystemClock{}).GenerateID()
 	sessionBroker, err := startSessionBroker(paths, sessionID, cfg.Session, os.Stderr, broker.RemoteOptions{
 		Events:   redact.WrapSink(bus, redactor),
@@ -128,7 +129,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	}()
 
 	provider := openaicompat.BuildProvider(profile.BaseURL, apiKey, nil, core.SystemClock{})
-	session, err := assembleChatSession(cfg, paths, sessionID, provider, sessionBroker.Remote, sessionBroker.Remote, bus, redactor, profile.Model, os.Stderr)
+	session, err := assembleChatSession(cfg, paths, sessionID, provider, sessionBroker.Remote, sessionBroker.Remote, terminal.BuildQuestioner(questions), bus, redactor, profile.Model, os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -139,7 +140,8 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	chatErr := terminal.RunChat(context.Background(), events, approvals, session.conversation.RunAssistantTurn,
 		terminal.Options{
 			ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out,
-			Undo: terminal.UndoActions{ListTurns: session.conversation.ListTurns, Rewind: session.conversation.Rewind},
+			Undo:      terminal.UndoActions{ListTurns: session.conversation.ListTurns, Rewind: session.conversation.Rewind},
+			Questions: questions,
 		})
 	session.close()
 	return chatErr
@@ -191,13 +193,14 @@ func startSessionBroker(paths config.PathSet, sessionID core.ID, sessionCfg conf
 // one session. The provider, file broker, session log and bus are parameters so the end-to-end
 // test can script the model while everything else stays real; diagnostics receives trace status
 // lines. A nil sessionLog records nothing, which only a test without a broker process may choose.
-func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID core.ID, provider core.Provider, fileBroker core.Broker, sessionLog core.SessionLog, bus *core.Bus, redactor redact.Redactor, model string, diagnostics io.Writer) (*chatSession, error) {
+func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID core.ID, provider core.Provider, fileBroker core.Broker, sessionLog core.SessionLog, questioner core.Questioner, bus *core.Bus, redactor redact.Redactor, model string, diagnostics io.Writer) (*chatSession, error) {
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
 	for _, tool := range []core.Tool{
 		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes),
 		builtin.BuildGrepTool(fileBroker, paths.WorkspaceDir),
 		builtin.BuildFileWriteTool(fileBroker, paths.WorkspaceDir, defaultMaxWriteBytes, config.ReportNativeLineEnding()),
 		builtin.BuildFileEditTool(fileBroker, paths.WorkspaceDir, defaultMaxWriteBytes),
+		builtin.BuildAskUserTool(questioner),
 	} {
 		if err := toolRegistry.Register(registry.SourceBuiltin, tool); err != nil {
 			return nil, err

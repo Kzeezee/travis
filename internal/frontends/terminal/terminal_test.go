@@ -109,6 +109,29 @@ func TestStartupWarningsShowInTheFirstFrame(t *testing.T) {
 	}
 }
 
+func TestQuestionIsShownAndTheTypedAnswerIsReturned(t *testing.T) {
+	answers := make(chan string, 1)
+	m := buildTestModel(nil)
+	m, _ = updateModel(m, questionRequestedMsg{request: core.QuestionRequest{
+		Text: "Which day?", Respond: func(answer string) { answers <- answer },
+	}})
+	if view := renderPlainView(m); !strings.Contains(view, "Which day?") {
+		t.Fatalf("question missing from view:\n%s", view)
+	}
+	m, _ = pressKeys(m, append(typedKeys(" Tuesday "), enterKey)...)
+	select {
+	case answer := <-answers:
+		if answer != "Tuesday" {
+			t.Fatalf("answer = %q", answer)
+		}
+	default:
+		t.Fatal("question was not answered")
+	}
+	if m.pendingQuestion != nil {
+		t.Fatal("answered question remains pending")
+	}
+}
+
 func TestBrokerUnavailableReplacesTheStatusBarWithAFailureBar(t *testing.T) {
 	m := buildChatModel(context.Background(), make(chan core.Event), nil, nil, Options{ModelName: "test-model"})
 	updated, _ := m.Update(eventBatchMsg{events: []core.Event{core.BrokerUnavailable{Reason: "broker unreachable: EOF"}}})

@@ -221,7 +221,7 @@ func runNotesTask(t *testing.T, provider core.Provider, model string) notesTaskR
 	var diagnostics strings.Builder
 	bus := buildSessionBus(&diagnostics)
 	remote, _ := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, bus, redact.New(), model, &diagnostics)
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, nil, bus, redact.New(), model, &diagnostics)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +363,7 @@ func TestWriteTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
 	var diagnostics strings.Builder
 	bus := buildSessionBus(io.Discard)
 	remote, brokerStateDir := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, bus, redact.New(), "scripted-model", io.Discard)
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,7 +500,7 @@ func TestUndoRewindsFilesAndConversationThroughTheRealBroker(t *testing.T) {
 	var diagnostics strings.Builder
 	bus := buildSessionBus(io.Discard)
 	remote, brokerStateDir := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, bus, redact.New(), "scripted-model", io.Discard)
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
