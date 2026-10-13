@@ -45,8 +45,8 @@ func buildThreeTurns() []core.TurnSummary {
 }
 
 func buildUndoModel(undo *fakeUndo) chatModel {
-	return buildChatModel(context.Background(), make(chan core.Event), nil, func(context.Context, string) error { return nil },
-		Options{ModelName: "test-model", Undo: undo.buildActions()})
+	actions := ChatActions{RunTurn: func(context.Context, string) error { return nil }, Undo: undo.buildActions()}
+	return buildChatModel(context.Background(), make(chan core.Event), nil, actions, Options{ModelName: "test-model"})
 }
 
 // submitUndo types /undo, presses enter and delivers the turn list, as the runtime would.
@@ -91,7 +91,7 @@ func TestUndoSaysWhenThereIsNothingToUndoOrItCannot(t *testing.T) {
 			}
 		})
 	}
-	m, cmd := pressKeys(buildTestModel(func(context.Context, string) error { return nil }), append(typedKeys("/undo"), enterKey)...)
+	m, cmd := pressKeys(buildTestModel(ChatActions{RunTurn: func(context.Context, string) error { return nil }}), append(typedKeys("/undo"), enterKey)...)
 	if cmd != nil || !strings.Contains(renderPlainView(m), "undo is not available") {
 		t.Fatalf("without undo actions: cmd = %v, view\n%s", cmd != nil, renderPlainView(m))
 	}

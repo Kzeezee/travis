@@ -176,6 +176,19 @@ func (c *AssistantConversation) Rewind(ctx context.Context, fromTurn core.ID, mo
 	return report, nil
 }
 
+// ResetHistory and SelectModel are only called between turns, so they need no lock.
+
+// ResetHistory forgets every earlier message, so the next turn starts a fresh conversation.
+// The session log keeps them; only this conversation's copy is dropped.
+func (c *AssistantConversation) ResetHistory() {
+	c.entries = nil
+}
+
+// SelectModel sends every later turn to the named model.
+func (c *AssistantConversation) SelectModel(name string) {
+	c.model = name
+}
+
 // runStep makes exactly one provider call; it exists so the stream closes every step.
 func (c *AssistantConversation) runStep(ctx context.Context, hint string) (stepReply, error) {
 	tools := c.buildToolSpecs(ctx, hint)

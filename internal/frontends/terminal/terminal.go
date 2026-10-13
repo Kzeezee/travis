@@ -20,8 +20,6 @@ import (
 )
 
 const (
-	quitCommand = "/quit"
-	undoCommand = "/undo"
 	// coalesceWindow turns a token stream into at most one render per frame, 30 fps (DESIGN.md §5.9.1, R-07).
 	coalesceWindow = 33 * time.Millisecond
 	// Used until the terminal reports its size, and for outputs that never do.
@@ -29,6 +27,8 @@ const (
 	defaultHeight = 24
 	// chromeHeight is the two separators, the input line, and the status bar below the transcript.
 	chromeHeight = 4
+	// ponytail: prefix filter capped at a few rows; fuzzy matching when there are >20 commands.
+	maxPaletteRows = 8
 )
 
 // ErrNotInteractive is returned when stdin or stdout is not a terminal; the TUI cannot run there.
@@ -40,7 +40,6 @@ type Options struct {
 	StartupWarnings []string
 	Input           io.Reader
 	Output          io.Writer
-	Undo            UndoActions
 	Questions       <-chan core.QuestionRequest
 }
 
@@ -51,14 +50,23 @@ type UndoActions struct {
 	Rewind    func(ctx context.Context, fromTurn core.ID, mode core.RewindMode) (core.RewindReport, error)
 }
 
-// RunChat runs the interactive chat until the user quits or input ends. runTurn is the
-// assistant-turn operation; the frontend calls it without knowing what implements it.
+// ChatActions are the operations the chat can ask of the session; the frontend calls them
+// without knowing what implements them.
+type ChatActions struct {
+	RunTurn      func(ctx context.Context, prompt string) error
+	ResetHistory func()
+	SelectModel  func(name string)
+	ToolNames    []string
+	Undo         UndoActions
+}
+
+// RunChat runs the interactive chat until the user quits or input ends.
 // approvals delivers pending Ask decisions for the modal to answer (D-10).
 func RunChat(
 	ctx context.Context,
 	events <-chan core.Event,
 	approvals <-chan core.ApprovalRequest,
-	runTurn func(ctx context.Context, prompt string) error,
+	actions ChatActions,
 	opts Options,
 ) error {
 	if !isTerminal(opts.Input) || !isTerminal(opts.Output) {
@@ -71,7 +79,7 @@ func RunChat(
 	// Bubble Tea recovers panics in View, Update, and Cmds, restores the terminal, and prints the
 	// trace (DESIGN.md §5.9); passing tea.WithoutCatchPanics would give that up.
 	program := tea.NewProgram(
-		buildChatModel(ctx, events, approvals, runTurn, opts),
+		buildChatModel(ctx, events, approvals, actions, opts),
 		tea.WithInput(input),
 		tea.WithOutput(opts.Output),
 	)
@@ -197,14 +205,16 @@ type chatModel struct {
 	events    <-chan core.Event
 	approvals <-chan core.ApprovalRequest
 	questions <-chan core.QuestionRequest
-	runTurn   func(context.Context, string) error
-	undo      UndoActions
+	actions   ChatActions
+	commands  []slashCommand
 	modelName string
 
 	transcript      transcript
 	viewport        viewport.Model
 	input           textinput.Model
 	width           int
+	height          int
+	paletteIndex    int
 	pendingApproval *core.ApprovalRequest
 	pendingQuestion *core.QuestionRequest
 	// undoPicker is open while the user chooses what /undo takes back; it takes every key.
@@ -223,7 +233,7 @@ func buildChatModel(
 	ctx context.Context,
 	events <-chan core.Event,
 	approvals <-chan core.ApprovalRequest,
-	runTurn func(context.Context, string) error,
+	actions ChatActions,
 	opts Options,
 ) chatModel {
 	input := textinput.New()
@@ -232,7 +242,7 @@ func buildChatModel(
 	input.Focus()
 
 	m := chatModel{
-		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, runTurn: runTurn, undo: opts.Undo, modelName: opts.ModelName,
+		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, actions: actions, commands: buildSlashCommands(), modelName: opts.ModelName,
 		viewport: viewport.New(), input: input,
 	}
 	m.transcript.warnings = opts.StartupWarnings
@@ -311,6 +321,31 @@ func (m chatModel) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.undoPicker != nil {
 		return m.handleUndoPickerKey(key)
 	}
+	if rows := m.listPaletteRows(); len(rows) > 0 {
+		switch key.String() {
+		case "up":
+			m.paletteIndex = max(m.paletteIndex-1, 0)
+			return m, nil
+		case "down":
+			m.paletteIndex = min(m.paletteIndex+1, len(rows)-1)
+			return m, nil
+		case "tab":
+			m.input.SetValue("/" + rows[m.paletteIndex].name + " ")
+			m.input.CursorEnd()
+			m.paletteIndex = 0
+			m.fitViewport()
+			return m, nil
+		case "enter":
+			m.input.SetValue("/" + rows[m.paletteIndex].name)
+			return m.submitPrompt()
+		case "esc":
+			m.input.Reset()
+			m.paletteIndex = 0
+			m.fitViewport()
+			return m, nil
+		}
+	}
+
 	isTurnRunning := m.cancelTurn != nil
 	switch key.String() {
 	case "ctrl+c":
@@ -339,8 +374,13 @@ func (m chatModel) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	before := m.input.Value()
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(key)
+	if m.input.Value() != before {
+		m.paletteIndex = 0
+		m.fitViewport()
+	}
 	return m, cmd
 }
 
@@ -399,16 +439,26 @@ func (m chatModel) handleApprovalKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	)
 }
 
+// listPaletteRows reports the commands matching a bare "/word" being typed while idle; none means the palette is closed.
+func (m chatModel) listPaletteRows() []slashCommand {
+	value := m.input.Value()
+	if m.cancelTurn != nil || !strings.HasPrefix(value, "/") || strings.Contains(value, " ") {
+		return nil
+	}
+	rows := filterSlashCommands(m.commands, value[1:])
+	return rows[:min(len(rows), maxPaletteRows)]
+}
+
 func (m chatModel) submitPrompt() (tea.Model, tea.Cmd) {
 	prompt := strings.TrimSpace(m.input.Value())
 	m.input.Reset()
-	switch prompt {
-	case "":
+	m.paletteIndex = 0
+	m.fitViewport()
+	if prompt == "" {
 		return m, nil
-	case quitCommand:
-		return m, tea.Quit
-	case undoCommand:
-		return m.requestTurnList()
+	}
+	if strings.HasPrefix(prompt, "/") {
+		return m.runSlashCommand(prompt)
 	}
 
 	turnCtx, cancel := context.WithCancel(m.ctx)
@@ -417,7 +467,7 @@ func (m chatModel) submitPrompt() (tea.Model, tea.Cmd) {
 	m.refreshTranscript()
 	m.viewport.GotoBottom()
 
-	runTurn := m.runTurn
+	runTurn := m.actions.RunTurn
 	return m, func() tea.Msg {
 		return turnFinishedMsg{turnNumber: turnNumber, err: runTurn(turnCtx, prompt)}
 	}
@@ -434,6 +484,7 @@ func (m chatModel) finishTurn(msg turnFinishedMsg) (tea.Model, tea.Cmd) {
 	hadPendingQuestion := m.pendingQuestion != nil
 	m.pendingQuestion = nil
 	m.input.Prompt = " › "
+	m.fitViewport() // the palette may open for text typed during the turn
 
 	outcome, failure := turnFailed, ""
 	switch {
@@ -458,11 +509,20 @@ func (m chatModel) finishTurn(msg turnFinishedMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *chatModel) resize(width, height int) {
-	m.width = max(width, 1)
+	m.width, m.height = max(width, 1), height
 	m.viewport.SetWidth(m.width)
-	m.viewport.SetHeight(max(height-chromeHeight, 1))
+	m.fitViewport()
 	m.input.SetWidth(max(m.width-lipgloss.Width(m.input.Prompt)-1, 1))
 	m.refreshTranscript()
+}
+
+// fitViewport gives the transcript whatever height the chrome and the open palette leave.
+func (m *chatModel) fitViewport() {
+	isFollowingLatest := m.viewport.AtBottom()
+	m.viewport.SetHeight(max(m.height-chromeHeight-len(m.listPaletteRows()), 1))
+	if isFollowingLatest {
+		m.viewport.GotoBottom()
+	}
 }
 
 // refreshTranscript re-renders the transcript, following new output unless the user scrolled up.

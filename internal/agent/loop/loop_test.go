@@ -230,6 +230,37 @@ func TestRunSendsPriorTurnsAsContext(t *testing.T) {
 	}
 }
 
+func TestResetHistoryDropsEarlierTurnsFromTheNextRequest(t *testing.T) {
+	provider := &fakeProvider{}
+	assistantConversation := buildAssistantConversation(t, provider, nil, &recordingSink{})
+
+	if err := assistantConversation.RunAssistantTurn(context.Background(), "first"); err != nil {
+		t.Fatalf("first RunAssistantTurn returned %v, want nil", err)
+	}
+	assistantConversation.ResetHistory()
+	if err := assistantConversation.RunAssistantTurn(context.Background(), "second"); err != nil {
+		t.Fatalf("second RunAssistantTurn returned %v, want nil", err)
+	}
+
+	if got := provider.requests[1].Messages; len(got) != 1 || got[0].Role != core.RoleUser {
+		t.Fatalf("got %d messages after reset, want only the new user message", len(got))
+	}
+}
+
+func TestSelectModelSendsLaterTurnsToTheNewModel(t *testing.T) {
+	provider := &fakeProvider{}
+	assistantConversation := buildAssistantConversation(t, provider, nil, &recordingSink{})
+
+	assistantConversation.SelectModel("x")
+	if err := assistantConversation.RunAssistantTurn(context.Background(), "hi"); err != nil {
+		t.Fatalf("RunAssistantTurn returned %v, want nil", err)
+	}
+
+	if got := provider.requests[0].Model; got != "x" {
+		t.Fatalf("got model %q, want x", got)
+	}
+}
+
 func TestRunReportsAFailedProviderCall(t *testing.T) {
 	provider := &fakeProvider{chatErr: errProviderUnavailable}
 	sink := &recordingSink{}

@@ -22,6 +22,7 @@ var (
 	errorStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	warningStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	failureBarStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("1"))
+	selectedRowStyle    = lipgloss.NewStyle().Reverse(true)
 )
 
 func (m chatModel) View() tea.View {
@@ -38,21 +39,24 @@ func (m chatModel) View() tea.View {
 		failure := " security broker unreachable, every tool will fail; restart travis · " + m.brokerFailure
 		statusLine = failureBarStyle.Width(m.width).Render(ansi.Truncate(failure, m.width, ellipsis))
 	}
-	transcriptArea := m.viewport.View()
+	rows := m.listPaletteRows()
+	sections := []string{m.viewport.View()}
 	if m.undoPicker != nil {
-		transcriptArea = renderUndoPicker(*m.undoPicker, m.width, m.viewport.Height())
+		sections[0] = renderUndoPicker(*m.undoPicker, m.width, m.viewport.Height())
 	}
-	view := tea.NewView(strings.Join([]string{
-		transcriptArea,
+	if len(rows) > 0 {
+		sections = append(sections, m.renderPalette(rows))
+	}
+	view := tea.NewView(strings.Join(append(sections,
 		separator,
 		inputLine,
 		separator,
 		statusLine,
-	}, "\n"))
+	), "\n"))
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
 	if cursor := m.input.Cursor(); cursor != nil && m.pendingApproval == nil && m.undoPicker == nil {
-		cursor.Y += m.viewport.Height() + 1
+		cursor.Y += m.viewport.Height() + len(rows) + 1
 		view.Cursor = cursor
 	}
 	return view
@@ -84,6 +88,20 @@ func renderApprovalModal(request core.ApprovalRequest, width int) string {
 	return assistantLabelStyle.Render(ansi.Truncate(line, max(width-1, 1), ellipsis))
 }
 
+// renderPalette lists matching commands; the selected row is marked and reversed so it shows without colour too.
+func (m chatModel) renderPalette(rows []slashCommand) string {
+	lines := make([]string, 0, len(rows))
+	for i, command := range rows {
+		label := fmt.Sprintf("%-16s %s", command.usage, command.summary)
+		if i == m.paletteIndex {
+			lines = append(lines, truncateWithMargin(selectedRowStyle.Render("› "+label), m.width))
+		} else {
+			lines = append(lines, truncateWithMargin(dimStyle.Render("  "+label), m.width))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m chatModel) reportTurnState() string {
 	switch {
 	case m.cancelTurn == nil:
@@ -110,13 +128,16 @@ func reportOutcome(outcome turnOutcome) string {
 }
 
 func renderTranscript(t transcript, width int) string {
-	sections := make([]string, 0, len(t.turns)+1)
+	sections := make([]string, 0, len(t.turns)+2)
 	if len(t.warnings) > 0 {
 		warnings := make([]string, 0, len(t.warnings))
 		for _, warning := range t.warnings {
 			warnings = append(warnings, wrapWithMargin(warningStyle.Render("⚠ "+warning), width))
 		}
 		sections = append(sections, strings.Join(warnings, "\n"))
+	}
+	if len(t.notices) > 0 {
+		sections = append(sections, renderNotices(t.notices, width))
 	}
 	for _, turn := range t.turns {
 		switch {

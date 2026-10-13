@@ -29,7 +29,7 @@ func runCmd(cmd tea.Cmd) {
 func buildPendingApproval(t *testing.T) (chatModel, chan core.ApprovalDecision) {
 	t.Helper()
 	answers := make(chan core.ApprovalDecision, 1)
-	m := buildTestModel(func(context.Context, string) error { return nil })
+	m := buildTestModel(ChatActions{RunTurn: func(context.Context, string) error { return nil }})
 	m.pendingApproval = &core.ApprovalRequest{
 		Operation: core.Operation{Kind: core.CapabilityFSWrite, Target: "/w/notes.md", Explanation: "no grant covers it"},
 		Respond:   func(d core.ApprovalDecision) { answers <- d },
@@ -141,7 +141,7 @@ func TestViewShowsThePendingApprovalInPlaceOfTheInput(t *testing.T) {
 // modal line as one block: a long policy.Explain trace must not eat into, or hide, the
 // [y]/[a]/[n] legend the keyboard actually depends on.
 func TestViewKeepsTheLegendWholeEvenWithALongExplanation(t *testing.T) {
-	m := buildTestModel(func(context.Context, string) error { return nil })
+	m := buildTestModel(ChatActions{RunTurn: func(context.Context, string) error { return nil }})
 	m.pendingApproval = &core.ApprovalRequest{
 		Operation: core.Operation{
 			Kind:   core.CapabilityFSWrite,

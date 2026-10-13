@@ -81,3 +81,20 @@ func TestTranscriptRoutesEventsToTheTurnThatProducedThem(t *testing.T) {
 		t.Fatalf("got turn two text %q, want only its own chunk", got)
 	}
 }
+
+func TestTranscriptTotalsUsageAndKeepsItAcrossReset(t *testing.T) {
+	var history transcript
+	history.startTurn("hi")
+	history.applyEvent(core.UserMessageSubmitted{})
+	history.applyEvent(core.TurnCompleted{Usage: core.Usage{InputTokens: 3, OutputTokens: 4}})
+	history.applyEvent(core.TurnCompleted{Usage: core.Usage{InputTokens: 10, OutputTokens: 20}})
+
+	if history.usage != (core.Usage{InputTokens: 13, OutputTokens: 24}) {
+		t.Fatalf("got usage %+v, want summed totals", history.usage)
+	}
+
+	history.resetTranscript()
+	if len(history.turns) != 0 || history.observedTurns != 0 || history.usage.InputTokens != 13 {
+		t.Fatalf("got %+v after reset, want empty conversation with usage kept", history)
+	}
+}

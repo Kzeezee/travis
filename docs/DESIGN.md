@@ -2699,7 +2699,7 @@ sourced from built-ins + skills + MCP prompts.
 │  │    /commit           write a commit message           skill:git-flow │
 │  ├──────────────────────────────────────────────────────────────────────┤
 │  │  switch provider or model                                            │
-│  │  usage: /model [profile|name]        aliases: /m                     │
+│  │  usage: /model [profile|name]                                        │
 │  ├──────────────────────────────────────────────────────────────────────┤
 │  │  ↑↓ navigate    ⏎ select    tab complete    esc close    ^d docs     │
 │  └──────────────────────────────────────────────────────────────────────┘
