@@ -357,7 +357,7 @@ func TestCrashHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	records := broker.SessionRecords{Log: stallAfterLoggedChange{sessionLog}, Backups: backups, IDs: &core.SequentialIDGenerator{Prefix: "e"}}
-	enforced := broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, records, core.SystemClock{})
+	enforced := broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, records, nil, "", core.SystemClock{})
 	if _, err := enforced.WriteFile(testTurn, os.Getenv("TARGET"), []byte("written by the agent")); err != nil {
 		t.Fatal(err)
 	}

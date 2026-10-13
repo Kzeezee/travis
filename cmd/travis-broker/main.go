@@ -16,6 +16,7 @@ import (
 	"github.com/Kzeezee/travis/internal/id"
 	"github.com/Kzeezee/travis/internal/security/broker"
 	"github.com/Kzeezee/travis/internal/state/blobs"
+	"github.com/Kzeezee/travis/internal/state/memory"
 	"github.com/Kzeezee/travis/internal/state/session/filestore"
 )
 
@@ -68,7 +69,7 @@ func run(ctx context.Context, args []string, readiness, diagnostics io.Writer) e
 	}
 	clock := core.SystemClock{}
 	records := broker.SessionRecords{Log: sessionLog, Backups: backups, IDs: id.BuildULIDGenerator(clock)}
-	effects := broker.BuildPolicyEnforcedBroker(paths.WorkspaceDir, sessionPolicy, records, clock)
+	effects := broker.BuildPolicyEnforcedBroker(paths.WorkspaceDir, sessionPolicy, records, memory.BuildStore(paths.StateDir), paths.StateDir, clock)
 
 	sessionListener, err := broker.ListenForSession(broker.SessionEndpoint(*endpoint))
 	if err != nil {

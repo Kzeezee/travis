@@ -41,6 +41,7 @@ type Options struct {
 	Input           io.Reader
 	Output          io.Writer
 	Undo            UndoActions
+	Questions       <-chan core.QuestionRequest
 }
 
 // UndoActions are the operations /undo runs: list the turns it can take back, and rewind from
@@ -131,6 +132,7 @@ type turnFinishedMsg struct {
 type inputEndedMsg struct{}
 
 type approvalRequestedMsg struct{ request core.ApprovalRequest }
+type questionRequestedMsg struct{ request core.QuestionRequest }
 
 func listenForEvents(events <-chan core.Event) tea.Cmd {
 	return func() tea.Msg { return collectEventBatch(events, coalesceWindow) }
@@ -143,6 +145,19 @@ func listenForApprovals(approvals <-chan core.ApprovalRequest) tea.Cmd {
 			return nil
 		}
 		return approvalRequestedMsg{request: request}
+	}
+}
+
+func listenForQuestions(questions <-chan core.QuestionRequest) tea.Cmd {
+	if questions == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		request, isOpen := <-questions
+		if !isOpen {
+			return nil
+		}
+		return questionRequestedMsg{request: request}
 	}
 }
 
@@ -181,6 +196,7 @@ type chatModel struct {
 	ctx       context.Context
 	events    <-chan core.Event
 	approvals <-chan core.ApprovalRequest
+	questions <-chan core.QuestionRequest
 	runTurn   func(context.Context, string) error
 	undo      UndoActions
 	modelName string
@@ -190,6 +206,7 @@ type chatModel struct {
 	input           textinput.Model
 	width           int
 	pendingApproval *core.ApprovalRequest
+	pendingQuestion *core.QuestionRequest
 	// undoPicker is open while the user chooses what /undo takes back; it takes every key.
 	undoPicker *undoPicker
 	// brokerFailure is set once the broker connection breaks; it never clears, since every
@@ -215,7 +232,7 @@ func buildChatModel(
 	input.Focus()
 
 	m := chatModel{
-		ctx: ctx, events: events, approvals: approvals, runTurn: runTurn, undo: opts.Undo, modelName: opts.ModelName,
+		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, runTurn: runTurn, undo: opts.Undo, modelName: opts.ModelName,
 		viewport: viewport.New(), input: input,
 	}
 	m.transcript.warnings = opts.StartupWarnings
@@ -224,7 +241,11 @@ func buildChatModel(
 }
 
 func (m chatModel) Init() tea.Cmd {
-	return tea.Batch(listenForEvents(m.events), listenForApprovals(m.approvals))
+	cmds := []tea.Cmd{listenForEvents(m.events), listenForApprovals(m.approvals)}
+	if m.questions != nil {
+		cmds = append(cmds, listenForQuestions(m.questions))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -252,6 +273,16 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingApproval = &msg.request
 		// Not re-armed here: only one modal at a time; handleApprovalKey re-arms it once answered.
 		return m, nil
+	case questionRequestedMsg:
+		if m.cancelTurn == nil {
+			return m, listenForQuestions(m.questions)
+		}
+		m.pendingQuestion = &msg.request
+		m.input.Prompt = " ? "
+		m.input.Reset()
+		m.refreshTranscript()
+		m.viewport.GotoBottom()
+		return m, nil
 	case turnFinishedMsg:
 		return m.finishTurn(msg)
 	case turnsListedMsg:
@@ -273,6 +304,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m chatModel) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.pendingApproval != nil {
 		return m.handleApprovalKey(key)
+	}
+	if m.pendingQuestion != nil {
+		return m.handleQuestionKey(key)
 	}
 	if m.undoPicker != nil {
 		return m.handleUndoPickerKey(key)
@@ -305,6 +339,33 @@ func (m chatModel) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(key)
+	return m, cmd
+}
+
+func (m chatModel) handleQuestionKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc", "ctrl+c":
+		m.requestCancel()
+		m.pendingQuestion = nil
+		m.input.Reset()
+		m.input.Prompt = " › "
+		m.refreshTranscript()
+		return m, listenForQuestions(m.questions)
+	case "enter":
+		answer := strings.TrimSpace(m.input.Value())
+		respond := m.pendingQuestion.Respond
+		m.pendingQuestion = nil
+		m.input.Reset()
+		m.input.Prompt = " › "
+		m.refreshTranscript()
+		respond(answer)
+		if m.questions != nil {
+			return m, listenForQuestions(m.questions)
+		}
+		return m, nil
+	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(key)
 	return m, cmd
@@ -370,6 +431,9 @@ func (m *chatModel) requestCancel() {
 func (m chatModel) finishTurn(msg turnFinishedMsg) (tea.Model, tea.Cmd) {
 	m.cancelTurn()
 	m.cancelTurn = nil
+	hadPendingQuestion := m.pendingQuestion != nil
+	m.pendingQuestion = nil
+	m.input.Prompt = " › "
 
 	outcome, failure := turnFailed, ""
 	switch {
@@ -387,6 +451,9 @@ func (m chatModel) finishTurn(msg turnFinishedMsg) (tea.Model, tea.Cmd) {
 	if m.hasInputEnded {
 		return m, tea.Quit
 	}
+	if hadPendingQuestion {
+		return m, listenForQuestions(m.questions)
+	}
 	return m, nil
 }
 
@@ -401,7 +468,11 @@ func (m *chatModel) resize(width, height int) {
 // refreshTranscript re-renders the transcript, following new output unless the user scrolled up.
 func (m *chatModel) refreshTranscript() {
 	isFollowingLatest := m.viewport.AtBottom()
-	m.viewport.SetContent(renderTranscript(m.transcript, m.width))
+	content := renderTranscript(m.transcript, m.width)
+	if m.pendingQuestion != nil {
+		content += "\n\n" + wrapWithMargin(assistantLabelStyle.Render("travis asks ›")+" "+m.pendingQuestion.Text, m.width)
+	}
+	m.viewport.SetContent(content)
 	if isFollowingLatest {
 		m.viewport.GotoBottom()
 	}

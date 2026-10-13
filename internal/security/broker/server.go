@@ -154,6 +154,16 @@ func (s *connectionSession) perform(ctx context.Context, req Request) (Response,
 		return Response{}, s.effects.AddDecisionRule(ctx, ConvertDecisionRuleMessage(*req.Rule))
 	case OpAppendEntries, OpListTurns, OpRewind:
 		return s.answerSessionLog(ctx, req)
+	case OpReadMemory, OpReplaceMemory:
+		store, isStore := s.effects.(core.MemoryStore)
+		if !isStore {
+			return Response{}, fmt.Errorf("this broker keeps no memory: %w", core.ErrUnsupported)
+		}
+		if req.Op == OpReadMemory {
+			content, err := store.ReadMemory(ctx)
+			return Response{Data: []byte(content)}, err
+		}
+		return Response{}, store.ReplaceMemory(ctx, string(req.Data))
 	}
 	return Response{}, fmt.Errorf("unknown op %q: %w", req.Op, core.ErrInvalid)
 }

@@ -48,8 +48,9 @@ const maxApprovalsPerEffect = 3
 const decisionRuleSource = "approval modal"
 
 var (
-	_ core.Broker     = (*RemoteBroker)(nil)
-	_ core.SessionLog = (*RemoteBroker)(nil)
+	_ core.Broker      = (*RemoteBroker)(nil)
+	_ core.SessionLog  = (*RemoteBroker)(nil)
+	_ core.MemoryStore = (*RemoteBroker)(nil)
 )
 
 func BuildRemoteBroker(conn net.Conn, options RemoteOptions) *RemoteBroker {
@@ -163,6 +164,22 @@ func (r *RemoteBroker) WriteFile(ctx context.Context, path string, content []byt
 
 func (r *RemoteBroker) AddDecisionRule(ctx context.Context, rule core.DecisionRule) error {
 	_, err := r.exchange(ctx, Request{Op: OpAddDecisionRule, Rule: BuildDecisionRuleMessage(rule)})
+	return err
+}
+
+func (r *RemoteBroker) ReadMemory(ctx context.Context) (string, error) {
+	resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, Request{Op: OpReadMemory, Path: "memory"})
+	if err != nil {
+		return "", err
+	}
+	return string(resp.Data), nil
+}
+
+func (r *RemoteBroker) ReplaceMemory(ctx context.Context, content string) error {
+	if len(content) > 8<<10 {
+		return fmt.Errorf("memory exceeds 8 KB: %w", core.ErrInvalid)
+	}
+	_, err := r.exchangeEffect(ctx, core.CapabilityFSWrite, Request{Op: OpReplaceMemory, Path: "memory", Data: []byte(content)})
 	return err
 }
 
