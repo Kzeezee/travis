@@ -17,7 +17,7 @@ func TestEvaluateProperties(t *testing.T) {
 	deny := config.BuildDenyGlobs(config.PathSet{StateDir: r.state}, r.Home)
 	denySets := map[bool]capabilities.Set{}
 	for _, isCaseInsensitive := range []bool{false, true} {
-		denySets[isCaseInsensitive] = New(nil, deny.Read, deny.Write, isCaseInsensitive).deny
+		denySets[isCaseInsensitive] = New(nil, deny.Read, deny.Write, isCaseInsensitive, "").deny
 	}
 
 	grantPool := []capabilities.Set{
@@ -46,7 +46,7 @@ func TestEvaluateProperties(t *testing.T) {
 		isCaseInsensitive := rng.IntN(2) == 0
 		req := Request{Kind: kindPool[rng.IntN(len(kindPool))], Target: target, IsFromUntrustedStep: rng.IntN(4) == 0}
 
-		got := New(grants, deny.Read, deny.Write, isCaseInsensitive).Evaluate(context.Background(), req)
+		got := New(grants, deny.Read, deny.Write, isCaseInsensitive, "").Evaluate(context.Background(), req)
 		if _, isDenyHit := denySets[isCaseInsensitive].SelectMatching(req.Kind, target, isCaseInsensitive); isDenyHit && got.Verdict != Deny {
 			t.Fatalf("iteration %d: deny hit %+v (caseInsensitive=%v) got %s", i, req, isCaseInsensitive, got.Verdict)
 		}

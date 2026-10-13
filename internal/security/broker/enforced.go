@@ -11,6 +11,7 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/security/capabilities"
 	"github.com/Kzeezee/travis/internal/security/policy"
+	"github.com/Kzeezee/travis/internal/state/memory"
 )
 
 // SessionRoots are the directories a session's grants and deny-list are anchored to.
@@ -37,16 +38,34 @@ func BuildSessionPolicy(profile string, roots SessionRoots) (policy.Policy, erro
 	if err != nil {
 		return policy.Policy{}, err
 	}
+	memoryPath := filepath.Join(paths.StateDir, memory.FileName)
+	grants = append(grants, core.Capability{Kind: core.CapabilityFSRead, Scope: filepath.ToSlash(memoryPath)})
+	if profile != "paranoid" {
+		grants = append(grants, core.Capability{Kind: core.CapabilityFSWrite, Scope: filepath.ToSlash(memoryPath)})
+	}
 	deny := config.BuildDenyGlobs(paths, home)
-	return policy.New(grants, deny.Read, deny.Write, config.IsPathCaseInsensitive()), nil
+	return policy.New(grants, deny.Read, deny.Write, config.IsPathCaseInsensitive(), memoryPath), nil
 }
 
-// resolveRootSymlinks keeps a root that does not exist yet as written; nothing under it exists either.
+// resolveRootSymlinks resolves the existing ancestor so a later-created root keeps the same path.
 func resolveRootSymlinks(root string) string {
-	if resolved, err := filepath.EvalSymlinks(root); err == nil {
-		return resolved
+	root = filepath.Clean(root)
+	ancestor := root
+	var missing []string
+	for {
+		if resolved, err := filepath.EvalSymlinks(ancestor); err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return resolved
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return root
+		}
+		missing = append(missing, filepath.Base(ancestor))
+		ancestor = parent
 	}
-	return filepath.Clean(root)
 }
 
 // PolicyEnforcedBroker is the broker process's effect performer: every path is checked by the
@@ -61,25 +80,57 @@ type PolicyEnforcedBroker struct {
 	sessionPolicy policy.Policy
 	approvals     approvalLedger
 	records       SessionRecords
+	memoryStore   core.MemoryStore
+	memoryPath    string
 }
 
 var _ core.Broker = (*PolicyEnforcedBroker)(nil)
 
-func BuildPolicyEnforcedBroker(workspaceDir string, sessionPolicy policy.Policy, records SessionRecords, clock core.Clock) *PolicyEnforcedBroker {
+func BuildPolicyEnforcedBroker(workspaceDir string, sessionPolicy policy.Policy, records SessionRecords, memoryStore core.MemoryStore, stateDir string, clock core.Clock) *PolicyEnforcedBroker {
 	b := &PolicyEnforcedBroker{
 		LocalBroker:   buildLocalBrokerForWorkspace(workspaceDir, clock),
 		sessionPolicy: sessionPolicy,
+		memoryStore:   memoryStore,
 		approvals: approvalLedger{
 			alwaysAllowed: map[core.Capability]bool{}, onceAllowed: map[core.Capability]bool{},
 			irreversibleAsked: map[core.Capability]bool{}, irreversibleAllowed: map[core.Capability]bool{},
 		},
 		records: records,
 	}
+	if memoryStore != nil {
+		b.memoryPath = filepath.Join(resolveRootSymlinks(stateDir), memory.FileName)
+	}
 	b.paths = config.PathSet{WorkspaceDir: b.resolvedRoot}
 	b.authorizeRead = func(ctx context.Context, path string) error { return b.authorize(ctx, core.CapabilityFSRead, path) }
 	b.authorizeWrite = func(ctx context.Context, path string) error { return b.authorize(ctx, core.CapabilityFSWrite, path) }
 	b.recordWrite = b.backUpAndLogWrite
 	return b
+}
+
+func (b *PolicyEnforcedBroker) ReadMemory(ctx context.Context) (string, error) {
+	if b.memoryStore == nil {
+		return "", fmt.Errorf("memory is unavailable: %w", core.ErrUnsupported)
+	}
+	if err := b.authorizeMemory(ctx, core.CapabilityFSRead); err != nil {
+		b.approvals.settleOnce(err)
+		return "", err
+	}
+	content, err := b.memoryStore.ReadMemory(ctx)
+	b.approvals.settleOnce(err)
+	return content, err
+}
+
+func (b *PolicyEnforcedBroker) ReplaceMemory(ctx context.Context, content string) error {
+	if b.memoryStore == nil {
+		return fmt.Errorf("memory is unavailable: %w", core.ErrUnsupported)
+	}
+	if err := b.authorizeMemory(ctx, core.CapabilityFSWrite); err != nil {
+		b.approvals.settleOnce(err)
+		return err
+	}
+	err := b.memoryStore.ReplaceMemory(ctx, content)
+	b.approvals.settleOnce(err)
+	return err
 }
 
 func (b *PolicyEnforcedBroker) DescribePath(ctx context.Context, path string) (core.PathInfo, error) {
@@ -151,7 +202,9 @@ func (b *PolicyEnforcedBroker) AddDecisionRule(ctx context.Context, rule core.De
 }
 
 func (b *PolicyEnforcedBroker) requireAsk(ctx context.Context, approved core.Capability) error {
-	decision := b.sessionPolicy.Evaluate(ctx, buildPolicyRequest(ctx, approved.Kind, approved.Scope))
+	request := buildPolicyRequest(ctx, approved.Kind, approved.Scope)
+	request.IsManagedMemory = b.memoryStore != nil && approved.Scope == b.memoryPath
+	decision := b.sessionPolicy.Evaluate(ctx, request)
 	if decision.Verdict != policy.Ask {
 		return fmt.Errorf("%s %q is not awaiting approval (%s): %w", approved.Kind, approved.Scope, reportDecidingRule(decision), core.ErrDenied)
 	}
@@ -159,7 +212,18 @@ func (b *PolicyEnforcedBroker) requireAsk(ctx context.Context, approved core.Cap
 }
 
 func (b *PolicyEnforcedBroker) authorize(ctx context.Context, kind core.CapabilityKind, path string) error {
-	decision := b.sessionPolicy.Evaluate(ctx, buildPolicyRequest(ctx, kind, path))
+	return b.authorizeRequest(ctx, buildPolicyRequest(ctx, kind, path))
+}
+
+func (b *PolicyEnforcedBroker) authorizeMemory(ctx context.Context, kind core.CapabilityKind) error {
+	request := buildPolicyRequest(ctx, kind, b.memoryPath)
+	request.IsManagedMemory = true
+	return b.authorizeRequest(ctx, request)
+}
+
+func (b *PolicyEnforcedBroker) authorizeRequest(ctx context.Context, request policy.Request) error {
+	kind, path := request.Kind, request.Target
+	decision := b.sessionPolicy.Evaluate(ctx, request)
 	switch decision.Verdict {
 	case policy.Allow:
 		return nil

@@ -112,6 +112,7 @@ func TestStartupWarningsShowInTheFirstFrame(t *testing.T) {
 func TestQuestionIsShownAndTheTypedAnswerIsReturned(t *testing.T) {
 	answers := make(chan string, 1)
 	m := buildTestModel(nil)
+	m.cancelTurn = func() {}
 	m, _ = updateModel(m, questionRequestedMsg{request: core.QuestionRequest{
 		Text: "Which day?", Respond: func(answer string) { answers <- answer },
 	}})

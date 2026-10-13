@@ -35,7 +35,7 @@ func buildTestPolicy(t *testing.T, r testRoots, profile string, isCaseInsensitiv
 		t.Fatal(err)
 	}
 	deny := config.BuildDenyGlobs(config.PathSet{StateDir: r.state}, r.Home)
-	return New(grants, deny.Read, deny.Write, isCaseInsensitive)
+	return New(grants, deny.Read, deny.Write, isCaseInsensitive, "")
 }
 
 func TestEvaluate(t *testing.T) {

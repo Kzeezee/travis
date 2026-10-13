@@ -274,6 +274,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Not re-armed here: only one modal at a time; handleApprovalKey re-arms it once answered.
 		return m, nil
 	case questionRequestedMsg:
+		if m.cancelTurn == nil {
+			return m, listenForQuestions(m.questions)
+		}
 		m.pendingQuestion = &msg.request
 		m.input.Prompt = " ? "
 		m.input.Reset()

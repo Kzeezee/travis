@@ -20,6 +20,7 @@ import (
 	"github.com/Kzeezee/travis/internal/security/broker"
 	"github.com/Kzeezee/travis/internal/security/redact"
 	"github.com/Kzeezee/travis/internal/state/blobs"
+	"github.com/Kzeezee/travis/internal/state/memory"
 	"github.com/Kzeezee/travis/internal/state/session/filestore"
 )
 
@@ -90,6 +91,66 @@ func readLatestToolResult(t *testing.T, request core.ProviderRequest) core.ToolR
 		t.Fatalf("last part is %#v, want a successful tool result", last.Parts[0])
 	}
 	return part.ToolResult
+}
+
+type fixedQuestioner struct {
+	question string
+}
+
+func (q *fixedQuestioner) AskUser(_ context.Context, question string) (string, error) {
+	q.question = question
+	return "Friday", nil
+}
+
+func TestAskUserAndMemoryRunThroughTheRealConversationAndBroker(t *testing.T) {
+	provider := &scriptedProvider{t: t, steps: []scriptedStep{
+		func(t *testing.T, request core.ProviderRequest) []core.Chunk {
+			offered := map[string]bool{}
+			for _, spec := range request.Tools {
+				offered[spec.Name] = true
+			}
+			if !offered["ask_user"] || !offered["memory"] {
+				t.Fatalf("missing core tools: %v", offered)
+			}
+			return buildToolCallChunks("ask", "ask_user", `{"question":"Which day?"}`)
+		},
+		func(t *testing.T, request core.ProviderRequest) []core.Chunk {
+			if got := readLatestToolResult(t, request).Content; got != "Friday" {
+				t.Fatalf("answer = %q", got)
+			}
+			return buildToolCallChunks("save", "memory", `{"action":"replace","content":"Deadline: Friday"}`)
+		},
+		func(t *testing.T, request core.ProviderRequest) []core.Chunk {
+			requireContains(t, "memory replace", readLatestToolResult(t, request).Content, "Deadline: Friday")
+			return buildToolCallChunks("read", "memory", `{"action":"read"}`)
+		},
+		func(t *testing.T, request core.ProviderRequest) []core.Chunk {
+			requireContains(t, "memory read", readLatestToolResult(t, request).Content, "Deadline: Friday")
+			return []core.Chunk{{Text: "I remembered Friday.", Finish: core.StopEndTurn}}
+		},
+	}}
+	paths := config.PathSet{WorkspaceDir: t.TempDir(), StateDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t)}
+	var diagnostics strings.Builder
+	bus := buildSessionBus(&diagnostics)
+	remote, stateDir := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
+	paths.StateDir = stateDir
+	questioner := &fixedQuestioner{}
+	cfg := &config.Config{Brain: config.BrainCfg{MaxSteps: 5}, Tools: config.ToolsCfg{MaxExposed: 60}}
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, questioner, bus, redact.New(), "scripted-model", &diagnostics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.conversation.RunAssistantTurn(context.Background(), "remember my deadline"); err != nil {
+		t.Fatal(err)
+	}
+	session.close()
+	if questioner.question != "Which day?" {
+		t.Fatalf("question = %q", questioner.question)
+	}
+	stored, err := os.ReadFile(filepath.Join(stateDir, memory.FileName))
+	if err != nil || !strings.Contains(string(stored), "Deadline: Friday") {
+		t.Fatalf("memory file = %q, %v", stored, err)
+	}
 }
 
 func requireContains(t *testing.T, step, content, want string) {
@@ -221,7 +282,7 @@ func runNotesTask(t *testing.T, provider core.Provider, model string) notesTaskR
 	var diagnostics strings.Builder
 	bus := buildSessionBus(&diagnostics)
 	remote, _ := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, nil, bus, redact.New(), model, &diagnostics)
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, nil, bus, redact.New(), model, &diagnostics)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +424,7 @@ func TestWriteTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
 	var diagnostics strings.Builder
 	bus := buildSessionBus(io.Discard)
 	remote, brokerStateDir := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard)
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,7 +561,7 @@ func TestUndoRewindsFilesAndConversationThroughTheRealBroker(t *testing.T) {
 	var diagnostics strings.Builder
 	bus := buildSessionBus(io.Discard)
 	remote, brokerStateDir := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard)
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
