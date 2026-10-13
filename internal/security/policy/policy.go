@@ -37,6 +37,7 @@ type Request struct {
 	Kind                core.CapabilityKind
 	Target              string
 	IsFromUntrustedStep bool
+	IsManagedMemory     bool
 }
 
 type Decision struct {
@@ -49,10 +50,11 @@ type Policy struct {
 	grants            capabilities.Set
 	deny              capabilities.Set
 	isCaseInsensitive bool
+	managedMemoryPath string
 }
 
 // New builds a policy; callers extend readDeny (e.g. from .travisignore), never shrink it.
-func New(grants capabilities.Set, readDeny, writeDeny []string, isCaseInsensitive bool) Policy {
+func New(grants capabilities.Set, readDeny, writeDeny []string, isCaseInsensitive bool, managedMemoryPath string) Policy {
 	var deny capabilities.Set
 	for _, glob := range readDeny {
 		deny = append(deny, core.Capability{Kind: core.CapabilityFSRead, Scope: glob})
@@ -60,7 +62,7 @@ func New(grants capabilities.Set, readDeny, writeDeny []string, isCaseInsensitiv
 	for _, glob := range writeDeny {
 		deny = append(deny, core.Capability{Kind: core.CapabilityFSWrite, Scope: glob})
 	}
-	return Policy{grants: grants, deny: deny, isCaseInsensitive: isCaseInsensitive}
+	return Policy{grants: grants, deny: deny, isCaseInsensitive: isCaseInsensitive, managedMemoryPath: managedMemoryPath}
 }
 
 // Checks if request is in deny list -> check if it is in grants -> asks if running a command/untrusted input
@@ -73,14 +75,19 @@ func (p Policy) Evaluate(_ context.Context, req Request) Decision {
 	note := func(format string, args ...any) { trace = append(trace, "pass: "+fmt.Sprintf(format, args...)) }
 
 	isFS := req.Kind == core.CapabilityFSRead || req.Kind == core.CapabilityFSWrite
+	if req.IsManagedMemory && (!isFS || req.Target != p.managedMemoryPath || p.managedMemoryPath == "") {
+		return decide(Deny, "managed memory request does not name the broker's memory file")
+	}
 	if isFS {
 		// Symlink resolution is the broker's job; here an unresolved-looking path is simply refused.
 		if !isResolvedPath(req.Target) {
 			return decide(Deny, "%s %q is not a resolved absolute path", req.Kind, req.Target)
 		}
 		note("%s %q is resolved", req.Kind, req.Target)
-		if glob, isDenied := p.deny.SelectMatching(req.Kind, req.Target, p.isCaseInsensitive); isDenied {
-			return decide(Deny, "%s %q matches deny %q", req.Kind, req.Target, glob.Scope)
+		if !req.IsManagedMemory {
+			if glob, isDenied := p.deny.SelectMatching(req.Kind, req.Target, p.isCaseInsensitive); isDenied {
+				return decide(Deny, "%s %q matches deny %q", req.Kind, req.Target, glob.Scope)
+			}
 		}
 		note("%s %q matches no deny rule", req.Kind, req.Target)
 	}

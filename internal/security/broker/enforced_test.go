@@ -38,7 +38,7 @@ func buildRecordedSessionBroker(t *testing.T, profile string, records broker.Ses
 	if err != nil {
 		t.Fatal(err)
 	}
-	return broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, records, core.SystemClock{}), workspace, home
+	return broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, records, nil, "", core.SystemClock{}), workspace, home
 }
 
 func TestPolicyEnforcedBrokerReadsGrantedWorkspaceFiles(t *testing.T) {
@@ -135,8 +135,8 @@ func TestPolicyEnforcedBrokerOpensAFileIffPolicyAllowsIt(t *testing.T) {
 				readDeny = append(readDeny, glob)
 			}
 		}
-		sessionPolicy := policy.New(grants, readDeny, nil, isCaseInsensitive)
-		enforced := broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, discardRecords(), core.SystemClock{})
+		sessionPolicy := policy.New(grants, readDeny, nil, isCaseInsensitive, "")
+		enforced := broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, discardRecords(), nil, "", core.SystemClock{})
 		isAllowed := func(path string) bool {
 			req := policy.Request{Kind: core.CapabilityFSRead, Target: path}
 			return sessionPolicy.Evaluate(context.Background(), req).Verdict == policy.Allow
@@ -247,8 +247,8 @@ func TestPolicyEnforcedBrokerWritesAFileIffPolicyAllowsIt(t *testing.T) {
 				writeDeny = append(writeDeny, glob)
 			}
 		}
-		sessionPolicy := policy.New(grants, nil, writeDeny, isCaseInsensitive)
-		enforced := broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, discardRecords(), core.SystemClock{})
+		sessionPolicy := policy.New(grants, nil, writeDeny, isCaseInsensitive, "")
+		enforced := broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, discardRecords(), nil, "", core.SystemClock{})
 
 		for _, path := range requested {
 			target := path
@@ -341,7 +341,7 @@ func TestPolicyEnforcedBrokerAcceptsAbsolutePathsThroughASymlinkedWorkspace(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	enforced := broker.BuildPolicyEnforcedBroker(linked, sessionPolicy, discardRecords(), core.SystemClock{})
+	enforced := broker.BuildPolicyEnforcedBroker(linked, sessionPolicy, discardRecords(), nil, "", core.SystemClock{})
 
 	if _, err := enforced.DescribePath(context.Background(), filepath.Join(linked, "a.txt")); err != nil {
 		t.Fatalf("DescribePath(absolute through the link) = %v", err)

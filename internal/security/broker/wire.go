@@ -20,9 +20,9 @@ import (
 
 // ProtocolVersion is carried on every request; a broker refuses any version it does not speak.
 // Version 2 added write_file, approve_once, add_decision_rule, the needs_approval error and
-// list_directory paging. Version 3 added append_entries, list_turns, the turn and call every
-// request is made under, and irreversible approvals. Version 4 added rewind.
-const ProtocolVersion uint16 = 4
+// list_directory paging. Version 3 added session entries and irreversible approvals; version 4
+// added rewind; version 5 adds managed memory operations.
+const ProtocolVersion uint16 = 5
 
 const (
 	// MaxFrameBytes bounds what either side allocates for one message.
@@ -52,7 +52,9 @@ const (
 	OpAppendEntries Op = "append_entries"
 	OpListTurns     Op = "list_turns"
 	// OpRewind takes back FromTurn and every later turn, as Mode says.
-	OpRewind Op = "rewind"
+	OpRewind        Op = "rewind"
+	OpReadMemory    Op = "read_memory"
+	OpReplaceMemory Op = "replace_memory"
 )
 
 type Request struct {
@@ -245,6 +247,14 @@ func validateRequest(req Request) error {
 	case OpRewind:
 		if req.FromTurn == "" || req.Mode == "" {
 			return fmt.Errorf("%s needs a turn and a mode: %w", req.Op, core.ErrInvalid)
+		}
+	case OpReadMemory:
+		if req.Path != "memory" || len(req.Data) != 0 {
+			return fmt.Errorf("%s needs the fixed memory target: %w", req.Op, core.ErrInvalid)
+		}
+	case OpReplaceMemory:
+		if req.Path != "memory" || len(req.Data) > 8<<10 {
+			return fmt.Errorf("%s needs the fixed memory target and at most 8 KB: %w", req.Op, core.ErrInvalid)
 		}
 	default:
 		return fmt.Errorf("unknown op %q: %w", req.Op, core.ErrInvalid)

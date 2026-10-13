@@ -278,7 +278,7 @@ func buildWorkspaceBroker(t *testing.T, base, workspace string, records broker.S
 	if err != nil {
 		t.Fatal(err)
 	}
-	return broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, records, core.SystemClock{})
+	return broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, records, nil, "", core.SystemClock{})
 }
 
 func captureFiles(t *testing.T, workspace string, names []string) map[string]string {
