@@ -104,7 +104,7 @@ func runRedTeamCase(t *testing.T, scenario redTeamCase) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	effects := broker.BuildPolicyEnforcedBroker(roots.workspace, policy, discardRecords(), core.SystemClock{})
+	effects := broker.BuildPolicyEnforcedBroker(roots.workspace, policy, discardRecords(), nil, "", core.SystemClock{})
 	events := &recordingSink{}
 	approver := &scriptedApprover{decision: core.ApprovalOnce}
 	if scenario.Untrusted {
@@ -235,7 +235,7 @@ func TestRedTeamGateExecAlwaysAsksAndCannotGainAnAlwaysRule(t *testing.T) {
 	if decision := p.Evaluate(context.Background(), request); decision.Verdict != policy.Ask {
 		t.Fatalf("exec verdict = %v, want Ask", decision.Verdict)
 	}
-	enforced := broker.BuildPolicyEnforcedBroker(paths.WorkspaceDir, p, discardRecords(), core.SystemClock{})
+	enforced := broker.BuildPolicyEnforcedBroker(paths.WorkspaceDir, p, discardRecords(), nil, "", core.SystemClock{})
 	rule := core.DecisionRule{Kind: core.CapabilityExec, Scope: "go", Decision: core.DecisionAllow, Source: "red-team"}
 	if err := enforced.AddDecisionRule(context.Background(), rule); !errors.Is(err, core.ErrDenied) {
 		t.Fatalf("exec always rule = %v, want denied", err)
