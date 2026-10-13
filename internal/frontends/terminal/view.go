@@ -128,13 +128,16 @@ func reportOutcome(outcome turnOutcome) string {
 }
 
 func renderTranscript(t transcript, width int) string {
-	sections := make([]string, 0, len(t.turns)+1)
+	sections := make([]string, 0, len(t.turns)+2)
 	if len(t.warnings) > 0 {
 		warnings := make([]string, 0, len(t.warnings))
 		for _, warning := range t.warnings {
 			warnings = append(warnings, wrapWithMargin(warningStyle.Render("⚠ "+warning), width))
 		}
 		sections = append(sections, strings.Join(warnings, "\n"))
+	}
+	if len(t.notices) > 0 {
+		sections = append(sections, renderNotices(t.notices, width))
 	}
 	for _, turn := range t.turns {
 		switch {
