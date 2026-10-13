@@ -40,13 +40,17 @@ type RemoteOptions struct {
 // connection is declared broken.
 const brokerExchangeTimeout = 30 * time.Second
 
-// maxApprovalsPerEffect covers an effect whose as-written and resolved paths each Ask.
-const maxApprovalsPerEffect = 2
+// maxApprovalsPerEffect covers a write whose as-written and resolved paths each Ask and which
+// then turns out too large to back up.
+const maxApprovalsPerEffect = 3
 
 // decisionRuleSource is the audit text on rules the approval modal creates.
 const decisionRuleSource = "approval modal"
 
-var _ core.Broker = (*RemoteBroker)(nil)
+var (
+	_ core.Broker     = (*RemoteBroker)(nil)
+	_ core.SessionLog = (*RemoteBroker)(nil)
+)
 
 func BuildRemoteBroker(conn net.Conn, options RemoteOptions) *RemoteBroker {
 	if options.Clock == nil {
@@ -147,12 +151,48 @@ func (r *RemoteBroker) WriteFile(ctx context.Context, path string, content []byt
 	if err != nil {
 		return core.PathInfo{}, err
 	}
-	return convertRequiredPathInfo(resp)
+	info, err := convertRequiredPathInfo(resp)
+	if err != nil {
+		return core.PathInfo{}, err
+	}
+	header := r.buildEventHeader()
+	header.TurnID = core.ReportTurnID(ctx)
+	r.publish(ctx, core.FileChanged{EventHeader: header, CallID: core.ReportToolCallID(ctx), Path: info.WorkspacePath})
+	return info, nil
 }
 
 func (r *RemoteBroker) AddDecisionRule(ctx context.Context, rule core.DecisionRule) error {
 	_, err := r.exchange(ctx, Request{Op: OpAddDecisionRule, Rule: BuildDecisionRuleMessage(rule)})
 	return err
+}
+
+// AppendEntries logs completed messages in the broker's session log and returns once they are durable.
+func (r *RemoteBroker) AppendEntries(ctx context.Context, entries []core.SessionEntry) error {
+	messages, err := BuildEntryMessages(entries)
+	if err != nil {
+		return err
+	}
+	_, err = r.exchange(ctx, Request{Op: OpAppendEntries, Entries: messages})
+	return err
+}
+
+func (r *RemoteBroker) ListTurns(ctx context.Context) ([]core.TurnSummary, error) {
+	resp, err := r.exchange(ctx, Request{Op: OpListTurns})
+	if err != nil {
+		return nil, err
+	}
+	return ConvertTurnSummaryMessages(resp.Turns), nil
+}
+
+func (r *RemoteBroker) Rewind(ctx context.Context, fromTurn core.ID, mode core.RewindMode) (core.RewindReport, error) {
+	resp, err := r.exchange(ctx, Request{Op: OpRewind, FromTurn: string(fromTurn), Mode: string(mode)})
+	if err != nil {
+		return core.RewindReport{}, err
+	}
+	if resp.Rewind == nil {
+		return core.RewindReport{}, fmt.Errorf("broker answered rewind without a report: %w", core.ErrInvalid)
+	}
+	return ConvertRewindReportMessage(*resp.Rewind)
 }
 
 // exchangeEffect is exchange for a request policy decides: an Ask goes to the human and the
@@ -232,6 +272,7 @@ func (r *RemoteBroker) exchange(ctx context.Context, req Request) (Response, err
 	r.nextID++
 	req.Version, req.ID = ProtocolVersion, r.nextID
 	req.IsFromUntrustedStep = core.ReportIsFromUntrustedStep(ctx)
+	req.Turn, req.Call = string(core.ReportTurnID(ctx)), string(core.ReportToolCallID(ctx))
 	resp, err := r.sendAndReceive(req)
 	if errors.Is(err, errFrameTooLarge) {
 		return Response{}, err

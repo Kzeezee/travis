@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/Kzeezee/travis/internal/core"
+	"github.com/Kzeezee/travis/internal/state/session"
 )
 
 // ToolLookup is the loop's view of the registry: what to offer the model this step,
@@ -20,11 +22,13 @@ type ToolLookup interface {
 	Lookup(name string) (core.Tool, bool)
 }
 
-// Dependencies are the ports a conversation runs against; the caller picks the adapters.
+// Dependencies are the ports a conversation runs against; the caller picks the adapters. Log
+// is where every completed message is recorded before the loop acts on it; nil records nothing.
 type Dependencies struct {
 	Provider core.Provider
 	Tools    ToolLookup
 	Events   core.EventSink
+	Log      core.SessionLog
 	Clock    core.Clock
 	IDs      core.IDGenerator
 }
@@ -43,18 +47,23 @@ const (
 // core seams only, so the concrete provider, tools, event delivery, clock, and IDs are
 // all chosen by the caller.
 //
-// RunAssistantTurn mutates the conversation, so turns must be serialised; the caller
-// decides when a new prompt may start.
+// RunAssistantTurn and Rewind mutate the conversation, so they never overlap: a turn waits for
+// the one before it, and a rewind is refused while a turn runs.
 type AssistantConversation struct {
+	busy sync.Mutex
+
 	provider core.Provider
 	tools    ToolLookup
 	events   core.EventSink
+	log      core.SessionLog
 	clock    core.Clock
 	ids      core.IDGenerator
 	model    string
 	maxSteps int
 
-	history []core.Message
+	// entries is this conversation's copy of what it recorded in the session log; the history
+	// the model sees is always rebuilt from it, never kept separately.
+	entries []core.SessionEntry
 	// turnID is minted when a turn starts and stamped on every event it publishes.
 	turnID core.ID
 }
@@ -66,6 +75,7 @@ func BuildAssistantConversation(deps Dependencies, model string, maxSteps int) *
 		provider: deps.Provider,
 		tools:    deps.Tools,
 		events:   deps.Events,
+		log:      deps.Log,
 		clock:    deps.Clock,
 		ids:      deps.IDs,
 		model:    model,
@@ -86,10 +96,15 @@ type stepReply struct {
 // error reports required work that failed while the caller waited; the assistant's own
 // text arrives through the event sink, not the return value.
 func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt string) error {
+	c.busy.Lock()
+	defer c.busy.Unlock()
 	c.turnID = c.ids.GenerateID()
 	userMessage := core.Message{Role: core.RoleUser, Parts: []core.Part{core.TextPart{Text: prompt}}}
-	c.history = append(c.history, userMessage)
 	c.events.Publish(ctx, core.UserMessageSubmitted{EventHeader: c.buildEventHeader(), Message: userMessage})
+	if err := c.recordMessage(ctx, userMessage); err != nil {
+		c.completeTurn(ctx, core.StopError, core.Usage{})
+		return err
+	}
 
 	var usage core.Usage
 	for step := 0; step < c.maxSteps; step++ {
@@ -101,14 +116,17 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 		usage.InputTokens += reply.usage.InputTokens
 		usage.OutputTokens += reply.usage.OutputTokens
 
-		c.history = append(c.history, buildAssistantMessage(reply))
+		if err := c.recordMessage(ctx, buildAssistantMessage(reply)); err != nil {
+			c.completeTurn(ctx, core.StopError, usage)
+			return err
+		}
 		if len(reply.calls) == 0 {
 			c.completeTurn(ctx, reply.reason, usage)
 			return nil
 		}
 
 		results, err := c.runToolCalls(ctx, reply.calls)
-		c.history = append(c.history, core.Message{Role: core.RoleTool, Parts: results})
+		err = errors.Join(err, c.recordToolResults(ctx, results))
 		if err != nil {
 			c.completeTurn(ctx, core.StopError, usage)
 			return err
@@ -119,13 +137,52 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 	return nil
 }
 
+// ListTurns reports the turns still in the conversation, as the session log has them.
+func (c *AssistantConversation) ListTurns(ctx context.Context) ([]core.TurnSummary, error) {
+	if c.log == nil {
+		return nil, nil
+	}
+	return c.log.ListTurns(ctx)
+}
+
+// Rewind takes back fromTurn and every later turn, as mode says (/undo). The session log does
+// the work and records it; the conversation then applies the same entries to its own copy, so
+// the next request leaves out what was rewound, or tells the model which files changed back.
+func (c *AssistantConversation) Rewind(ctx context.Context, fromTurn core.ID, mode core.RewindMode) (core.RewindReport, error) {
+	if !c.busy.TryLock() {
+		return core.RewindReport{}, fmt.Errorf("a turn is running; rewind once it ends: %w", core.ErrInvalid)
+	}
+	defer c.busy.Unlock()
+	if c.log == nil {
+		return core.RewindReport{}, fmt.Errorf("this conversation keeps no session log to rewind: %w", core.ErrInvalid)
+	}
+	report, err := c.log.Rewind(ctx, fromTurn, mode)
+	if err != nil {
+		return core.RewindReport{}, err
+	}
+
+	header := core.EventHeader{ID: c.ids.GenerateID(), At: c.clock.ReportCurrentTime()}
+	if mode.IsRevertingFiles() {
+		record := core.RewindRecord{FromTurn: fromTurn, Mode: mode, Files: report.Files}
+		c.entries = append(c.entries, core.SessionEntry{Kind: core.EntryFilesReverted, Rewind: &record})
+		c.events.Publish(ctx, core.FilesReverted{EventHeader: header, FromTurn: fromTurn, Files: report.Files})
+	}
+	if mode.IsRewindingConversation() {
+		record := core.RewindRecord{FromTurn: fromTurn, Mode: mode}
+		c.entries = append(c.entries, core.SessionEntry{Kind: core.EntryRewound, Rewind: &record})
+		header.ID = c.ids.GenerateID()
+		c.events.Publish(ctx, core.ConversationRewound{EventHeader: header, FromTurn: fromTurn, Mode: mode})
+	}
+	return report, nil
+}
+
 // runStep makes exactly one provider call; it exists so the stream closes every step.
 func (c *AssistantConversation) runStep(ctx context.Context, hint string) (stepReply, error) {
 	tools := c.buildToolSpecs(ctx, hint)
 	request := core.ProviderRequest{
 		Model:    c.model,
 		System:   buildSystemPrompt(c.clock.ReportCurrentTime()),
-		Messages: c.history,
+		Messages: session.BuildHistory(c.entries),
 		Tools:    tools,
 	}
 	stream, err := c.provider.Chat(ctx, request)
@@ -243,7 +300,7 @@ func (c *AssistantConversation) invokeTool(ctx context.Context, call core.ToolCa
 			err = nil
 		}
 	}()
-	return tool.Invoke(core.WithToolCallID(ctx, call.ID), call.Arguments)
+	return tool.Invoke(core.WithTurnID(core.WithToolCallID(ctx, call.ID), c.turnID), call.Arguments)
 }
 
 func (c *AssistantConversation) lookupTool(name string) (core.Tool, bool) {
@@ -251,6 +308,42 @@ func (c *AssistantConversation) lookupTool(name string) (core.Tool, bool) {
 		return nil, false
 	}
 	return c.tools.Lookup(name)
+}
+
+// recordMessage logs a completed message before the conversation acts on it, so the session log
+// never misses a message the model was shown or a tool was run for. A message the log refused
+// is not kept either, so the conversation and its log agree. It ignores cancellation, because
+// what it records has already happened.
+func (c *AssistantConversation) recordMessage(ctx context.Context, message core.Message) error {
+	entry := c.buildMessageEntry(message)
+	if err := c.appendToLog(ctx, entry); err != nil {
+		return err
+	}
+	c.entries = append(c.entries, entry)
+	return nil
+}
+
+// recordToolResults is recordMessage for the answers to tool calls already in the history. They
+// are kept even when the log refuses them, which ends the turn: a history whose tool calls go
+// unanswered is rejected by the provider, and every later turn would fail with it.
+func (c *AssistantConversation) recordToolResults(ctx context.Context, results []core.Part) error {
+	entry := c.buildMessageEntry(core.Message{Role: core.RoleTool, Parts: results})
+	c.entries = append(c.entries, entry)
+	return c.appendToLog(ctx, entry)
+}
+
+func (c *AssistantConversation) buildMessageEntry(message core.Message) core.SessionEntry {
+	return core.SessionEntry{Kind: core.EntryMessage, Turn: c.turnID, Message: &message}
+}
+
+func (c *AssistantConversation) appendToLog(ctx context.Context, entry core.SessionEntry) error {
+	if c.log == nil {
+		return nil
+	}
+	if err := c.log.AppendEntries(context.WithoutCancel(ctx), []core.SessionEntry{entry}); err != nil {
+		return fmt.Errorf("record the %s message: %w", entry.Message.Role, err)
+	}
+	return nil
 }
 
 func (c *AssistantConversation) completeTurn(ctx context.Context, reason core.StopReason, usage core.Usage) {

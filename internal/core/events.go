@@ -17,6 +17,9 @@ const (
 	EventTurnCompleted         EventType = "turn.completed"
 	EventPolicyDenied          EventType = "policy.denied"
 	EventBrokerUnavailable     EventType = "broker.unavailable"
+	EventFileChanged           EventType = "file.changed"
+	EventFilesReverted         EventType = "files.reverted"
+	EventConversationRewound   EventType = "conversation.rewound"
 )
 
 // Event is the shared interface for timeline facts observed by UI, traces, or tests.
@@ -122,4 +125,39 @@ type BrokerUnavailable struct {
 
 func (BrokerUnavailable) ReportEventType() EventType {
 	return EventBrokerUnavailable
+}
+
+// FileChanged records that the broker wrote a file for a tool call. Path is workspace-relative
+// with forward slashes, for display; the broker's session log holds the authoritative record.
+type FileChanged struct {
+	EventHeader
+	CallID ID     `json:"call_id,omitempty"`
+	Path   string `json:"path"`
+}
+
+func (FileChanged) ReportEventType() EventType {
+	return EventFileChanged
+}
+
+// FilesReverted records that /undo put files back to how they were before FromTurn.
+type FilesReverted struct {
+	EventHeader
+	FromTurn ID          `json:"from_turn"`
+	Files    FileReverts `json:"files"`
+}
+
+func (FilesReverted) ReportEventType() EventType {
+	return EventFilesReverted
+}
+
+// ConversationRewound records that /undo took FromTurn and every later turn out of the
+// conversation. Together with FilesReverted it is what undo_rate counts (6B).
+type ConversationRewound struct {
+	EventHeader
+	FromTurn ID         `json:"from_turn"`
+	Mode     RewindMode `json:"mode"`
+}
+
+func (ConversationRewound) ReportEventType() EventType {
+	return EventConversationRewound
 }

@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"cmp"
+	"slices"
 	"strings"
 
 	"github.com/Kzeezee/travis/internal/core"
@@ -17,10 +18,18 @@ type transcript struct {
 }
 
 type chatTurn struct {
+	// turnID comes from the turn's UserMessageSubmitted; /undo names turns by it.
+	turnID  core.ID
 	prompt  string
 	parts   []turnPart
 	outcome turnOutcome
 	failure string
+	// changedPaths are the files the broker wrote during the turn, for the "changed" line.
+	changedPaths []string
+	// isRewound turns stay in place, so later events still find their turn, but only their
+	// notices render; notices are /undo results shown after (or instead of) the turn.
+	isRewound bool
+	notices   []string
 }
 
 // turnPart is assistant text, model reasoning when isThought, or a tool card when tool is set;
@@ -67,8 +76,11 @@ func (t *transcript) finishTurn(turnNumber int, outcome turnOutcome, failure str
 }
 
 func (t *transcript) applyEvent(event core.Event) {
-	if _, isNewTurn := event.(core.UserMessageSubmitted); isNewTurn {
+	if submitted, isNewTurn := event.(core.UserMessageSubmitted); isNewTurn {
 		t.observedTurns++
+		if t.observedTurns <= len(t.turns) {
+			t.turns[t.observedTurns-1].turnID = submitted.TurnID
+		}
 		return
 	}
 	if t.observedTurns < 1 || t.observedTurns > len(t.turns) {
@@ -85,7 +97,39 @@ func (t *transcript) applyEvent(event core.Event) {
 		turn.parts = append(turn.parts, turnPart{tool: &toolCard{callID: fact.Call.ID, name: fact.Call.Name}})
 	case core.ToolCallFinished:
 		turn.finishToolCard(fact.Result, fact.Display)
+	case core.FileChanged:
+		if !slices.Contains(turn.changedPaths, fact.Path) {
+			turn.changedPaths = append(turn.changedPaths, fact.Path)
+		}
 	}
+}
+
+// rewindTurns hides fromTurn and every later turn and leaves notice in their place; it reports
+// the rewound turn's prompt so the user can edit and resend it. A turn it cannot find (its
+// UserMessageSubmitted was dropped) hides nothing, and the notice goes at the end.
+func (t *transcript) rewindTurns(fromTurn core.ID, notice string) (string, bool) {
+	start := slices.IndexFunc(t.turns, func(turn chatTurn) bool { return turn.turnID == fromTurn && !turn.isRewound })
+	if start < 0 {
+		t.addNotice(notice)
+		return "", false
+	}
+	// Earlier notices on these turns describe history that is now gone; the new notice replaces
+	// them all, so the transcript never shows an older rewind below a newer one.
+	for i := start; i < len(t.turns); i++ {
+		t.turns[i].isRewound, t.turns[i].notices = true, nil
+	}
+	t.turns[start].notices = []string{notice}
+	return t.turns[start].prompt, true
+}
+
+// addNotice shows notice after the latest turn, or among the warnings before any turn.
+func (t *transcript) addNotice(notice string) {
+	if len(t.turns) == 0 {
+		t.warnings = append(t.warnings, notice)
+		return
+	}
+	last := &t.turns[len(t.turns)-1]
+	last.notices = append(last.notices, notice)
 }
 
 // appendStreamed merges a chunk into the last part only when both are text of the same kind,

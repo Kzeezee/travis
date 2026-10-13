@@ -1,6 +1,10 @@
 package core
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+)
 
 // Roles identify who produced a conversation message.
 type Role string
@@ -82,4 +86,68 @@ func (p ToolResultPart) MarshalJSON() ([]byte, error) {
 		ToolResult ToolResult         `json:"tool_result"`
 	}
 	return json.Marshal(toolResultPart{Kind: p.ReportMessageContentType(), ToolResult: p.ToolResult})
+}
+
+// UnmarshalJSON is the inverse of the parts' MarshalJSON: each part is decoded by its kind, and
+// an unknown kind or field is refused, since stored messages are read back across a trust boundary.
+func (m *Message) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Role  Role              `json:"role"`
+		Parts []json.RawMessage `json:"parts"`
+	}
+	if err := decodeStrictJSON(data, &raw); err != nil {
+		return err
+	}
+	parts := make([]Part, 0, len(raw.Parts))
+	for _, rawPart := range raw.Parts {
+		part, err := decodeMessagePart(rawPart)
+		if err != nil {
+			return err
+		}
+		parts = append(parts, part)
+	}
+	m.Role, m.Parts = raw.Role, parts
+	return nil
+}
+
+func decodeMessagePart(data json.RawMessage) (Part, error) {
+	var kind struct {
+		Kind MessageContentType `json:"kind"`
+	}
+	if err := json.Unmarshal(data, &kind); err != nil {
+		return nil, err
+	}
+	switch kind.Kind {
+	case MessageContentText:
+		var part struct {
+			Kind MessageContentType `json:"kind"`
+			Text string             `json:"text"`
+		}
+		err := decodeStrictJSON(data, &part)
+		return TextPart{Text: part.Text}, err
+	case MessageContentToolCall:
+		var part struct {
+			Kind     MessageContentType `json:"kind"`
+			ToolCall ToolCall           `json:"tool_call"`
+		}
+		err := decodeStrictJSON(data, &part)
+		return ToolCallPart{ToolCall: part.ToolCall}, err
+	case MessageContentToolResult:
+		var part struct {
+			Kind       MessageContentType `json:"kind"`
+			ToolResult ToolResult         `json:"tool_result"`
+		}
+		err := decodeStrictJSON(data, &part)
+		return ToolResultPart{ToolResult: part.ToolResult}, err
+	}
+	return nil, fmt.Errorf("unknown message part kind %q: %w", kind.Kind, ErrInvalid)
+}
+
+func decodeStrictJSON(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	return nil
 }

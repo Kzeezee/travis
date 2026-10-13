@@ -42,6 +42,20 @@ func ReportToolCallID(ctx context.Context) ID {
 	return id
 }
 
+type turnIDKey struct{}
+
+// WithTurnID marks ctx as serving one assistant turn, so the broker can file every write under
+// the turn that made it, which is what undo selects by.
+func WithTurnID(ctx context.Context, id ID) context.Context {
+	return context.WithValue(ctx, turnIDKey{}, id)
+}
+
+// ReportTurnID is the turn ctx serves, or "" outside a turn.
+func ReportTurnID(ctx context.Context) ID {
+	id, _ := ctx.Value(turnIDKey{}).(ID)
+	return id
+}
+
 type untrustedStepKey struct{}
 
 // MarkUntrustedStep marks ctx as serving a step with untrusted intake (§5.12.4), so policy asks

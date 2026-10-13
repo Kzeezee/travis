@@ -103,6 +103,7 @@ func (s *recordingSink) findToolResults() []core.ToolResult {
 type echoTool struct {
 	invocations int
 	seenCallID  core.ID
+	seenTurnID  core.ID
 }
 
 func (*echoTool) Name() string { return "echo" }
@@ -114,6 +115,7 @@ func (*echoTool) Describe() core.ToolSpec {
 func (t *echoTool) Invoke(ctx context.Context, arguments json.RawMessage) (core.ToolOutput, error) {
 	t.invocations++
 	t.seenCallID = core.ReportToolCallID(ctx)
+	t.seenTurnID = core.ReportTurnID(ctx)
 	var input struct {
 		Text string `json:"text"`
 	}

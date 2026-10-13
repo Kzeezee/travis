@@ -175,7 +175,7 @@ on.
 | **2A - Capabilities and policy**         | `internal/security/capabilities`, `internal/security/policy`; pure allow/ask/deny decisions | 1F         |
 | **2A-seam - Broker port and wire**       | `core.Broker` port, `LocalBroker`, frozen msgpack wire protocol; tools stop doing IO (D-18, D-19) | 2A         |
 | **2B - Broker process**                  | `cmd/travis-broker`, remote broker adapter speaking the 2A-seam wire, policy in the broker  | 2A-seam    |
-| **2C - Journal and undo**                | `internal/state/session`, `internal/state/journal`, snapshot-before-write, `/undo`          | 2A-seam    |
+| **2C - Journal and undo**                | `internal/state/session`, `internal/state/blobs`, snapshot-before-write, `/undo`            | 2A-seam    |
 | **2D - Approvals, deny-list, redaction** | Approval modal, durable approval rules, deny-list, secret/PII redaction                     | 2A         |
 | **2E - Red-team gate**                   | Attack cases and assertions that policy denies the right thing for the right reason         | 2B, 2C, 2D |
 

@@ -38,8 +38,12 @@ func (m chatModel) View() tea.View {
 		failure := " security broker unreachable, every tool will fail; restart travis · " + m.brokerFailure
 		statusLine = failureBarStyle.Width(m.width).Render(ansi.Truncate(failure, m.width, ellipsis))
 	}
+	transcriptArea := m.viewport.View()
+	if m.undoPicker != nil {
+		transcriptArea = renderUndoPicker(*m.undoPicker, m.width, m.viewport.Height())
+	}
 	view := tea.NewView(strings.Join([]string{
-		m.viewport.View(),
+		transcriptArea,
 		separator,
 		inputLine,
 		separator,
@@ -47,7 +51,7 @@ func (m chatModel) View() tea.View {
 	}, "\n"))
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
-	if cursor := m.input.Cursor(); cursor != nil && m.pendingApproval == nil {
+	if cursor := m.input.Cursor(); cursor != nil && m.pendingApproval == nil && m.undoPicker == nil {
 		cursor.Y += m.viewport.Height() + 1
 		view.Cursor = cursor
 	}
@@ -56,8 +60,12 @@ func (m chatModel) View() tea.View {
 
 // approvalLegend is the only three answers the keyboard accepts; it must always be fully
 // visible, so renderApprovalModal truncates the explanation around it rather than
-// truncating the whole line and risking cutting the legend off.
-const approvalLegend = "[y] once · [a] always · [n] deny"
+// truncating the whole line and risking cutting the legend off. An irreversible operation
+// offers no always (§6.4), so its legend leaves it out.
+const (
+	approvalLegend             = "[y] once · [a] always · [n] deny"
+	irreversibleApprovalLegend = "can't be undone · [y] once · [n] deny"
+)
 
 // renderApprovalModal replaces the input line while a decision is pending (D-10): it shows
 // what is being asked, why (policy.Explain's trace, flattened like a collapsed thought so
@@ -67,8 +75,12 @@ func renderApprovalModal(request core.ApprovalRequest, width int) string {
 	explanation := strings.Join(strings.Fields(op.Explanation), " ")
 	prefix := fmt.Sprintf(" %s %s — %s · ", op.Kind, op.Target, explanation)
 
-	available := max(width-1-lipgloss.Width(approvalLegend), lipgloss.Width(ellipsis))
-	line := ansi.Truncate(prefix, available, ellipsis) + approvalLegend
+	legend := approvalLegend
+	if op.IsIrreversible {
+		legend = irreversibleApprovalLegend
+	}
+	available := max(width-1-lipgloss.Width(legend), lipgloss.Width(ellipsis))
+	line := ansi.Truncate(prefix, available, ellipsis) + legend
 	return assistantLabelStyle.Render(ansi.Truncate(line, max(width-1, 1), ellipsis))
 }
 
@@ -107,7 +119,12 @@ func renderTranscript(t transcript, width int) string {
 		sections = append(sections, strings.Join(warnings, "\n"))
 	}
 	for _, turn := range t.turns {
-		sections = append(sections, renderTurn(turn, width))
+		switch {
+		case !turn.isRewound:
+			sections = append(sections, renderTurn(turn, width))
+		case len(turn.notices) > 0: // a rewound turn shows only what /undo did, in its place
+			sections = append(sections, renderNotices(turn.notices, width))
+		}
 	}
 	return strings.Join(sections, "\n\n")
 }
@@ -135,6 +152,21 @@ func renderTurn(turn chatTurn, width int) string {
 	case turnInterrupted:
 		lines = append(lines, truncateWithMargin(dimStyle.Render("  ⊘ interrupted"), width))
 	case turnPending, turnSucceeded:
+	}
+	if len(turn.changedPaths) > 0 && turn.outcome != turnPending {
+		changed := "  ✎ changed " + strings.Join(turn.changedPaths, ", ") + " · /undo to take back"
+		lines = append(lines, truncateWithMargin(dimStyle.Render(changed), width))
+	}
+	if len(turn.notices) > 0 {
+		lines = append(lines, renderNotices(turn.notices, width))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderNotices(notices []string, width int) string {
+	lines := make([]string, 0, len(notices))
+	for _, notice := range notices {
+		lines = append(lines, wrapWithMargin(warningStyle.Render("  "+notice), width))
 	}
 	return strings.Join(lines, "\n")
 }

@@ -7,6 +7,7 @@ package broker
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,8 +20,9 @@ import (
 
 // ProtocolVersion is carried on every request; a broker refuses any version it does not speak.
 // Version 2 added write_file, approve_once, add_decision_rule, the needs_approval error and
-// list_directory paging.
-const ProtocolVersion uint16 = 2
+// list_directory paging. Version 3 added append_entries, list_turns, the turn and call every
+// request is made under, and irreversible approvals. Version 4 added rewind.
+const ProtocolVersion uint16 = 4
 
 const (
 	// MaxFrameBytes bounds what either side allocates for one message.
@@ -46,6 +48,11 @@ const (
 	// OpApproveOnce and OpAddDecisionRule report the human's answer to a needs_approval error.
 	OpApproveOnce     Op = "approve_once"
 	OpAddDecisionRule Op = "add_decision_rule"
+	// OpAppendEntries logs conversation messages travis reports; OpListTurns lists the session's turns.
+	OpAppendEntries Op = "append_entries"
+	OpListTurns     Op = "list_turns"
+	// OpRewind takes back FromTurn and every later turn, as Mode says.
+	OpRewind Op = "rewind"
 )
 
 type Request struct {
@@ -65,6 +72,30 @@ type Request struct {
 	// Capability is what approve_once lets through; Rule is what add_decision_rule persists.
 	Capability *CapabilityMessage   `msgpack:"capability,omitempty"`
 	Rule       *DecisionRuleMessage `msgpack:"rule,omitempty"`
+	// Turn and Call are the assistant turn and tool call the request is made for; the broker
+	// files the effects and log entries it causes under them.
+	Turn string `msgpack:"turn,omitempty"`
+	Call string `msgpack:"call,omitempty"`
+	// Entries are the messages append_entries logs.
+	Entries []EntryMessage `msgpack:"entries,omitempty"`
+	// FromTurn and Mode are what rewind takes back.
+	FromTurn string `msgpack:"from_turn,omitempty"`
+	Mode     string `msgpack:"mode,omitempty"`
+}
+
+// EntryMessage is one conversation message travis reports. Message is core.Message's JSON, which
+// the broker decodes strictly; travis cannot choose an entry's author, id or time.
+type EntryMessage struct {
+	Turn    string `msgpack:"turn"`
+	Message []byte `msgpack:"message"`
+}
+
+type TurnSummaryMessage struct {
+	Turn            string    `msgpack:"turn"`
+	Prompt          string    `msgpack:"prompt"`
+	At              time.Time `msgpack:"at"`
+	ChangedPaths    []string  `msgpack:"changed_paths,omitempty"`
+	HasIrreversible bool      `msgpack:"irreversible,omitempty"`
 }
 
 type CapabilityMessage struct {
@@ -91,6 +122,23 @@ type Response struct {
 	IsEOF   bool       `msgpack:"eof,omitempty"`
 	// NextOffset is where list_directory's next page starts; zero means the listing is complete.
 	NextOffset uint32 `msgpack:"next_offset,omitempty"`
+	// Turns answers list_turns, oldest first.
+	Turns []TurnSummaryMessage `msgpack:"turns,omitempty"`
+	// Rewind answers rewind: what happened to each file.
+	Rewind *RewindReportMessage `msgpack:"rewind,omitempty"`
+}
+
+type RewindReportMessage struct {
+	FromTurn string               `msgpack:"from_turn"`
+	Mode     string               `msgpack:"mode"`
+	Restored []string             `msgpack:"restored,omitempty"`
+	Deleted  []string             `msgpack:"deleted,omitempty"`
+	Skipped  []SkippedFileMessage `msgpack:"skipped,omitempty"`
+}
+
+type SkippedFileMessage struct {
+	Path   string `msgpack:"path"`
+	Reason string `msgpack:"reason"`
 }
 
 type PathInfo struct {
@@ -120,9 +168,10 @@ type ErrorBody struct {
 }
 
 type OperationMessage struct {
-	Kind        string `msgpack:"kind"`
-	Target      string `msgpack:"target"`
-	Explanation string `msgpack:"explanation"`
+	Kind           string `msgpack:"kind"`
+	Target         string `msgpack:"target"`
+	Explanation    string `msgpack:"explanation"`
+	IsIrreversible bool   `msgpack:"irreversible,omitempty"`
 }
 
 var errMalformedFrame = fmt.Errorf("malformed broker frame: %w", core.ErrInvalid)
@@ -188,6 +237,15 @@ func validateRequest(req Request) error {
 		if req.Rule == nil {
 			return fmt.Errorf("%s needs a rule: %w", req.Op, core.ErrInvalid)
 		}
+	case OpAppendEntries:
+		if len(req.Entries) == 0 {
+			return fmt.Errorf("%s needs at least one entry: %w", req.Op, core.ErrInvalid)
+		}
+	case OpListTurns:
+	case OpRewind:
+		if req.FromTurn == "" || req.Mode == "" {
+			return fmt.Errorf("%s needs a turn and a mode: %w", req.Op, core.ErrInvalid)
+		}
 	default:
 		return fmt.Errorf("unknown op %q: %w", req.Op, core.ErrInvalid)
 	}
@@ -216,7 +274,7 @@ func BuildErrorBody(err error) *ErrorBody {
 	if errors.As(err, &approvalRequired) {
 		op := approvalRequired.Operation
 		return &ErrorBody{Code: ErrorNeedsApproval, Message: err.Error(), Approval: &OperationMessage{
-			Kind: string(op.Kind), Target: op.Target, Explanation: op.Explanation,
+			Kind: string(op.Kind), Target: op.Target, Explanation: op.Explanation, IsIrreversible: op.IsIrreversible,
 		}}
 	}
 	code := ErrorFailed
@@ -244,6 +302,7 @@ func ConvertErrorBody(body ErrorBody) error {
 		}
 		return &core.ApprovalRequiredError{Operation: core.Operation{
 			Kind: core.CapabilityKind(body.Approval.Kind), Target: body.Approval.Target, Explanation: body.Approval.Explanation,
+			IsIrreversible: body.Approval.IsIrreversible,
 		}}
 	}
 	kinds := map[ErrorCode]error{
@@ -311,4 +370,83 @@ func ConvertDecisionRuleMessage(msg DecisionRuleMessage) core.DecisionRule {
 		Kind: core.CapabilityKind(msg.Kind), Scope: msg.Scope, Decision: core.DecisionOutcome(msg.Decision),
 		Source: msg.Source, AddedAt: msg.AddedAt,
 	}
+}
+
+// BuildEntryMessages converts reported messages for the wire; only message entries travel.
+func BuildEntryMessages(entries []core.SessionEntry) ([]EntryMessage, error) {
+	messages := make([]EntryMessage, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Kind != core.EntryMessage || entry.Message == nil {
+			return nil, fmt.Errorf("only message entries can be reported, not %q: %w", entry.Kind, core.ErrInvalid)
+		}
+		encoded, err := json.Marshal(entry.Message)
+		if err != nil {
+			return nil, fmt.Errorf("encode message: %w", err)
+		}
+		messages = append(messages, EntryMessage{Turn: string(entry.Turn), Message: encoded})
+	}
+	return messages, nil
+}
+
+// ConvertEntryMessages is the broker's boundary for reported messages: each is decoded strictly
+// into a message entry, which the broker validates and stamps before logging it.
+func ConvertEntryMessages(messages []EntryMessage) ([]core.SessionEntry, error) {
+	entries := make([]core.SessionEntry, 0, len(messages))
+	for _, msg := range messages {
+		var message core.Message
+		if err := json.Unmarshal(msg.Message, &message); err != nil {
+			return nil, fmt.Errorf("reported message: %w", err)
+		}
+		entries = append(entries, core.SessionEntry{Kind: core.EntryMessage, Turn: core.ID(msg.Turn), Message: &message})
+	}
+	return entries, nil
+}
+
+func BuildTurnSummaryMessages(summaries []core.TurnSummary) []TurnSummaryMessage {
+	messages := make([]TurnSummaryMessage, 0, len(summaries))
+	for _, summary := range summaries {
+		messages = append(messages, TurnSummaryMessage{
+			Turn: string(summary.Turn), Prompt: summary.Prompt, At: summary.At,
+			ChangedPaths: summary.ChangedPaths, HasIrreversible: summary.HasIrreversible,
+		})
+	}
+	return messages
+}
+
+func ConvertTurnSummaryMessages(messages []TurnSummaryMessage) []core.TurnSummary {
+	summaries := make([]core.TurnSummary, 0, len(messages))
+	for _, msg := range messages {
+		summaries = append(summaries, core.TurnSummary{
+			Turn: core.ID(msg.Turn), Prompt: msg.Prompt, At: msg.At,
+			ChangedPaths: msg.ChangedPaths, HasIrreversible: msg.HasIrreversible,
+		})
+	}
+	return summaries
+}
+
+func BuildRewindReportMessage(report core.RewindReport) *RewindReportMessage {
+	skipped := make([]SkippedFileMessage, 0, len(report.Files.Skipped))
+	for _, file := range report.Files.Skipped {
+		skipped = append(skipped, SkippedFileMessage{Path: file.Path, Reason: file.Reason})
+	}
+	return &RewindReportMessage{
+		FromTurn: string(report.FromTurn), Mode: string(report.Mode),
+		Restored: report.Files.Restored, Deleted: report.Files.Deleted, Skipped: skipped,
+	}
+}
+
+// ConvertRewindReportMessage validates the broker's answer; a mode /undo never asked for is refused.
+func ConvertRewindReportMessage(msg RewindReportMessage) (core.RewindReport, error) {
+	mode := core.RewindMode(msg.Mode)
+	if !mode.IsRevertingFiles() && !mode.IsRewindingConversation() {
+		return core.RewindReport{}, fmt.Errorf("rewind report has unknown mode %q: %w", msg.Mode, core.ErrInvalid)
+	}
+	var skipped []core.SkippedFile
+	for _, file := range msg.Skipped {
+		skipped = append(skipped, core.SkippedFile{Path: file.Path, Reason: file.Reason})
+	}
+	return core.RewindReport{
+		FromTurn: core.ID(msg.FromTurn), Mode: mode,
+		Files: core.FileReverts{Restored: msg.Restored, Deleted: msg.Deleted, Skipped: skipped},
+	}, nil
 }

@@ -297,7 +297,7 @@ func TestRemoteBrokerWritesThroughTheEnforcedBroker(t *testing.T) {
 	enforced, workspace, _ := buildSessionBroker(t, "default")
 	events := &recordingSink{}
 	remote, _ := startPipedBrokerWith(t, enforced, broker.RemoteOptions{Events: events})
-	ctx := context.Background()
+	ctx := testTurn
 
 	info, err := remote.WriteFile(ctx, "notes/new.md", []byte("hello"))
 	if err != nil || info.WorkspacePath != "notes/new.md" {
@@ -309,10 +309,13 @@ func TestRemoteBrokerWritesThroughTheEnforcedBroker(t *testing.T) {
 	if _, err := remote.WriteFile(core.WithToolCallID(ctx, "call-7"), ".travis/decisions.toml", []byte("[[rule]]")); !errors.Is(err, core.ErrDenied) {
 		t.Fatalf("WriteFile(.travis) = %v, want ErrDenied", err)
 	}
-	if types := events.reportEventTypes(); len(types) != 1 || types[0] != core.EventPolicyDenied {
-		t.Fatalf("events = %v, want one PolicyDenied", types)
+	if types := events.reportEventTypes(); len(types) != 2 || types[0] != core.EventFileChanged || types[1] != core.EventPolicyDenied {
+		t.Fatalf("events = %v, want FileChanged for the write, then PolicyDenied", types)
 	}
-	if denied := events.events[0].(core.PolicyDenied); denied.CallID != "call-7" || denied.Capability.Kind != core.CapabilityFSWrite {
+	if changed := events.events[0].(core.FileChanged); changed.Path != "notes/new.md" || changed.TurnID != "turn-1" {
+		t.Fatalf("FileChanged = %+v, want notes/new.md under turn-1", changed)
+	}
+	if denied := events.events[1].(core.PolicyDenied); denied.CallID != "call-7" || denied.Capability.Kind != core.CapabilityFSWrite {
 		t.Fatalf("PolicyDenied = %+v, want call-7's fs_write", denied)
 	}
 	if _, err := remote.WriteFile(ctx, "big.bin", make([]byte, broker.MaxWriteFileBytes+1)); !errors.Is(err, core.ErrInvalid) {

@@ -57,6 +57,10 @@ type SessionLaunch struct {
 	WorkspaceDir   string
 	RuntimeDir     string
 	Profile        string
+	// SessionID names the session log the broker keeps; SnapshotMaxBytes is the largest file it
+	// backs up before writing (config session.snapshot_max_bytes).
+	SessionID        core.ID
+	SnapshotMaxBytes int64
 	// Diagnostics receives the broker's stderr; nil discards it.
 	Diagnostics io.Writer
 	// Client is where the connected RemoteBroker reports denials and asks for approvals.
@@ -96,7 +100,9 @@ func StartSessionBroker(ctx context.Context, launch SessionLaunch) (*SessionBrok
 	brokerProcess := exec.CommandContext(context.WithoutCancel(ctx), launch.Executable, //nolint:gosec // the path comes from ResolveBrokerExecutable or a test, never from the model or config
 		"-endpoint", string(endpoint),
 		"-client-pid", strconv.Itoa(os.Getpid()),
-		"-profile", launch.Profile)
+		"-profile", launch.Profile,
+		"-session", string(launch.SessionID),
+		"-snapshot-max-bytes", strconv.FormatInt(launch.SnapshotMaxBytes, 10))
 	brokerProcess.Dir = launch.WorkspaceDir
 	brokerProcess.Env = launch.Env
 	brokerProcess.Stdout = readyWriter

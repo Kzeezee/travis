@@ -1,6 +1,6 @@
 //go:build !windows
 
-package journal
+package blobs
 
 import (
 	"errors"

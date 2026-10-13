@@ -112,7 +112,8 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	redactor := redact.New(apiKey)
 	bus := buildSessionBus(os.Stderr)
 	approvals := make(chan core.ApprovalRequest)
-	sessionBroker, err := startSessionBroker(paths, os.Stderr, broker.RemoteOptions{
+	sessionID := id.BuildULIDGenerator(core.SystemClock{}).GenerateID()
+	sessionBroker, err := startSessionBroker(paths, sessionID, cfg.Session, os.Stderr, broker.RemoteOptions{
 		Events:   redact.WrapSink(bus, redactor),
 		Approver: terminal.BuildApprover(approvals),
 		Clock:    core.SystemClock{},
@@ -127,7 +128,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	}()
 
 	provider := openaicompat.BuildProvider(profile.BaseURL, apiKey, nil, core.SystemClock{})
-	session, err := assembleChatSession(cfg, paths, provider, sessionBroker.Remote, bus, redactor, profile.Model, os.Stderr)
+	session, err := assembleChatSession(cfg, paths, sessionID, provider, sessionBroker.Remote, sessionBroker.Remote, bus, redactor, profile.Model, os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -136,7 +137,10 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	defer unsubscribe()
 
 	chatErr := terminal.RunChat(context.Background(), events, approvals, session.conversation.RunAssistantTurn,
-		terminal.Options{ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out})
+		terminal.Options{
+			ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out,
+			Undo: terminal.UndoActions{ListTurns: session.conversation.ListTurns, Rewind: session.conversation.Rewind},
+		})
 	session.close()
 	return chatErr
 }
@@ -155,8 +159,9 @@ func buildSessionBus(diagnostics io.Writer) *core.Bus {
 }
 
 // startSessionBroker launches this session's travis-broker and connects to it. A chat never
-// runs without one: there is no unenforced fallback (§5.12.5).
-func startSessionBroker(paths config.PathSet, diagnostics io.Writer, client broker.RemoteOptions) (*broker.SessionBroker, error) {
+// runs without one: there is no unenforced fallback (§5.12.5). The broker keeps the session's
+// log under sessionID and backs up files up to sessionCfg's limit before writing them.
+func startSessionBroker(paths config.PathSet, sessionID core.ID, sessionCfg config.SessionCfg, diagnostics io.Writer, client broker.RemoteOptions) (*broker.SessionBroker, error) {
 	brokerExecutable, err := broker.ResolveBrokerExecutable()
 	if err != nil {
 		return nil, fmt.Errorf("start the security broker: %w", err)
@@ -168,9 +173,11 @@ func startSessionBroker(paths config.PathSet, diagnostics io.Writer, client brok
 		RuntimeDir:     paths.RuntimeDir,
 		// Not cfg.Profile: the workspace config layer can set that, and a cloned repo must not
 		// choose its own security profile. Selectable once [security] config exists.
-		Profile:     "default",
-		Diagnostics: diagnostics,
-		Client:      client,
+		Profile:          "default",
+		SessionID:        sessionID,
+		SnapshotMaxBytes: sessionCfg.SnapshotMaxBytes,
+		Diagnostics:      diagnostics,
+		Client:           client,
 		// The broker performs file effects only; the provider credential stays in travis.
 		Env: config.BuildEnvironmentWithoutSecrets(),
 	})
@@ -181,9 +188,10 @@ func startSessionBroker(paths config.PathSet, diagnostics io.Writer, client brok
 }
 
 // assembleChatSession wires the registry, built-in tools, bus, trace and conversation for
-// one session. The provider, file broker and bus are parameters so the end-to-end test can
-// script the model while everything else stays real; diagnostics receives trace status lines.
-func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core.Provider, fileBroker core.Broker, bus *core.Bus, redactor redact.Redactor, model string, diagnostics io.Writer) (*chatSession, error) {
+// one session. The provider, file broker, session log and bus are parameters so the end-to-end
+// test can script the model while everything else stays real; diagnostics receives trace status
+// lines. A nil sessionLog records nothing, which only a test without a broker process may choose.
+func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID core.ID, provider core.Provider, fileBroker core.Broker, sessionLog core.SessionLog, bus *core.Bus, redactor redact.Redactor, model string, diagnostics io.Writer) (*chatSession, error) {
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
 	for _, tool := range []core.Tool{
 		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes),
@@ -199,6 +207,9 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core
 	clock := core.SystemClock{}
 	ids := id.BuildULIDGenerator(clock)
 	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: redact.WrapSink(bus, redactor), Clock: clock, IDs: ids}
+	if sessionLog != nil {
+		deps.Log = redact.WrapSessionLog(sessionLog, redactor)
+	}
 
 	session := &chatSession{
 		conversation: loop.BuildAssistantConversation(deps, model, cfg.Brain.MaxSteps),
@@ -206,7 +217,7 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, provider core
 		waitForTrace: func() {},
 	}
 	if cfg.Eval.Traces {
-		session.waitForTrace = startSessionTrace(bus, filepath.Join(paths.StateDir, "traces"), ids.GenerateID(), diagnostics)
+		session.waitForTrace = startSessionTrace(bus, filepath.Join(paths.StateDir, "traces"), sessionID, diagnostics)
 	}
 	return session, nil
 }

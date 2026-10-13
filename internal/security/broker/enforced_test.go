@@ -20,6 +20,12 @@ import (
 // roots that are separate temp directories so the real home directory never matters.
 func buildSessionBroker(t *testing.T, profile string) (*broker.PolicyEnforcedBroker, string, string) {
 	t.Helper()
+	return buildRecordedSessionBroker(t, profile, discardRecords())
+}
+
+// buildRecordedSessionBroker is buildSessionBroker keeping its records where the test can see them.
+func buildRecordedSessionBroker(t *testing.T, profile string, records broker.SessionRecords) (*broker.PolicyEnforcedBroker, string, string) {
+	t.Helper()
 	base := t.TempDir()
 	workspace, home := filepath.Join(base, "workspace"), filepath.Join(base, "home")
 	for _, dir := range []string{workspace, home} {
@@ -32,7 +38,7 @@ func buildSessionBroker(t *testing.T, profile string) (*broker.PolicyEnforcedBro
 	if err != nil {
 		t.Fatal(err)
 	}
-	return broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, core.SystemClock{}), workspace, home
+	return broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, records, core.SystemClock{}), workspace, home
 }
 
 func TestPolicyEnforcedBrokerReadsGrantedWorkspaceFiles(t *testing.T) {
@@ -130,7 +136,7 @@ func TestPolicyEnforcedBrokerOpensAFileIffPolicyAllowsIt(t *testing.T) {
 			}
 		}
 		sessionPolicy := policy.New(grants, readDeny, nil, isCaseInsensitive)
-		enforced := broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, core.SystemClock{})
+		enforced := broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, discardRecords(), core.SystemClock{})
 		isAllowed := func(path string) bool {
 			req := policy.Request{Kind: core.CapabilityFSRead, Target: path}
 			return sessionPolicy.Evaluate(context.Background(), req).Verdict == policy.Allow
@@ -158,7 +164,7 @@ func TestPolicyEnforcedBrokerOpensAFileIffPolicyAllowsIt(t *testing.T) {
 
 func TestPolicyEnforcedBrokerWritesOnlyWherePolicyAllows(t *testing.T) {
 	enforced, workspace, home := buildSessionBroker(t, "default")
-	ctx := context.Background()
+	ctx := testTurn
 	if _, err := enforced.WriteFile(ctx, "notes/new.md", []byte("hi")); err != nil {
 		t.Fatalf("WriteFile(granted) = %v", err)
 	}
@@ -242,7 +248,7 @@ func TestPolicyEnforcedBrokerWritesAFileIffPolicyAllowsIt(t *testing.T) {
 			}
 		}
 		sessionPolicy := policy.New(grants, nil, writeDeny, isCaseInsensitive)
-		enforced := broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, core.SystemClock{})
+		enforced := broker.BuildPolicyEnforcedBroker(workspace, sessionPolicy, discardRecords(), core.SystemClock{})
 
 		for _, path := range requested {
 			target := path
@@ -253,7 +259,7 @@ func TestPolicyEnforcedBrokerWritesAFileIffPolicyAllowsIt(t *testing.T) {
 			req := policy.Request{Kind: core.CapabilityFSWrite, Target: target}
 			shouldWrite := sessionPolicy.Evaluate(context.Background(), req).Verdict == policy.Allow
 
-			_, err := enforced.WriteFile(context.Background(), path, []byte("x"))
+			_, err := enforced.WriteFile(testTurn, path, []byte("x"))
 			if isWritten := err == nil; isWritten != shouldWrite {
 				t.Fatalf("grants %v, deny %v: WriteFile(%q) written=%v err=%v, policy allows=%v",
 					grants, writeDeny, path, isWritten, err, shouldWrite)
@@ -327,12 +333,12 @@ func TestPolicyEnforcedBrokerAcceptsAbsolutePathsThroughASymlinkedWorkspace(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	enforced := broker.BuildPolicyEnforcedBroker(linked, sessionPolicy, core.SystemClock{})
+	enforced := broker.BuildPolicyEnforcedBroker(linked, sessionPolicy, discardRecords(), core.SystemClock{})
 
 	if _, err := enforced.DescribePath(context.Background(), filepath.Join(linked, "a.txt")); err != nil {
 		t.Fatalf("DescribePath(absolute through the link) = %v", err)
 	}
-	if _, err := enforced.WriteFile(context.Background(), filepath.Join(linked, "b.txt"), []byte("b")); err != nil {
+	if _, err := enforced.WriteFile(testTurn, filepath.Join(linked, "b.txt"), []byte("b")); err != nil {
 		t.Fatalf("WriteFile(absolute through the link) = %v", err)
 	}
 	if _, err := enforced.OpenFile(context.Background(), filepath.Join(linked, ".env")); !errors.Is(err, core.ErrDenied) {
