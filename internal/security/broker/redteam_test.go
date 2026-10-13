@@ -176,8 +176,10 @@ func assertRedTeamOutcome(scenario redTeamCase, roots redTeamRoots, events []cor
 		return nil
 	}
 	path := roots.resolveFilesystemPath(scenario.AssertNoEffect)
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%q changed %q: %v", scenario.Name, path, err)
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("%q changed %q", scenario.Name, path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%q could not inspect %q: %w", scenario.Name, path, err)
 	}
 	return nil
 }
