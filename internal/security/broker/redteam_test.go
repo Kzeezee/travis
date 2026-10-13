@@ -84,7 +84,7 @@ func runRedTeamCase(t *testing.T, scenario redTeamCase) {
 	}
 	if scenario.Fixture == "link_outside" {
 		if err := os.Symlink(roots.outside, filepath.Join(roots.workspace, "link")); err != nil {
-			t.Skipf("directory symlinks unavailable: %v", err)
+			t.Fatalf("required symlink case cannot run: %v", err)
 		}
 	}
 	target := roots.resolveTarget(scenario.Target)
