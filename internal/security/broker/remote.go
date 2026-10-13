@@ -47,6 +47,8 @@ const maxApprovalsPerEffect = 3
 // decisionRuleSource is the audit text on rules the approval modal creates.
 const decisionRuleSource = "approval modal"
 
+var errBrokerUnavailable = errors.New("broker unavailable")
+
 var (
 	_ core.Broker     = (*RemoteBroker)(nil)
 	_ core.SessionLog = (*RemoteBroker)(nil)
@@ -84,7 +86,7 @@ func (r *RemoteBroker) reportBrokerExit(exitErr error) {
 
 // markBrokenLocked records that the stream is unusable and reports it; r.mu must be held.
 func (r *RemoteBroker) markBrokenLocked(ctx context.Context, cause error) {
-	r.brokenErr = fmt.Errorf("broker unreachable: %w", cause)
+	r.brokenErr = fmt.Errorf("broker unreachable: %w", errors.Join(errBrokerUnavailable, cause))
 	r.publishUnavailableLocked(ctx)
 }
 
@@ -213,7 +215,7 @@ func (r *RemoteBroker) exchangeEffect(ctx context.Context, kind core.CapabilityK
 		}
 		resp, err = r.exchange(ctx, req)
 	}
-	if errors.Is(err, core.ErrDenied) {
+	if errors.Is(err, core.ErrDenied) || (errors.Is(err, errBrokerUnavailable) && !r.isClosing.Load()) {
 		r.publish(ctx, core.PolicyDenied{EventHeader: r.buildEventHeader(), CallID: core.ReportToolCallID(ctx), Capability: core.Capability{Kind: kind, Scope: req.Path}, Rule: err.Error()})
 	}
 	return resp, err

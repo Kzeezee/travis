@@ -268,8 +268,7 @@ func TestPolicyEnforcedBrokerWritesAFileIffPolicyAllowsIt(t *testing.T) {
 	}
 }
 
-// An untrusted step's effect Asks (§5.12.4); the human's answer, given in that same step, lets it
-// through: once for one effect, or always for the rest of the session and in decisions.toml.
+// An untrusted step's effect Asks (§5.12.4); only a fresh once-answer can let it through.
 func TestPolicyEnforcedBrokerApprovesAnUntrustedStepsAsk(t *testing.T) {
 	enforced, workspace, _ := buildSessionBroker(t, "default")
 	writeWorkspaceFile(t, workspace, "notes.md", "hi")
@@ -307,16 +306,25 @@ func TestPolicyEnforcedBrokerApprovesAnUntrustedStepsAsk(t *testing.T) {
 	}
 
 	rule := core.DecisionRule{Kind: asked.Kind, Scope: asked.Scope, Decision: core.DecisionAllow, Source: "test"}
-	if err := enforced.AddDecisionRule(untrusted, rule); err != nil {
-		t.Fatalf("AddDecisionRule = %v", err)
+	if err := enforced.AddDecisionRule(untrusted, rule); !errors.Is(err, core.ErrDenied) {
+		t.Fatalf("AddDecisionRule during untrusted step = %v, want denied", err)
 	}
-	for range 2 {
-		if err := openNotes(); err != nil {
-			t.Fatalf("OpenFile after an always rule = %v", err)
-		}
+	if err := openNotes(); !errors.As(err, &required) {
+		t.Fatalf("OpenFile after refused always rule = %v, want Ask", err)
 	}
-	if _, err := os.Stat(filepath.Join(workspace, ".travis", "decisions.toml")); err != nil {
-		t.Fatalf("the always rule was not persisted: %v", err)
+	if _, err := os.Stat(filepath.Join(workspace, ".travis", "decisions.toml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("untrusted step persisted an always rule: %v", err)
+	}
+}
+
+func TestExecCanNeverBecomeAnAlwaysRule(t *testing.T) {
+	enforced, workspace, _ := buildSessionBroker(t, "dev")
+	rule := core.DecisionRule{Kind: core.CapabilityExec, Scope: "go", Decision: core.DecisionAllow, Source: "test"}
+	if err := enforced.AddDecisionRule(context.Background(), rule); !errors.Is(err, core.ErrDenied) {
+		t.Fatalf("AddDecisionRule(exec) = %v, want denied", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".travis", "decisions.toml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("exec rule was persisted: %v", err)
 	}
 }
 

@@ -339,13 +339,13 @@ func TestRemoteBrokerReportsTheBrokerUnavailableOnEveryRefusedCall(t *testing.T)
 		_, _ = remote.DescribePath(context.Background(), "a.txt")
 	}
 	types := events.reportEventTypes()
-	if len(types) != 2 || types[0] != core.EventBrokerUnavailable || types[1] != core.EventBrokerUnavailable {
-		t.Fatalf("events = %v, want BrokerUnavailable for each refused call", types)
+	if len(types) != 4 || types[0] != core.EventBrokerUnavailable || types[1] != core.EventPolicyDenied || types[2] != core.EventBrokerUnavailable || types[3] != core.EventPolicyDenied {
+		t.Fatalf("events = %v, want BrokerUnavailable and PolicyDenied for each refused call", types)
 	}
 
 	_ = remote.Close()
 	_, _ = remote.DescribePath(context.Background(), "a.txt")
-	if got := len(events.reportEventTypes()); got != 2 {
+	if got := len(events.reportEventTypes()); got != 4 {
 		t.Fatalf("%d events after Close, want no new report for a connection closed on purpose", got)
 	}
 }

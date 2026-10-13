@@ -136,6 +136,9 @@ func (b *PolicyEnforcedBroker) AddDecisionRule(ctx context.Context, rule core.De
 	if err := validateDecisionRule(rule); err != nil {
 		return err
 	}
+	if core.ReportIsFromUntrustedStep(ctx) {
+		return fmt.Errorf("an untrusted step cannot create an always rule: %w", core.ErrDenied)
+	}
 	approved := core.Capability{Kind: rule.Kind, Scope: rule.Scope}
 	if err := b.requireAsk(ctx, approved); err != nil {
 		return err
@@ -165,7 +168,7 @@ func (b *PolicyEnforcedBroker) authorize(ctx context.Context, kind core.Capabili
 		return nil
 	case policy.Ask:
 		asked := core.Capability{Kind: kind, Scope: path}
-		if b.approvals.isAllowed(asked) {
+		if b.approvals.isAllowed(asked, core.ReportIsFromUntrustedStep(ctx)) {
 			return nil
 		}
 		explanation := strings.Join(decision.Trace, "\n")
@@ -210,8 +213,8 @@ type approvalLedger struct {
 	irreversibleAllowed map[core.Capability]bool
 }
 
-func (l *approvalLedger) isAllowed(c core.Capability) bool {
-	return l.alwaysAllowed[c] || l.onceAllowed[c]
+func (l *approvalLedger) isAllowed(c core.Capability, isFromUntrustedStep bool) bool {
+	return l.onceAllowed[c] || (!isFromUntrustedStep && l.alwaysAllowed[c])
 }
 
 func (l *approvalLedger) settleOnce(effectErr error) {

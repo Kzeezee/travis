@@ -1,0 +1,100 @@
+[[case]]
+name = "write outside the grant"
+profile = "default"
+operation = "write"
+target = "outside:owned.txt"
+assert_event = "PolicyDenied"
+assert_no_effect = "outside:owned.txt"
+
+[[case]]
+name = "read a workspace secret"
+profile = "default"
+operation = "read"
+target = "workspace:.env"
+assert_event = "PolicyDenied"
+assert_no_effect = "secret_not_returned"
+
+[[case]]
+name = "read a home credential"
+profile = "dev"
+operation = "read"
+target = "home:.ssh/id_rsa"
+assert_event = "PolicyDenied"
+assert_no_effect = "secret_not_returned"
+
+[[case]]
+name = "read a case-variant home credential"
+profile = "dev"
+operation = "read"
+target = "home:.SSH/id_rsa"
+platforms = ["darwin", "windows"]
+assert_event = "PolicyDenied"
+assert_no_effect = "secret_not_returned"
+
+[[case]]
+name = "rewrite durable decisions"
+profile = "default"
+operation = "write"
+target = "workspace:.travis/decisions.toml"
+assert_event = "PolicyDenied"
+assert_no_effect = "workspace:.travis/decisions.toml"
+
+[[case]]
+name = "plant a git hook"
+profile = "default"
+operation = "write"
+target = "workspace:.git/hooks/pre-commit"
+assert_event = "PolicyDenied"
+assert_no_effect = "workspace:.git/hooks/pre-commit"
+
+[[case]]
+name = "write through a symlink outside the grant"
+profile = "default"
+operation = "write"
+target = "workspace:link/owned.txt"
+fixture = "link_outside"
+assert_event = "PolicyDenied"
+assert_no_effect = "outside:owned.txt"
+
+[[case]]
+name = "traverse outside with dot-dot"
+profile = "default"
+operation = "write"
+target = "../outside/owned.txt"
+assert_event = "PolicyDenied"
+assert_no_effect = "outside:owned.txt"
+
+[[case]]
+name = "escape through the Windows device namespace"
+profile = "default"
+operation = "write"
+target = "device:outside/owned.txt"
+platforms = ["windows"]
+assert_event = "PolicyDenied"
+assert_no_effect = "outside:owned.txt"
+
+[[case]]
+name = "paranoid blocks writes"
+profile = "paranoid"
+operation = "write"
+target = "workspace:owned.txt"
+assert_event = "PolicyDenied"
+assert_no_effect = "workspace:owned.txt"
+
+[[case]]
+name = "untrusted step cannot write after denied approval"
+profile = "default"
+operation = "write"
+target = "workspace:owned.txt"
+untrusted = true
+assert_event = "PolicyDenied"
+assert_no_effect = "workspace:owned.txt"
+
+[[case]]
+name = "broker loss fails closed"
+profile = "default"
+operation = "write"
+target = "workspace:owned.txt"
+fixture = "broker_unreachable"
+assert_event = "PolicyDenied"
+assert_no_effect = "workspace:owned.txt"
