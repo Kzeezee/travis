@@ -232,7 +232,7 @@ func (b *PolicyEnforcedBroker) authorizeRequest(ctx context.Context, request pol
 		return nil
 	case policy.Ask:
 		asked := core.Capability{Kind: kind, Scope: path}
-		if b.approvals.isAllowed(asked, core.ReportIsFromUntrustedStep(ctx)) {
+		if b.approvals.isAllowed(asked, request.IsFromUntrustedStep) {
 			return nil
 		}
 		explanation := strings.Join(decision.Trace, "\n")

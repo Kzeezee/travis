@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -67,7 +68,7 @@ func runRedTeamCase(t *testing.T, scenario redTeamCase) {
 		t.Fatal(err)
 	}
 	if len(scenario.Platforms) > 0 {
-		if !slicesContain(scenario.Platforms, runtime.GOOS) {
+		if !slices.Contains(scenario.Platforms, runtime.GOOS) {
 			t.Skipf("case runs on %v", scenario.Platforms)
 		}
 	}
@@ -86,10 +87,7 @@ func runRedTeamCase(t *testing.T, scenario redTeamCase) {
 			t.Skipf("directory symlinks unavailable: %v", err)
 		}
 	}
-	target, err := roots.resolveTarget(scenario.Target)
-	if err != nil {
-		t.Fatal(err)
-	}
+	target := roots.resolveTarget(scenario.Target)
 	if scenario.Operation == "read" {
 		fixturePath := roots.resolveFilesystemPath(scenario.Target)
 		if err := os.MkdirAll(filepath.Dir(fixturePath), 0o700); err != nil {
@@ -131,6 +129,9 @@ func runRedTeamCase(t *testing.T, scenario redTeamCase) {
 			content, _ := io.ReadAll(opened.Content)
 			_ = opened.Content.Close()
 			t.Fatalf("forbidden read returned %q", content)
+		}
+		if strings.Contains(err.Error(), "red-team secret") {
+			t.Fatalf("forbidden read leaked secret in its error: %v", err)
 		}
 	}
 	if scenario.Untrusted && len(approver.asked) != 1 {
@@ -180,20 +181,20 @@ func assertRedTeamOutcome(scenario redTeamCase, roots redTeamRoots, events []cor
 	return nil
 }
 
-func (r redTeamRoots) resolveTarget(value string) (string, error) {
+func (r redTeamRoots) resolveTarget(value string) string {
 	if suffix, ok := strings.CutPrefix(value, "device:"); ok {
-		return `\\?\` + filepath.Join(r.outside, filepath.FromSlash(strings.TrimPrefix(suffix, "outside/"))), nil
+		return `\\?\` + filepath.Join(r.outside, filepath.FromSlash(strings.TrimPrefix(suffix, "outside/")))
 	}
 	if suffix, ok := strings.CutPrefix(value, "workspace:"); ok {
-		return filepath.FromSlash(suffix), nil
+		return filepath.FromSlash(suffix)
 	}
 	if suffix, ok := strings.CutPrefix(value, "home:"); ok {
-		return filepath.Join(r.home, filepath.FromSlash(suffix)), nil
+		return filepath.Join(r.home, filepath.FromSlash(suffix))
 	}
 	if suffix, ok := strings.CutPrefix(value, "outside:"); ok {
-		return filepath.Join(r.outside, filepath.FromSlash(suffix)), nil
+		return filepath.Join(r.outside, filepath.FromSlash(suffix))
 	}
-	return filepath.FromSlash(value), nil
+	return filepath.FromSlash(value)
 }
 
 func (r redTeamRoots) resolveFilesystemPath(value string) string {
@@ -205,15 +206,6 @@ func (r redTeamRoots) resolveFilesystemPath(value string) string {
 		}
 	}
 	return filepath.Join(r.workspace, filepath.FromSlash(value))
-}
-
-func slicesContain(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestRedTeamGateRejectsAnAttackWithNoDenialEvent(t *testing.T) {
