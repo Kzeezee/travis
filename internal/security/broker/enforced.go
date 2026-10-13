@@ -112,30 +112,42 @@ func (b *PolicyEnforcedBroker) WriteFile(ctx context.Context, path string, conte
 // An irreversible write the broker asked about can likewise be approved once, and only once.
 func (b *PolicyEnforcedBroker) ApproveOnce(ctx context.Context, approved core.Capability) error {
 	if b.approvals.irreversibleAsked[approved] {
+		if err := b.appendBrokerFact(ctx, core.SessionEntry{Kind: core.EntryApprovalGiven, Capability: &approved, IsIrreversible: true}); err != nil {
+			return err
+		}
 		delete(b.approvals.irreversibleAsked, approved)
 		b.approvals.irreversibleAllowed[approved] = true
-		return b.appendBrokerFact(ctx, core.SessionEntry{Kind: core.EntryApprovalGiven, Capability: &approved, IsIrreversible: true})
+		return nil
 	}
 	if err := b.requireAsk(ctx, approved); err != nil {
 		return err
 	}
+	if err := b.appendBrokerFact(ctx, core.SessionEntry{Kind: core.EntryApprovalGiven, Capability: &approved}); err != nil {
+		return err
+	}
 	b.approvals.onceAllowed[approved] = true
-	return b.appendBrokerFact(ctx, core.SessionEntry{Kind: core.EntryApprovalGiven, Capability: &approved})
+	return nil
 }
 
 // AddDecisionRule persists the rule (D-30) and honours it for the rest of the session. Like
 // ApproveOnce it can only narrow a policy Ask, never widen a Deny; an irreversible write is not
 // a policy Ask, so it can never become an always rule (§6.4).
 func (b *PolicyEnforcedBroker) AddDecisionRule(ctx context.Context, rule core.DecisionRule) error {
+	if err := validateDecisionRule(rule); err != nil {
+		return err
+	}
 	approved := core.Capability{Kind: rule.Kind, Scope: rule.Scope}
 	if err := b.requireAsk(ctx, approved); err != nil {
+		return err
+	}
+	if err := b.appendBrokerFact(ctx, core.SessionEntry{Kind: core.EntryApprovalGiven, Capability: &approved, IsAlways: true}); err != nil {
 		return err
 	}
 	if err := b.LocalBroker.AddDecisionRule(ctx, rule); err != nil {
 		return err
 	}
 	b.approvals.alwaysAllowed[approved] = true
-	return b.appendBrokerFact(ctx, core.SessionEntry{Kind: core.EntryApprovalGiven, Capability: &approved, IsAlways: true})
+	return nil
 }
 
 func (b *PolicyEnforcedBroker) requireAsk(ctx context.Context, approved core.Capability) error {
@@ -158,7 +170,10 @@ func (b *PolicyEnforcedBroker) authorize(ctx context.Context, kind core.Capabili
 		}
 		explanation := strings.Join(decision.Trace, "\n")
 		required := &core.ApprovalRequiredError{Operation: core.Operation{Kind: kind, Target: path, Explanation: explanation}}
-		return errors.Join(required, b.appendBrokerFact(ctx, core.SessionEntry{Kind: core.EntryApprovalAsked, Capability: &asked, Detail: explanation}))
+		if err := b.appendBrokerFact(ctx, core.SessionEntry{Kind: core.EntryApprovalAsked, Capability: &asked, Detail: explanation}); err != nil {
+			return err
+		}
+		return required
 	case policy.Deny:
 		rule := reportDecidingRule(decision)
 		denied := core.Capability{Kind: kind, Scope: path}

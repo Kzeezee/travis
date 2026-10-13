@@ -158,6 +158,30 @@ func TestIrreversibleWriteAsksOnceAndNeverAlways(t *testing.T) {
 	}
 }
 
+func TestFailedApprovalLogDoesNotPermitAnIrreversibleWrite(t *testing.T) {
+	records, log, backups := buildTestRecords()
+	backups.maxBytes = 4
+	enforced, workspace, _ := buildRecordedSessionBroker(t, "default", records)
+	writeWorkspaceFile(t, workspace, "big.txt", "larger than four bytes")
+
+	var required *core.ApprovalRequiredError
+	if _, err := enforced.WriteFile(testTurn, "big.txt", []byte("new")); !errors.As(err, &required) {
+		t.Fatalf("WriteFile = %v, want an approval question", err)
+	}
+	log.appendErr = errStoreBroken
+	approved := core.Capability{Kind: required.Operation.Kind, Scope: required.Operation.Target}
+	if err := enforced.ApproveOnce(testTurn, approved); !errors.Is(err, errStoreBroken) {
+		t.Fatalf("ApproveOnce = %v, want the log failure", err)
+	}
+	log.appendErr = nil
+	if _, err := enforced.WriteFile(testTurn, "big.txt", []byte("new")); !errors.As(err, &required) {
+		t.Fatalf("WriteFile after a failed approval log = %v, want another question", err)
+	}
+	if got := readWorkspaceFile(t, workspace, "big.txt"); got != "larger than four bytes" {
+		t.Fatalf("big.txt = %q, want it untouched", got)
+	}
+}
+
 // Approving a policy Ask answers that question only; the write still asks about irreversibility.
 func TestApprovingAPolicyAskDoesNotWaiveIrreversibility(t *testing.T) {
 	records, _, backups := buildTestRecords()

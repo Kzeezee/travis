@@ -22,7 +22,12 @@ func openStore(t *testing.T, dir string) *filestore.Store {
 	return store
 }
 
-func buildEntries() []core.SessionEntry {
+func buildEntries(t *testing.T) []core.SessionEntry {
+	t.Helper()
+	path, err := filepath.Abs("a.go")
+	if err != nil {
+		t.Fatal(err)
+	}
 	at := time.Date(2026, 10, 12, 14, 0, 0, 0, time.UTC)
 	message := core.Message{Role: core.RoleAssistant, Parts: []core.Part{
 		core.TextPart{Text: "writing"},
@@ -31,7 +36,7 @@ func buildEntries() []core.SessionEntry {
 	return []core.SessionEntry{
 		{ID: "e1", At: at, Author: core.AuthorTravis, Kind: core.EntryMessage, Turn: "t1", Message: &message},
 		{ID: "e2", At: at, Author: core.AuthorBroker, Kind: core.EntryFileChanged, Turn: "t1", Call: "c1",
-			FileChange: &core.FileChange{Path: filepath.Join(string(filepath.Separator), "w", "a.go"), After: "ab"}},
+			FileChange: &core.FileChange{Path: path, After: "ab"}},
 	}
 }
 
@@ -41,22 +46,22 @@ func TestAppendedEntriesReplayAfterReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Append(buildEntries()...); err != nil {
+	if err := store.Append(buildEntries(t)...); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	if got := openStore(t, dir).ReadEntries(); !reflect.DeepEqual(got, buildEntries()) {
-		t.Fatalf("replayed = %+v\nwant      %+v", got, buildEntries())
+	if got := openStore(t, dir).ReadEntries(); !reflect.DeepEqual(got, buildEntries(t)) {
+		t.Fatalf("replayed = %+v\nwant      %+v", got, buildEntries(t))
 	}
 }
 
 func TestAppendRefusesAnInvalidEntryAndWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	store := openStore(t, dir)
-	invalid := buildEntries()
+	invalid := buildEntries(t)
 	invalid[1].FileChange.Path = "relative.go"
 	if err := store.Append(invalid...); !errors.Is(err, core.ErrInvalid) {
 		t.Fatalf("Append = %v, want ErrInvalid", err)
@@ -75,7 +80,7 @@ func TestTornLastLineIsDroppedOnReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Append(buildEntries()[0]); err != nil {
+	if err := store.Append(buildEntries(t)[0]); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -87,10 +92,10 @@ func TestTornLastLineIsDroppedOnReopen(t *testing.T) {
 	if got := reopened.ReadEntries(); len(got) != 1 {
 		t.Fatalf("entries after a torn tail = %v, want the one complete entry", got)
 	}
-	if err := reopened.Append(buildEntries()[1]); err != nil {
+	if err := reopened.Append(buildEntries(t)[1]); err != nil {
 		t.Fatal(err)
 	}
-	if got := openStore(t, dir).ReadEntries(); !reflect.DeepEqual(got, buildEntries()) {
+	if got := openStore(t, dir).ReadEntries(); !reflect.DeepEqual(got, buildEntries(t)) {
 		t.Fatalf("an append after the torn tail glued onto it: %+v", got)
 	}
 }
@@ -120,7 +125,7 @@ func TestLogIsPrivateToTheUser(t *testing.T) {
 	}
 	dir := filepath.Join(t.TempDir(), "sessions")
 	store := openStore(t, dir)
-	if err := store.Append(buildEntries()...); err != nil {
+	if err := store.Append(buildEntries(t)...); err != nil {
 		t.Fatal(err)
 	}
 	for path, want := range map[string]os.FileMode{dir: 0o700, filepath.Join(dir, "s1.jsonl"): 0o600} {

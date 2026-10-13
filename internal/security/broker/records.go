@@ -61,10 +61,13 @@ func (b *PolicyEnforcedBroker) requireIrreversibleApproval(ctx context.Context, 
 	if b.approvals.irreversibleAllowed[write] {
 		return nil
 	}
-	b.approvals.irreversibleAsked[write] = true
 	const explanation = "the file is too large to back up, so this write cannot be undone"
 	required := &core.ApprovalRequiredError{Operation: core.Operation{Kind: write.Kind, Target: target, Explanation: explanation, IsIrreversible: true}}
-	return errors.Join(required, b.appendBrokerFact(ctx, core.SessionEntry{Kind: core.EntryApprovalAsked, Capability: &write, Detail: explanation, IsIrreversible: true}))
+	if err := b.appendBrokerFact(ctx, core.SessionEntry{Kind: core.EntryApprovalAsked, Capability: &write, Detail: explanation, IsIrreversible: true}); err != nil {
+		return err
+	}
+	b.approvals.irreversibleAsked[write] = true
+	return required
 }
 
 // appendBrokerFact stamps an entry as the broker's own, under the turn and tool call ctx serves.

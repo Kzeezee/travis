@@ -58,9 +58,12 @@ func (b *PolicyEnforcedBroker) revertFiles(ctx context.Context, plans []session.
 	var revertedIDs []core.ID
 	for _, plan := range plans {
 		reason := ""
+		resolved, resolveErr := b.resolveWritablePath(ctx, plan.Path)
 		switch {
 		case plan.HasNoBackup:
 			reason = skipNoBackup
+		case resolveErr != nil || resolved != plan.Path:
+			reason = skipChangedSince
 		case reportCurrentContentHash(plan.Path) != plan.ExpectedAfter:
 			reason = skipChangedSince
 		default:

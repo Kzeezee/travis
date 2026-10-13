@@ -117,6 +117,31 @@ func TestRewindLeavesAFileEditedSinceAndRestoresTheRest(t *testing.T) {
 	}
 }
 
+func TestRewindLeavesAFileWhoseParentNowPointsOutsideTheGrant(t *testing.T) {
+	records, _, _ := buildTestRecords()
+	enforced, workspace, _ := buildRecordedSessionBroker(t, "default", records)
+	writeWorkspaceFile(t, workspace, "notes/a.txt", "before")
+	writeInTurn(t, enforced, "turn-1", "notes/a.txt", "after")
+
+	outside := t.TempDir()
+	writeWorkspaceFile(t, outside, "a.txt", "after")
+	if err := os.Rename(filepath.Join(workspace, "notes"), filepath.Join(workspace, "moved")); err != nil {
+		t.Fatal(err)
+	}
+	createSymlinkOrSkip(t, outside, filepath.Join(workspace, "notes"))
+
+	report, err := enforced.Rewind(context.Background(), "turn-1", core.RewindFilesOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reportWorkspaceFile(t, outside, "a.txt"); got != "after" {
+		t.Fatalf("outside file = %q, want it untouched", got)
+	}
+	if len(report.Files.Skipped) != 1 || report.Files.Skipped[0].Path != "notes/a.txt" {
+		t.Fatalf("skipped = %+v, want the changed path", report.Files.Skipped)
+	}
+}
+
 func TestRewindLeavesAFileThatHadNoBackup(t *testing.T) {
 	records, _, backups := buildTestRecords()
 	backups.maxBytes = 4
