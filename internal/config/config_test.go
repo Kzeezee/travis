@@ -210,6 +210,44 @@ max_steps = 3
 	}
 }
 
+// TestLoadWorkspaceLayerCannotSetSkills mirrors TestLoadWorkspaceLayerCannotSetMCP: a
+// cloned repo's own .travis/config.toml must never be able to turn on its own
+// untrusted-content loading (R-02/D-23) just by being cd'd into.
+func TestLoadWorkspaceLayerCannotSetSkills(t *testing.T) {
+	files := map[string]string{
+		"/workspace/.travis/config.toml": `
+[skills]
+load_workspace = true
+roots           = ["."]
+
+[brain]
+max_steps = 3
+`,
+	}
+
+	cfg, diags, err := load(buildFileReaderFromMap(files), testPathSet(), nil, buildEnvLookupFromMap(nil))
+	if err != nil {
+		t.Fatalf("load() error = %v, diags = %v", err, diags)
+	}
+
+	if cfg.Skills.LoadWorkspace {
+		t.Fatal("the workspace file's [skills] table was applied; the restriction did not hold")
+	}
+	if cfg.Brain.MaxSteps != 3 {
+		t.Fatalf("Brain.MaxSteps = %d, want the same file's allowed [brain] setting to still apply", cfg.Brain.MaxSteps)
+	}
+
+	foundWarning := false
+	for _, d := range diags {
+		if d.Severity == SeverityWarning && strings.Contains(d.Message, "skills") {
+			foundWarning = true
+		}
+	}
+	if !foundWarning {
+		t.Fatalf("diags = %v, want a warning naming the ignored [skills] table", diags)
+	}
+}
+
 // TestValidateRejectsAnMCPServerWithNoCommand is the regression test for Validate()
 // treating a blank exec target as a hard error, the same standard [security.*] keys get.
 func TestValidateRejectsAnMCPServerWithNoCommand(t *testing.T) {

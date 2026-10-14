@@ -22,6 +22,13 @@ type ToolLookup interface {
 	Lookup(name string) (core.Tool, bool)
 }
 
+// SkillsIndex is the loop's view of loaded skills and workspace instructions:
+// pre-rendered sections (already trust-tiered and delimited by whoever built them) to
+// append to the system prompt. A nil SkillsIndex contributes nothing.
+type SkillsIndex interface {
+	ReportSystemPromptSections() []string
+}
+
 // Dependencies are the ports a conversation runs against; the caller picks the adapters. Log
 // is where every completed message is recorded before the loop acts on it; nil records nothing.
 type Dependencies struct {
@@ -31,6 +38,7 @@ type Dependencies struct {
 	Log      core.SessionLog
 	Clock    core.Clock
 	IDs      core.IDGenerator
+	Skills   SkillsIndex
 }
 
 // zero defers to the lookup's own exposure limit
@@ -58,6 +66,7 @@ type AssistantConversation struct {
 	log      core.SessionLog
 	clock    core.Clock
 	ids      core.IDGenerator
+	skills   SkillsIndex
 	model    string
 	maxSteps int
 
@@ -78,6 +87,7 @@ func BuildAssistantConversation(deps Dependencies, model string, maxSteps int) *
 		log:      deps.Log,
 		clock:    deps.Clock,
 		ids:      deps.IDs,
+		skills:   deps.Skills,
 		model:    model,
 		maxSteps: maxSteps,
 	}
@@ -194,7 +204,7 @@ func (c *AssistantConversation) runStep(ctx context.Context, hint string) (stepR
 	tools := c.buildToolSpecs(ctx, hint)
 	request := core.ProviderRequest{
 		Model:    c.model,
-		System:   buildSystemPrompt(c.clock.ReportCurrentTime()),
+		System:   buildSystemPrompt(c.clock.ReportCurrentTime(), c.skills),
 		Messages: session.BuildHistory(c.entries),
 		Tools:    tools,
 	}
