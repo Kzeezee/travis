@@ -16,9 +16,9 @@ Goal: close the two security gaps 3A and 3B left.
 
 | | |
 |---|---|
-| Changes | `internal/agent/loop/loop.go`: after any untrusted result (MCP, workspace `skill_open`, AGENTS.md in the prompt), mark the next step with `core.MarkUntrustedStep`, so the broker's existing policy asks. `internal/tools/mcp/supervise.go`: `buildServerEnv` starts from `config.BuildEnvironmentWithoutSecrets()`. `internal/tools/skills`: workspace skills load after the approval modal; delete `skills.load_workspace`. |
-| Data | `core.ToolOutput` gains `IsUntrusted bool`; the loop reads it instead of knowing tool sources. |
-| Proof | Red-team cases: an injected MCP result requests a write and must reach the approver; the fake MCP server must not see a canary provider key; a workspace skill is absent until approved. Manual: fake MCP server in `bin/travis chat`, approval modal appears. |
+| Changes | `internal/agent/loop/loop.go`: after any untrusted result (MCP, workspace `skill_open`, AGENTS.md in the prompt), mark the next step with `core.MarkUntrustedStep`, so the broker's existing policy asks. `internal/tools/mcp/supervise.go`: `buildServerEnv` starts from `config.BuildEnvironmentWithoutSecrets()`. `internal/tools/skills`: workspace skills and workspace `AGENTS.md` load after one approval through the existing modal, keyed on a content hash; delete `skills.load_workspace`. `[security] exec_allow` (user layer only) feeds `capabilities.Roots.ExecAllow`, and the MCP policy in `cmd/travis/main.go` moves from the temporary `dev` profile (`exec: "*"`) to `default`. |
+| Data | `core.ToolOutput` gains `IsUntrusted bool`; the loop reads it instead of knowing tool sources. AGENTS.md is in every prompt, so it is gated by approval, not by step marking. |
+| Proof | Red-team cases: an injected MCP result requests a write and must reach the approver; the fake MCP server must not see a canary provider key; a workspace skill and `AGENTS.md` are absent until approved and again after their content changes; `main.go` builds no `dev` policy. Manual: fake MCP server in `bin/travis chat`, approval modal appears. |
 | Rollback | Revert the PR. No data migration. |
 | Depends on | Nothing |
 
@@ -59,7 +59,7 @@ As written in the ticket. Every later ticket's runtime check uses `make chat`.
 
 | | |
 |---|---|
-| Changes | Broker `exec` op (protocol version bump): argv only, no shell, workspace cwd, timeout, output cap, secret-free environment. Always asks (D-27). `ExecAllow` read from user config. Tool in `internal/tools/builtin`. |
+| Changes | Broker `exec` op (protocol version bump): argv only, no shell, workspace cwd, timeout, output cap, secret-free environment. Always asks (D-27). Grants come from 3F's `exec_allow`. Tool in `internal/tools/builtin`. |
 | Proof | `tooltest.Run`; red-team case: an `always` rule cannot be granted for `exec`; manual approval round-trip. |
 | Depends on | 3F |
 
