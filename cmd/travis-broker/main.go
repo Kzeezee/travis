@@ -15,12 +15,20 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/id"
 	"github.com/Kzeezee/travis/internal/security/broker"
+	"github.com/Kzeezee/travis/internal/security/sandbox"
 	"github.com/Kzeezee/travis/internal/state/blobs"
 	"github.com/Kzeezee/travis/internal/state/memory"
 	"github.com/Kzeezee/travis/internal/state/session/filestore"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == sandbox.LauncherArg {
+		if err := sandbox.RunLauncher(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "travis-broker:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
