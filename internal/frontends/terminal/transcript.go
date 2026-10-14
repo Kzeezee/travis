@@ -11,7 +11,11 @@ import (
 // transcript keeps chat history as source, never pre-wrapped, so resizing re-wraps it (DESIGN.md §5.9.1).
 type transcript struct {
 	warnings []string
-	turns    []chatTurn
+	// notices are command output from before the first turn; later ones attach to their turn.
+	notices []string
+	turns   []chatTurn
+	// usage totals TurnCompleted facts across the session for /cost.
+	usage core.Usage
 	// observedTurns counts UserMessageSubmitted facts. Streamed events belong to that turn, so a
 	// chunk that arrives after its turn finished can never land in the next one.
 	observedTurns int
@@ -70,6 +74,11 @@ func (t *transcript) startTurn(prompt string) int {
 	return len(t.turns)
 }
 
+// resetTranscript forgets the conversation but keeps startup warnings and the session usage total.
+func (t *transcript) resetTranscript() {
+	t.turns, t.notices, t.observedTurns = nil, nil, 0
+}
+
 func (t *transcript) finishTurn(turnNumber int, outcome turnOutcome, failure string) {
 	turn := &t.turns[turnNumber-1]
 	turn.outcome, turn.failure = outcome, failure
@@ -81,6 +90,11 @@ func (t *transcript) applyEvent(event core.Event) {
 		if t.observedTurns <= len(t.turns) {
 			t.turns[t.observedTurns-1].turnID = submitted.TurnID
 		}
+		return
+	}
+	if completed, isCompleted := event.(core.TurnCompleted); isCompleted {
+		t.usage.InputTokens += completed.Usage.InputTokens
+		t.usage.OutputTokens += completed.Usage.OutputTokens
 		return
 	}
 	if t.observedTurns < 1 || t.observedTurns > len(t.turns) {
@@ -122,10 +136,10 @@ func (t *transcript) rewindTurns(fromTurn core.ID, notice string) (string, bool)
 	return t.turns[start].prompt, true
 }
 
-// addNotice shows notice after the latest turn, or among the warnings before any turn.
+// addNotice shows notice after the latest turn, or after the warnings before any turn.
 func (t *transcript) addNotice(notice string) {
 	if len(t.turns) == 0 {
-		t.warnings = append(t.warnings, notice)
+		t.notices = append(t.notices, notice)
 		return
 	}
 	last := &t.turns[len(t.turns)-1]

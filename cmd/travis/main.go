@@ -158,12 +158,15 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	events, unsubscribe := session.bus.Subscribe(nil)
 	defer unsubscribe()
 
-	chatErr := terminal.RunChat(context.Background(), events, approvals, session.conversation.RunAssistantTurn,
-		terminal.Options{
-			ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out,
-			Undo:      terminal.UndoActions{ListTurns: session.conversation.ListTurns, Rewind: session.conversation.Rewind},
-			Questions: questions,
-		})
+	actions := terminal.ChatActions{
+		RunTurn:      session.conversation.RunAssistantTurn,
+		ResetHistory: session.conversation.ResetHistory,
+		SelectModel:  session.conversation.SelectModel,
+		ToolNames:    session.toolNames,
+		Undo:         terminal.UndoActions{ListTurns: session.conversation.ListTurns, Rewind: session.conversation.Rewind},
+	}
+	chatErr := terminal.RunChat(context.Background(), events, approvals, actions,
+		terminal.Options{ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions})
 	session.close()
 	return chatErr
 }
@@ -174,6 +177,7 @@ type chatSession struct {
 	conversation *loop.AssistantConversation
 	bus          *core.Bus
 	closeMCP     func()
+	toolNames    []string
 	waitForTrace func()
 }
 
@@ -247,6 +251,9 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 		bus:          bus,
 		closeMCP:     mcpManager.Close,
 		waitForTrace: func() {},
+	}
+	for _, tool := range toolRegistry.List(registry.Filter{}) {
+		session.toolNames = append(session.toolNames, tool.Name())
 	}
 	if cfg.Eval.Traces {
 		session.waitForTrace = startSessionTrace(bus, filepath.Join(paths.StateDir, "traces"), sessionID, diagnostics)
