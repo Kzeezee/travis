@@ -27,6 +27,7 @@ type Config struct {
 	Eval     EvalCfg
 	Session  SessionCfg
 	MCP      MCPCfg
+	Skills   SkillsCfg
 }
 
 // ProviderCfg selects which model profile is live and lists every profile a user has
@@ -56,6 +57,20 @@ type MCPServerCfg struct {
 	Command string
 	Args    []string
 	Env     map[string]string
+}
+
+// SkillsCfg configures the SKILL.md loader (DESIGN.md §5.8). User-config only, same
+// reasoning as MCPCfg (DESIGN.md risk R-27): a cloned repo must never be able to turn on
+// its own untrusted-content loading just by being `cd`'d into (R-02, D-23).
+type SkillsCfg struct {
+	// Roots is resolved through PathSet.Resolve: a "config:"-prefixed root lives outside
+	// the workspace and is trusted (user tier); anything that resolves inside the
+	// workspace is untrusted (workspace tier), regardless of how it was spelled.
+	Roots []string
+	// LoadWorkspace gates discovering any workspace-tier root, and reading the workspace
+	// AGENTS.md, at all. Default false: no approval UX exists yet for untrusted content
+	// this is injected straight into the system prompt (ticket 2D, not built).
+	LoadWorkspace bool `toml:"load_workspace"`
 }
 
 // AuthCfg never carries a credential value, only a reference the broker resolves
@@ -224,6 +239,7 @@ func buildDefaultConfig() Config {
 		Eval:    EvalCfg{Traces: true},
 		Session: SessionCfg{SnapshotMaxBytes: 16 << 20},
 		MCP:     MCPCfg{},
+		Skills:  SkillsCfg{Roots: []string{"config:skills"}},
 	}
 }
 
@@ -286,6 +302,12 @@ func decodeWorkspaceLayerFile(readFile fileReader, path string, cfg *Config) (Di
 			Message:  fmt.Sprintf("config %s: [mcp] may not be set by the workspace layer (DESIGN.md risk R-27; here for code execution, not just credential redirection); ignored", path),
 		})
 	}
+	if setsSkillsTable(data) {
+		diags = append(diags, Diagnostic{
+			Severity: SeverityWarning,
+			Message:  fmt.Sprintf("config %s: [skills] may not be set by the workspace layer (DESIGN.md risk R-27; a workspace must not be able to turn on its own untrusted-content loading, R-02/D-23); ignored", path),
+		})
+	}
 
 	seed := workspaceLayerCfg{Profile: cfg.Profile, Brain: cfg.Brain, Tools: cfg.Tools}
 	if err := toml.Unmarshal(data, &seed); err != nil {
@@ -316,6 +338,18 @@ func setsMCPTable(data []byte) bool {
 		return false
 	}
 	_, ok := raw["mcp"]
+	return ok
+}
+
+// setsSkillsTable reports whether data has a top-level [skills] table, purely to give
+// decodeWorkspaceLayerFile's warning a clear cause; workspaceLayerCfg's shape is what
+// actually enforces the restriction.
+func setsSkillsTable(data []byte) bool {
+	var raw map[string]any
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		return false
+	}
+	_, ok := raw["skills"]
 	return ok
 }
 

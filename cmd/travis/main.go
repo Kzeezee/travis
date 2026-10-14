@@ -26,6 +26,7 @@ import (
 	"github.com/Kzeezee/travis/internal/tools/builtin"
 	"github.com/Kzeezee/travis/internal/tools/mcp"
 	"github.com/Kzeezee/travis/internal/tools/registry"
+	"github.com/Kzeezee/travis/internal/tools/skills"
 )
 
 const shortRevLen = 12
@@ -235,13 +236,20 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 		}
 	}
 
+	// Unlike MCP, discovery is a one-time local filesystem read with no supervision or
+	// approval wait, so this runs synchronously here and needs no Close.
+	skillsCatalog := skills.BuildCatalog(cfg.Skills, paths, diagnostics)
+	if err := toolRegistry.Register(registry.SourceSkill, skills.BuildOpenTool(skillsCatalog)); err != nil {
+		return nil, err
+	}
+
 	// Async by design (BuildManager's own doc comment): connecting here, before the TUI's
 	// event loop starts reading approvals, would deadlock any server that needs Ask.
 	redactedEvents := redact.WrapSink(bus, redactor)
 	mcpManager := mcp.BuildManager(cfg.MCP, mcpPolicy, approver, clock, redactedEvents, diagnostics, toolRegistry, paths.StateDir)
 
 	ids := id.BuildULIDGenerator(clock)
-	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: redactedEvents, Clock: clock, IDs: ids}
+	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: redactedEvents, Clock: clock, IDs: ids, Skills: skillsCatalog}
 	if sessionLog != nil {
 		deps.Log = redact.WrapSessionLog(sessionLog, redactor)
 	}

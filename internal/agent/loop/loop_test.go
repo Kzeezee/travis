@@ -632,3 +632,45 @@ func TestRunSendsTheSystemPromptOnEveryStepWithoutStoringIt(t *testing.T) {
 		}
 	}
 }
+
+// fakeSkillsIndex stands in for a *skills.Catalog without the loop package depending on
+// internal/tools/skills at all (it only knows the local SkillsIndex port it declares).
+type fakeSkillsIndex struct {
+	sections []string
+}
+
+func (f *fakeSkillsIndex) ReportSystemPromptSections() []string { return f.sections }
+
+func TestRunAppendsSkillsSectionsToTheSystemPrompt(t *testing.T) {
+	provider := &fakeProvider{streams: []*fakeStream{buildTextStream(core.Chunk{Text: "done"})}}
+	deps := loop.Dependencies{
+		Provider: provider,
+		Events:   &recordingSink{},
+		Clock:    core.FixedClock{Time: time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)},
+		IDs:      &core.SequentialIDGenerator{Prefix: "id-"},
+		Skills:   &fakeSkillsIndex{sections: []string{"Available skills:\n- demo: a demo skill"}},
+	}
+	conversation := loop.BuildAssistantConversation(deps, "test-model", testMaxSteps)
+
+	if err := conversation.RunAssistantTurn(context.Background(), "hi"); err != nil {
+		t.Fatalf("RunAssistantTurn returned %v, want nil", err)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("got %d requests, want 1", len(provider.requests))
+	}
+	if !strings.Contains(provider.requests[0].System, "- demo: a demo skill") {
+		t.Fatalf("system prompt = %q, want the fake SkillsIndex's section appended", provider.requests[0].System)
+	}
+}
+
+func TestRunWithNilSkillsLeavesTheSystemPromptUnchanged(t *testing.T) {
+	provider := &fakeProvider{streams: []*fakeStream{buildTextStream(core.Chunk{Text: "done"})}}
+	conversation := buildAssistantConversation(t, provider, nil, &recordingSink{})
+
+	if err := conversation.RunAssistantTurn(context.Background(), "hi"); err != nil {
+		t.Fatalf("RunAssistantTurn returned %v, want nil", err)
+	}
+	if strings.Contains(provider.requests[0].System, "skill") {
+		t.Fatalf("system prompt = %q, want no skills section when Dependencies.Skills is nil", provider.requests[0].System)
+	}
+}
