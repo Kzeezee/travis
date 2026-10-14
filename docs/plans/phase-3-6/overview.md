@@ -25,6 +25,33 @@ One ticket per lettered sub-phase (3C, 4A, …), one owner, normally one PR. The
 list each ticket's checklist in commit order. A ticket splits into -a/-b (as 2C did) only
 when it outgrows one review or two people want to work its halves in parallel.
 
+## Linear tickets
+
+| Plan ID | Ticket |
+|---|---|
+| 3F | TRA-40 |
+| D-0 | TRA-41 |
+| 3C | TRA-42 |
+| 3D | TRA-43 |
+| 3E | TRA-44 |
+| 4-spike | TRA-45 |
+| 4A | TRA-46 |
+| 4B | TRA-47 |
+| 4C | TRA-48 |
+| 4D | TRA-49 |
+| 4E | TRA-50 |
+| 5A | TRA-51 |
+| 5B | TRA-52 |
+| 5C | TRA-53 |
+| 6A | TRA-54 |
+| 6-spike | TRA-55 |
+| 6B | TRA-56 |
+| 6C | TRA-57 |
+| 6D | TRA-58 |
+| 6E | TRA-59 |
+| 6F | TRA-60 |
+| 3A, 3B | TRA-29, TRA-23 (done) |
+
 ## Waves
 
 ```text
