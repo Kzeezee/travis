@@ -41,7 +41,7 @@ func TestFilterSlashCommandsByPrefix(t *testing.T) {
 		want   int
 	}{
 		{prefix: "", want: len(commands)},
-		{prefix: "m", want: 1},
+		{prefix: "m", want: 2}, // model, memory
 		{prefix: "t", want: 1},
 		{prefix: "x", want: 0},
 	}
@@ -58,6 +58,11 @@ type recordingActions struct {
 	prompts       []string
 	resets        int
 	selectedModel string
+
+	toolNames []string
+	skills    []SkillSummary
+	memory    string
+	memoryErr error
 }
 
 func (r *recordingActions) buildChatActions() ChatActions {
@@ -68,7 +73,9 @@ func (r *recordingActions) buildChatActions() ChatActions {
 		},
 		ResetHistory: func() { r.resets++ },
 		SelectModel:  func(name string) { r.selectedModel = name },
-		ToolNames:    []string{"fs.read", "fs.write"},
+		ListTools:    func() []string { return r.toolNames },
+		ListSkills:   func() []SkillSummary { return r.skills },
+		ReadMemory:   func(context.Context) (string, error) { return r.memory, r.memoryErr },
 	}
 }
 
@@ -128,14 +135,38 @@ func TestSlashCommandsDispatch(t *testing.T) {
 		}
 	})
 
-	t.Run("/tools lists the tool names", func(t *testing.T) {
-		recorder := &recordingActions{}
+	t.Run("/tools lists the tool names live from the registry", func(t *testing.T) {
+		recorder := &recordingActions{toolNames: []string{"fs.read", "fs.write"}}
 		m := buildTestModel(recorder.buildChatActions())
 
 		m, _ = pressKeys(m, append(typedKeys("/tools"), enterKey)...)
 
 		if view := renderPlainView(m); !strings.Contains(view, "tools: fs.read, fs.write") {
 			t.Fatalf("got view\n%s\nwant the tool list", view)
+		}
+	})
+
+	t.Run("/skills lists each loaded skill with its tier and description", func(t *testing.T) {
+		recorder := &recordingActions{skills: []SkillSummary{
+			{Name: "notes", Tier: "user", Description: "search and summarize notes"},
+		}}
+		m := buildTestModel(recorder.buildChatActions())
+
+		m, _ = pressKeys(m, append(typedKeys("/skills"), enterKey)...)
+
+		if view := renderPlainView(m); !strings.Contains(view, "notes [user]: search and summarize notes") {
+			t.Fatalf("got view\n%s\nwant the skill summary", view)
+		}
+	})
+
+	t.Run("/memory shows the current memory content", func(t *testing.T) {
+		recorder := &recordingActions{memory: "# Memory\n\nremember the deadline"}
+		m := buildTestModel(recorder.buildChatActions())
+
+		m, _ = pressKeys(m, append(typedKeys("/memory"), enterKey)...)
+
+		if view := renderPlainView(m); !strings.Contains(view, "remember the deadline") {
+			t.Fatalf("got view\n%s\nwant the memory content", view)
 		}
 	})
 
@@ -166,12 +197,12 @@ func TestPaletteListsAndCompletesCommands(t *testing.T) {
 	m := buildTestModel(ChatActions{})
 
 	m, _ = pressKeys(m, typedKeys("/")...)
-	if rows := m.listPaletteRows(); len(rows) != len(m.commands) {
-		t.Fatalf("got %d rows for /, want every command (%d)", len(rows), len(m.commands))
+	if rows := m.listPaletteRows(); len(rows) != min(len(m.commands), maxPaletteRows) {
+		t.Fatalf("got %d rows for /, want min(every command, the palette cap) = %d", len(rows), min(len(m.commands), maxPaletteRows))
 	}
-	m, _ = pressKeys(m, typedKeys("m")...)
+	m, _ = pressKeys(m, typedKeys("mo")...) // "m" alone now also matches /memory
 	if rows := m.listPaletteRows(); len(rows) != 1 || rows[0].name != "model" {
-		t.Fatalf("got rows %v for /m, want only /model", rows)
+		t.Fatalf("got rows %v for /mo, want only /model", rows)
 	}
 	if view := renderPlainView(m); !strings.Contains(view, "› /model [name]") {
 		t.Fatalf("want /model shown selected, got:\n%s", view)
@@ -198,12 +229,13 @@ func TestPaletteKeysMoveSelectionAndEscClears(t *testing.T) {
 	for range len(m.commands) + 2 {
 		m, _ = pressKeys(m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	if want := len(m.listPaletteRows()) - 1; m.paletteIndex != want {
+	rows := m.listPaletteRows()
+	if want := len(rows) - 1; m.paletteIndex != want {
 		t.Fatalf("got index %d, want down clamped at %d", m.paletteIndex, want)
 	}
 	m, _ = pressKeys(m, tea.KeyPressMsg{Code: tea.KeyTab})
-	if m.input.Value() != "/"+m.commands[len(m.commands)-1].name+" " {
-		t.Fatalf("got input %q, want the selected command completed", m.input.Value())
+	if m.input.Value() != "/"+rows[len(rows)-1].name+" " {
+		t.Fatalf("got input %q, want the last visible command completed", m.input.Value())
 	}
 
 	m.input.Reset()

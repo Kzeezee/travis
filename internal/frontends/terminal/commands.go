@@ -23,6 +23,8 @@ func buildSlashCommands() []slashCommand {
 		{name: "new", usage: "/new", summary: "start a new conversation", run: startNewConversation},
 		{name: "model", usage: "/model [name]", summary: "show or switch the model", run: selectModel},
 		{name: "tools", usage: "/tools", summary: "list available tools", run: showTools},
+		{name: "skills", usage: "/skills", summary: "list loaded skills", run: showSkills},
+		{name: "memory", usage: "/memory", summary: "show the current memory", run: showMemory},
 		{name: "cost", usage: "/cost", summary: "show tokens used this session", run: showCost},
 		{name: "undo", usage: "/undo", summary: "rewind to before an earlier turn", run: func(m chatModel, _ string) (chatModel, tea.Cmd) {
 			return m.requestTurnList()
@@ -77,11 +79,46 @@ func selectModel(m chatModel, name string) (chatModel, tea.Cmd) {
 }
 
 func showTools(m chatModel, _ string) (chatModel, tea.Cmd) {
-	if len(m.actions.ToolNames) == 0 {
+	if m.actions.ListTools == nil {
 		m.transcript.addNotice("tools: none")
 		return m, nil
 	}
-	m.transcript.addNotice("tools: " + strings.Join(m.actions.ToolNames, ", "))
+	names := m.actions.ListTools()
+	if len(names) == 0 {
+		m.transcript.addNotice("tools: none")
+		return m, nil
+	}
+	m.transcript.addNotice("tools: " + strings.Join(names, ", "))
+	return m, nil
+}
+
+func showSkills(m chatModel, _ string) (chatModel, tea.Cmd) {
+	if m.actions.ListSkills == nil {
+		m.transcript.addNotice("skills: none")
+		return m, nil
+	}
+	skills := m.actions.ListSkills()
+	if len(skills) == 0 {
+		m.transcript.addNotice("skills: none")
+		return m, nil
+	}
+	for _, skill := range skills {
+		m.transcript.addNotice(fmt.Sprintf("%s [%s]: %s", skill.Name, skill.Tier, skill.Description))
+	}
+	return m, nil
+}
+
+func showMemory(m chatModel, _ string) (chatModel, tea.Cmd) {
+	if m.actions.ReadMemory == nil {
+		m.transcript.addNotice("memory: unavailable")
+		return m, nil
+	}
+	content, err := m.actions.ReadMemory(m.ctx)
+	if err != nil {
+		m.transcript.addNotice("memory: " + err.Error())
+		return m, nil
+	}
+	m.transcript.addNotice(content)
 	return m, nil
 }
 

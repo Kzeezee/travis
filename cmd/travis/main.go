@@ -163,7 +163,9 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		RunTurn:      session.conversation.RunAssistantTurn,
 		ResetHistory: session.conversation.ResetHistory,
 		SelectModel:  session.conversation.SelectModel,
-		ToolNames:    session.toolNames,
+		ListTools:    session.reportToolNames,
+		ListSkills:   session.reportSkillSummaries,
+		ReadMemory:   session.memoryStore.ReadMemory,
 		Undo:         terminal.UndoActions{ListTurns: session.conversation.ListTurns, Rewind: session.conversation.Rewind},
 	}
 	chatErr := terminal.RunChat(context.Background(), events, approvals, actions,
@@ -175,11 +177,33 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 // chatSession is everything a chat runs on apart from its frontend: the conversation,
 // the bus it publishes to, and the trace recording that bus.
 type chatSession struct {
-	conversation *loop.AssistantConversation
-	bus          *core.Bus
-	closeMCP     func()
-	toolNames    []string
-	waitForTrace func()
+	conversation  *loop.AssistantConversation
+	bus           *core.Bus
+	closeMCP      func()
+	toolRegistry  *registry.Registry
+	skillsCatalog *skills.Catalog
+	memoryStore   core.MemoryStore
+	waitForTrace  func()
+}
+
+// reportToolNames lists every tool registered right now, live — not a startup snapshot, so
+// an MCP server that connects or dies mid-session is reflected immediately (/tools, 3C).
+func (s *chatSession) reportToolNames() []string {
+	var names []string
+	for _, tool := range s.toolRegistry.List(registry.Filter{}) {
+		names = append(names, tool.Name())
+	}
+	return names
+}
+
+// reportSkillSummaries converts the skills catalog's own Tier type to a plain string, the
+// only place that conversion happens, so the terminal package never imports internal/tools/skills.
+func (s *chatSession) reportSkillSummaries() []terminal.SkillSummary {
+	var out []terminal.SkillSummary
+	for _, summary := range s.skillsCatalog.ReportSkillSummaries() {
+		out = append(out, terminal.SkillSummary{Name: summary.Name, Tier: summary.Tier.String(), Description: summary.Description})
+	}
+	return out
 }
 
 // buildSessionBus is the bus one chat session publishes to; diagnostics receives its warnings.
@@ -255,13 +279,13 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 	}
 
 	session := &chatSession{
-		conversation: loop.BuildAssistantConversation(deps, model, cfg.Brain.MaxSteps),
-		bus:          bus,
-		closeMCP:     mcpManager.Close,
-		waitForTrace: func() {},
-	}
-	for _, tool := range toolRegistry.List(registry.Filter{}) {
-		session.toolNames = append(session.toolNames, tool.Name())
+		conversation:  loop.BuildAssistantConversation(deps, model, cfg.Brain.MaxSteps),
+		bus:           bus,
+		closeMCP:      mcpManager.Close,
+		toolRegistry:  toolRegistry,
+		skillsCatalog: skillsCatalog,
+		memoryStore:   memoryStore,
+		waitForTrace:  func() {},
 	}
 	if cfg.Eval.Traces {
 		session.waitForTrace = startSessionTrace(bus, filepath.Join(paths.StateDir, "traces"), sessionID, diagnostics)

@@ -11,6 +11,10 @@ import (
 type Result struct {
 	// ToolsCalled holds each tool name actually invoked during the run, deduplicated.
 	ToolsCalled []string
+	// ToolsOffered holds the tool names in the first provider call's own request — what
+	// Registry.Prune actually returned for this session. Empty when the runner has no way
+	// to observe it (a cassette replay never exposes the request it would have made).
+	ToolsOffered []string
 	// Answer is the assistant's streamed text, concatenated across every turn.
 	Answer string
 	// Files holds the content of exactly the paths named in the scenario's AssertFiles.
@@ -33,6 +37,15 @@ func CheckAssertions(sc Scenario, result Result) error {
 	for _, forbidden := range sc.AssertToolsNotCalled {
 		if called[forbidden] {
 			return fmt.Errorf("%q: tool %q was called, want it untouched", sc.Name, forbidden)
+		}
+	}
+	offered := make(map[string]bool, len(result.ToolsOffered))
+	for _, name := range result.ToolsOffered {
+		offered[name] = true
+	}
+	for _, want := range sc.AssertToolsOffered {
+		if !offered[want] {
+			return fmt.Errorf("%q: tool %q was never offered to the model (offered: %v)", sc.Name, want, result.ToolsOffered)
 		}
 	}
 	for _, want := range sc.AssertAnswerContains {

@@ -50,14 +50,24 @@ type UndoActions struct {
 	Rewind    func(ctx context.Context, fromTurn core.ID, mode core.RewindMode) (core.RewindReport, error)
 }
 
+// SkillSummary is one loaded skill's identity for /skills: plain strings only, so the
+// terminal package never has to import internal/tools/skills to render it.
+type SkillSummary struct {
+	Name, Tier, Description string
+}
+
 // ChatActions are the operations the chat can ask of the session; the frontend calls them
 // without knowing what implements them.
 type ChatActions struct {
 	RunTurn      func(ctx context.Context, prompt string) error
 	ResetHistory func()
 	SelectModel  func(name string)
-	ToolNames    []string
-	Undo         UndoActions
+	// ListTools, ListSkills and ReadMemory query the session live, not a startup snapshot:
+	// a server that connects or dies mid-session must show up correctly in /tools.
+	ListTools  func() []string
+	ListSkills func() []SkillSummary
+	ReadMemory func(ctx context.Context) (string, error)
+	Undo       UndoActions
 }
 
 // RunChat runs the interactive chat until the user quits or input ends.

@@ -59,14 +59,17 @@ type serverProcess struct {
 	events      core.EventSink
 	diagnostics io.Writer
 	trust       *trustStore
+	// unregisterTools removes this server's own tools from the registry once restart
+	// attempts are exhausted; nil in tests that never reach exhaustion.
+	unregisterTools func()
 
 	mu          sync.Mutex
 	session     *mcpsdk.ClientSession
 	unavailable error
 }
 
-func buildServerProcess(name string, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, trust *trustStore) *serverProcess {
-	return &serverProcess{name: name, cfg: cfg, policy: pol, approver: approver, clock: clock, events: events, diagnostics: diagnostics, trust: trust}
+func buildServerProcess(name string, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, trust *trustStore, unregisterTools func()) *serverProcess {
+	return &serverProcess{name: name, cfg: cfg, policy: pol, approver: approver, clock: clock, events: events, diagnostics: diagnostics, trust: trust, unregisterTools: unregisterTools}
 }
 
 // connectAndSupervise performs the first connect (so tools/list has something to report)
@@ -221,6 +224,9 @@ func (p *serverProcess) reportUnavailable(ctx context.Context, reason string) {
 	p.unavailable = &core.ProviderError{Provider: sourceName(p.name), Kind: core.ErrExhausted, Cause: fmt.Errorf("%s", reason)}
 	p.session = nil
 	p.mu.Unlock()
+	if p.unregisterTools != nil {
+		p.unregisterTools()
+	}
 	if p.events == nil {
 		return
 	}

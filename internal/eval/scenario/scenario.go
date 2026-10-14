@@ -32,17 +32,25 @@ type ScriptedStep struct {
 // Steps is set, the same way an MCP server is trusted by exact (command, args): each
 // scenario commits to one source of model output, never a mix.
 type Scenario struct {
-	Name                 string         `toml:"name"`
-	Fixture              string         `toml:"fixture"`
-	Cassette             string         `toml:"cassette"`
-	Model                string         `toml:"model"`
-	MaxSteps             int            `toml:"max_steps"`
+	Name     string `toml:"name"`
+	Fixture  string `toml:"fixture"`
+	Cassette string `toml:"cassette"`
+	Model    string `toml:"model"`
+	MaxSteps int    `toml:"max_steps"`
+	// ToolsMaxExposed overrides tools.max_exposed for this scenario's session; 0 falls back
+	// to the runner's own default. Lets a scenario prove pruning behavior (3C) end to end.
+	ToolsMaxExposed      int            `toml:"tools_max_exposed"`
 	Steps                []ScriptedStep `toml:"step"`
 	Turns                []string       `toml:"turns"`
 	AssertToolsCalled    []string       `toml:"assert_tools_called"`
 	AssertToolsNotCalled []string       `toml:"assert_tools_not_called"`
-	AssertAnswerContains []string       `toml:"assert_answer_contains"`
-	AssertFiles          []AssertFile   `toml:"assert_files"`
+	// AssertToolsOffered checks the tool specs actually sent to the model on its first
+	// call (what Registry.Prune returned), not which tools it went on to call — the two
+	// can diverge, since Lookup finds a tool by name regardless of whether Prune offered
+	// it. Only the scripted runner (not a cassette replay) can observe this.
+	AssertToolsOffered   []string     `toml:"assert_tools_offered"`
+	AssertAnswerContains []string     `toml:"assert_answer_contains"`
+	AssertFiles          []AssertFile `toml:"assert_files"`
 }
 
 // Suite is every scenario in one TOML file.

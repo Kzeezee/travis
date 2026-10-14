@@ -1,6 +1,8 @@
 // Package registry is the single place built-in, MCP, skill and subagent tools are found (DESIGN §5.5).
 // Flow: BuildRegistry → Register (startup, each tool, collisions rejected) →
 // Prune (each loop step, tools offered to the model) → Lookup (model called a tool) → Tool.Invoke
+// Unregister removes a tool once it stops being available (an MCP server that exhausted its
+// restart attempts), so Prune and Lookup never see it again.
 
 package registry
 
@@ -72,6 +74,16 @@ func (r *Registry) Register(source Source, tool core.Tool) error {
 	return nil
 }
 
+// remove tools from registry, such as an MCP server's once it exhausts its restart attempts.
+// A name that is not registered is a no-op.
+func (r *Registry) Unregister(names ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, name := range names {
+		delete(r.byName, name)
+	}
+}
+
 // get tool by name
 func (r *Registry) Lookup(name string) (core.Tool, bool) {
 	r.mu.RLock()
@@ -100,15 +112,43 @@ func (r *Registry) List(filter Filter) []core.Tool {
 	return tools
 }
 
-// decide which tools to offer to the model, placeholder until Phase 3, D-03
-func (r *Registry) Prune(_ context.Context, budget int, _ string) []core.Tool {
-	tools := r.List(Filter{})
-	limit := r.maxExposed
-	if budget > 0 && budget < limit {
-		limit = budget
+// decide which tools to offer to the model this step (D-03). Builtin, skill and swarm tools
+// are travis's own and always stay exposed; only MCP tools — the "hundreds of tools" case
+// DESIGN.md describes — are ranked by keyword overlap with hint and capped. budget<=0 means
+// "defer to maxExposed" (the loop's own default, loop.go's defaultToolBudget): only the
+// maxExposed count caps the MCP slots then. budget>0 additionally caps by each tool's
+// estimated schema token cost, always-exposed tools' cost included.
+func (r *Registry) Prune(_ context.Context, budget int, hint string) []core.Tool {
+	all := r.List(Filter{})
+	mcpTools := r.List(Filter{Source: SourceMCP})
+	isMCP := make(map[string]bool, len(mcpTools))
+	for _, tool := range mcpTools {
+		isMCP[tool.Name()] = true
 	}
-	if len(tools) > limit {
-		tools = tools[:limit]
+	var alwaysExposed []core.Tool
+	for _, tool := range all {
+		if !isMCP[tool.Name()] {
+			alwaysExposed = append(alwaysExposed, tool)
+		}
 	}
-	return tools
+
+	remainingBudget := budget
+	for _, tool := range alwaysExposed {
+		remainingBudget -= estimateToolSpecTokens(tool.Describe())
+	}
+	slots := max(r.maxExposed-len(alwaysExposed), 0)
+
+	selected := append([]core.Tool{}, alwaysExposed...)
+	for _, tool := range rankToolsByHintOverlap(mcpTools, hint) {
+		if len(selected)-len(alwaysExposed) >= slots {
+			break
+		}
+		cost := estimateToolSpecTokens(tool.Describe())
+		if budget > 0 && cost > remainingBudget {
+			break
+		}
+		selected = append(selected, tool)
+		remainingBudget -= cost
+	}
+	return selected
 }

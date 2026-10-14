@@ -24,7 +24,14 @@ func buildAdaptedTool(process *serverProcess, server string, remoteTool *mcpsdk.
 }
 
 func (t *adaptedTool) Name() string {
-	return fmt.Sprintf("mcp_%s_%s", t.server, t.remoteName)
+	return toolNamePrefix(t.server) + t.remoteName
+}
+
+// toolNamePrefix is every tool name adaptedTool ever produces for server, so a server's
+// tools can always be found again by name alone — used both by Name and, on restart
+// exhaustion, to look the server's own tools back up in the registry to unregister them.
+func toolNamePrefix(server string) string {
+	return fmt.Sprintf("mcp_%s_", server)
 }
 
 func (t *adaptedTool) Describe() core.ToolSpec {

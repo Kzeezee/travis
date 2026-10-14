@@ -79,8 +79,12 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 	if maxSteps == 0 {
 		maxSteps = e2eMaxSteps
 	}
+	maxExposed := sc.ToolsMaxExposed
+	if maxExposed == 0 {
+		maxExposed = 60
+	}
 	paths := config.PathSet{WorkspaceDir: workspace, StateDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t)}
-	cfg := &config.Config{Brain: config.BrainCfg{MaxSteps: maxSteps}, Tools: config.ToolsCfg{MaxExposed: 60}}
+	cfg := &config.Config{Brain: config.BrainCfg{MaxSteps: maxSteps}, Tools: config.ToolsCfg{MaxExposed: maxExposed}}
 	var diagnostics strings.Builder
 	bus := buildSessionBus(&diagnostics)
 	remote, _ := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
@@ -90,11 +94,13 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 		model = "scripted-model"
 	}
 	var provider core.Provider
+	var scripted *scriptedProvider
 	if sc.Cassette != "" {
 		path := filepath.Join("..", "..", "testdata", "cassettes", sc.Cassette+".jsonl")
 		provider = openaicompat.BuildProvider("http://cassette.invalid/v1", "", cassette.BuildClient(t, path), core.SystemClock{})
 	} else {
-		provider = buildScriptedProviderFromSteps(t, sc.Steps)
+		scripted = buildScriptedProviderFromSteps(t, sc.Steps)
+		provider = scripted
 	}
 
 	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, nil, bus, redact.New(), model, &diagnostics, policy.Policy{}, nil)
@@ -135,7 +141,14 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 		content, _ := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(assertFile.Path)))
 		files[assertFile.Path] = string(content)
 	}
-	return scenario.Result{ToolsCalled: called, Answer: answer.String(), Files: files}, nil
+
+	var offered []string
+	if scripted != nil && len(scripted.requests) > 0 {
+		for _, spec := range scripted.requests[0].Tools {
+			offered = append(offered, spec.Name)
+		}
+	}
+	return scenario.Result{ToolsCalled: called, ToolsOffered: offered, Answer: answer.String(), Files: files}, nil
 }
 
 // buildScriptedProviderFromSteps turns a scenario's fixed steps into the same scriptedProvider
