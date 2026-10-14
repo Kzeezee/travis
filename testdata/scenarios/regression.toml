@@ -1,0 +1,42 @@
+# 6A regression suite: converted from cmd/travis/e2e_test.go's notes and write task tests.
+# Run with: go test ./cmd/travis -run TestRegressionScenarios
+
+[[scenario]]
+name = "notes task finds the dentist appointment"
+fixture = "notes"
+cassette = "notes-task"
+model = "replayed-model"
+turns = ["Which note mentions the dentist appointment, and what date is it on?"]
+assert_tools_called = ["grep", "fs_read"]
+assert_tools_not_called = ["fs_write", "fs_edit"]
+assert_answer_contains = ["13", "October"]
+
+[[scenario]]
+name = "write task moves the appointment and writes a summary"
+fixture = "notes"
+turns = ["Move my dentist appointment to 10:15 and write a summary."]
+assert_tools_called = ["fs_read", "fs_edit", "fs_write"]
+assert_tools_not_called = ["grep"]
+
+[[scenario.step]]
+tool = "fs_read"
+arguments = '{"path":"admin/clinic-confirmation.md"}'
+
+[[scenario.step]]
+tool = "fs_edit"
+arguments = '{"path":"admin/clinic-confirmation.md","old_string":"Tuesday 13 October 2026, 09:30\n","new_string":"Tuesday 13 October 2026, 10:15\n"}'
+
+[[scenario.step]]
+tool = "fs_write"
+arguments = '{"path":"summary.md","content":"Dentist moved to 10:15.\nRoom 4.\n"}'
+
+[[scenario.step]]
+final_text = "Moved the appointment and wrote summary.md."
+
+[[scenario.assert_files]]
+path = "admin/clinic-confirmation.md"
+contains = "Tuesday 13 October 2026, 10:15"
+
+[[scenario.assert_files]]
+path = "summary.md"
+contains = "10:15"

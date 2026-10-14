@@ -1,0 +1,36 @@
+# Deliberately wrong scenarios: each one runs cleanly but asserts something that cannot be
+# true, so TestKnownBadScenariosFail can prove the harness actually catches a broken
+# assertion instead of passing vacuously. Run with:
+# go test ./cmd/travis -run TestKnownBadScenariosFail
+
+[[scenario]]
+name = "known bad: asserts a tool that was never called"
+fixture = "notes"
+cassette = "notes-task"
+model = "replayed-model"
+turns = ["Which note mentions the dentist appointment, and what date is it on?"]
+assert_tools_called = ["exec"]
+
+[[scenario]]
+name = "known bad: asserts the wrong file content"
+fixture = "notes"
+turns = ["Move my dentist appointment to 10:15 and write a summary."]
+
+[[scenario.step]]
+tool = "fs_read"
+arguments = '{"path":"admin/clinic-confirmation.md"}'
+
+[[scenario.step]]
+tool = "fs_edit"
+arguments = '{"path":"admin/clinic-confirmation.md","old_string":"Tuesday 13 October 2026, 09:30\n","new_string":"Tuesday 13 October 2026, 10:15\n"}'
+
+[[scenario.step]]
+tool = "fs_write"
+arguments = '{"path":"summary.md","content":"Dentist moved to 10:15.\nRoom 4.\n"}'
+
+[[scenario.step]]
+final_text = "Moved the appointment and wrote summary.md."
+
+[[scenario.assert_files]]
+path = "summary.md"
+contains = "this text never appears in the summary"
