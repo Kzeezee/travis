@@ -130,6 +130,9 @@ func (r Redactor) RedactEvent(event core.Event) core.Event {
 	case core.BrokerUnavailable:
 		e.Reason = r.RedactText(e.Reason)
 		return e
+	case core.MCPServerUnavailable:
+		e.Reason = r.RedactText(e.Reason)
+		return e
 	default:
 		return event
 	}

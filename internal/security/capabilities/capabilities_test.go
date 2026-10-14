@@ -35,7 +35,7 @@ func TestBuildProfileSetContents(t *testing.T) {
 		}},
 		{"dev", Set{
 			{Kind: core.CapabilityFSRead, Scope: home}, {Kind: core.CapabilityFSWrite, Scope: ws}, {Kind: core.CapabilityFSWrite, Scope: tmp},
-			{Kind: core.CapabilityExec, Scope: "*"}, {Kind: core.CapabilityNetworkHTTP, Scope: "*"},
+			{Kind: core.CapabilityExec, Scope: "**"}, {Kind: core.CapabilityNetworkHTTP, Scope: "*"},
 		}},
 	}
 	for _, tt := range tests {

@@ -51,7 +51,11 @@ func BuildProfileSet(name string, r Roots) (Set, error) {
 			set = append(set, writes...)
 		}
 		return append(set,
-			core.Capability{Kind: core.CapabilityExec, Scope: "*"},
+			// "**", not "*": SelectMatching's doublestar match treats "*" as matching
+			// within one path segment only, so it would never match a real absolute
+			// exec target like "C:/Users/.../node" or "/usr/local/bin/npx" — only a
+			// bare single-segment command name, which defeats "dev: exec anything".
+			core.Capability{Kind: core.CapabilityExec, Scope: "**"},
 			core.Capability{Kind: core.CapabilityNetworkHTTP, Scope: "*"},
 		), nil
 	default:

@@ -60,6 +60,9 @@ func TestEvaluate(t *testing.T) {
 		{"write outside grant", "default", false, Request{Kind: core.CapabilityFSWrite, Target: filepath.Join(home, "notes.txt")}, Deny},
 		{"paranoid cannot write", "paranoid", false, Request{Kind: core.CapabilityFSWrite, Target: filepath.Join(ws, "main.go")}, Deny},
 		{"dev exec asks", "dev", false, Request{Kind: core.CapabilityExec, Target: "go"}, Ask},
+		// Regression for the "*" vs "**" doublestar gap: a bare command name alone never
+		// exercised the multi-segment case, so this bug shipped unnoticed (ticket 3A).
+		{"dev exec asks for an absolute multi-segment path", "dev", false, Request{Kind: core.CapabilityExec, Target: filepath.Join(ws, "bin", "fakeserver.exe")}, Ask},
 		{"default exec denied without allowlist", "default", false, Request{Kind: core.CapabilityExec, Target: "go"}, Deny},
 		{"default net denied without allowlist", "default", false, Request{Kind: core.CapabilityNetworkHTTP, Target: "example.com"}, Deny},
 		{"dev net allowed", "dev", false, Request{Kind: core.CapabilityNetworkHTTP, Target: "example.com"}, Allow},

@@ -93,8 +93,9 @@ linters:
           - forbidigo
         text: time\.Now
 
-      # The adapters that own OS and environment specifics (DESIGN.md §8.1).
-      - path: (^|/)internal/(config|security|voicein|voiceout)/
+      # The adapters that own OS and environment specifics (DESIGN.md §8.1). tools/mcp
+      # resolves npx vs npx.cmd for its own subprocess launches (ticket 3A).
+      - path: (^|/)internal/(config|security|voicein|voiceout|tools/mcp)/
         linters:
           - forbidigo
         text: runtime\.GOOS|os\.Getenv
