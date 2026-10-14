@@ -23,6 +23,15 @@ build: ## Build every package, then bin/travis with bin/travis-broker's hash sta
 	go build -o bin/travis-broker$(GOEXE) ./cmd/travis-broker
 	go build -o bin/travis$(GOEXE) -ldflags "-X main.brokerSHA256=$$( (sha256sum bin/travis-broker$(GOEXE) 2>/dev/null || shasum -a 256 bin/travis-broker$(GOEXE)) | cut -d' ' -f1)" ./cmd/travis
 
+.PHONY: chat
+chat: build ## Build, then run `travis chat` against the current directory (pass flags with ARGS="...")
+	./bin/travis$(GOEXE) chat $(ARGS)
+
+.PHONY: install
+install: ## Install travis and travis-broker to $(go env GOPATH)/bin with the hash stamped in, so `travis chat` works from any directory
+	go build -o $(GOBIN)/travis-broker$(GOEXE) ./cmd/travis-broker
+	go build -o $(GOBIN)/travis$(GOEXE) -ldflags "-X main.brokerSHA256=$$( (sha256sum $(GOBIN)/travis-broker$(GOEXE) 2>/dev/null || shasum -a 256 $(GOBIN)/travis-broker$(GOEXE)) | cut -d' ' -f1)" ./cmd/travis
+
 .PHONY: test
 test: ## Run the unit tests
 	go test $(GOTEST_FLAGS) ./...

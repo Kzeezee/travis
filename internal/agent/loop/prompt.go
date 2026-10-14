@@ -23,7 +23,13 @@ const (
 )
 
 // buildSystemPrompt gives the date so relative dates ("last week's notes") resolve.
-func buildSystemPrompt(now time.Time) string {
+// skills may be nil, contributing nothing — the loop never inspects trust tiers or
+// delimiters itself, that's entirely whoever built skills' job (ticket 3B).
+func buildSystemPrompt(now time.Time, skills SkillsIndex) string {
 	identity := identityPrompt + " Today is " + now.Format("Monday 2006-01-02") + "."
-	return strings.Join([]string{identity, toolUsePrompt, stylePrompt}, "\n\n")
+	sections := []string{identity, toolUsePrompt, stylePrompt}
+	if skills != nil {
+		sections = append(sections, skills.ReportSystemPromptSections()...)
+	}
+	return strings.Join(sections, "\n\n")
 }

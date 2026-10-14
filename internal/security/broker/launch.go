@@ -44,7 +44,7 @@ func ResolveBrokerExecutable() (string, error) {
 	}
 	brokerExecutable := filepath.Join(filepath.Dir(travisExecutable), brokerName)
 	if _, err := os.Stat(brokerExecutable); err != nil {
-		return "", fmt.Errorf("travis-broker must sit next to travis at %q: %w", brokerExecutable, errors.Join(core.ErrNotFound, err))
+		return "", fmt.Errorf("travis-broker must sit next to travis at %q; `go run`/`go build` alone never place it there — run `make chat` for local dev or `make install` to put both on PATH: %w", brokerExecutable, errors.Join(core.ErrNotFound, err))
 	}
 	return brokerExecutable, nil
 }
@@ -145,7 +145,7 @@ func StartSessionBroker(ctx context.Context, launch SessionLaunch) (*SessionBrok
 // ponytail: hash-then-exec leaves a TOCTOU window; exec the hashed fd (fexecve) if the threat model needs it.
 func verifyBrokerBinary(path, wantSHA256 string) error {
 	if wantSHA256 == "" {
-		return fmt.Errorf("this travis has no broker hash built in, so %q cannot be verified; build with `make build`: %w", path, core.ErrDenied)
+		return fmt.Errorf("this travis has no broker hash built in, so %q cannot be verified; build with `make chat` (local dev) or `make install` (puts travis and travis-broker on PATH): %w", path, core.ErrDenied)
 	}
 	binary, err := os.Open(path)
 	if err != nil {

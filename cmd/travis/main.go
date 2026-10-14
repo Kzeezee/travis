@@ -20,10 +20,13 @@ import (
 	"github.com/Kzeezee/travis/internal/log"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
 	"github.com/Kzeezee/travis/internal/security/broker"
+	"github.com/Kzeezee/travis/internal/security/policy"
 	"github.com/Kzeezee/travis/internal/security/redact"
 	"github.com/Kzeezee/travis/internal/state/memory"
 	"github.com/Kzeezee/travis/internal/tools/builtin"
+	"github.com/Kzeezee/travis/internal/tools/mcp"
 	"github.com/Kzeezee/travis/internal/tools/registry"
+	"github.com/Kzeezee/travis/internal/tools/skills"
 )
 
 const shortRevLen = 12
@@ -109,15 +112,33 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// Not cfg.Profile, for the same reason startSessionBroker below pins "default": the
+	// workspace config layer can set that, and a cloned repo must not choose its own
+	// security profile. This is the same policy construction the broker process uses
+	// (BuildSessionPolicy), reused here because MCP server launches are exec-capability
+	// decisions made in this process, not round-tripped through the broker (§5.7's fuller
+	// sandboxed design is a later phase; this is the trusted/local slice).
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	// TEMPORARY for manual testing: "dev" grants exec: "*", since "default" has no exec
+	// grant wired to any config yet ([security] exec_allow doesn't exist). Revert to
+	// "default" before this ships — see the conversation for why.
+	mcpPolicy, err := broker.BuildSessionPolicy("dev", broker.SessionRoots{Paths: paths, Home: home, Temp: os.TempDir()})
+	if err != nil {
+		return err
+	}
 	apiKey := config.ResolveProviderAPIKey()
 	redactor := redact.New(apiKey)
 	bus := buildSessionBus(os.Stderr)
 	approvals := make(chan core.ApprovalRequest)
 	questions := make(chan core.QuestionRequest)
+	approver := terminal.BuildApprover(approvals)
 	sessionID := id.BuildULIDGenerator(core.SystemClock{}).GenerateID()
 	sessionBroker, err := startSessionBroker(paths, sessionID, cfg.Session, os.Stderr, broker.RemoteOptions{
 		Events:   redact.WrapSink(bus, redactor),
-		Approver: terminal.BuildApprover(approvals),
+		Approver: approver,
 		Clock:    core.SystemClock{},
 	})
 	if err != nil {
@@ -130,7 +151,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	}()
 
 	provider := openaicompat.BuildProvider(profile.BaseURL, apiKey, nil, core.SystemClock{})
-	session, err := assembleChatSession(cfg, paths, sessionID, provider, sessionBroker.Remote, sessionBroker.Remote, sessionBroker.Remote, terminal.BuildQuestioner(questions), bus, redactor, profile.Model, os.Stderr)
+	session, err := assembleChatSession(cfg, paths, sessionID, provider, sessionBroker.Remote, sessionBroker.Remote, sessionBroker.Remote, terminal.BuildQuestioner(questions), bus, redactor, profile.Model, os.Stderr, mcpPolicy, approver)
 	if err != nil {
 		return err
 	}
@@ -156,6 +177,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 type chatSession struct {
 	conversation *loop.AssistantConversation
 	bus          *core.Bus
+	closeMCP     func()
 	toolNames    []string
 	waitForTrace func()
 }
@@ -198,7 +220,8 @@ func startSessionBroker(paths config.PathSet, sessionID core.ID, sessionCfg conf
 // one session. The provider, file broker, session log and bus are parameters so the end-to-end
 // test can script the model while everything else stays real; diagnostics receives trace status
 // lines. A nil sessionLog records nothing, which only a test without a broker process may choose.
-func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID core.ID, provider core.Provider, fileBroker core.Broker, sessionLog core.SessionLog, memoryStore core.MemoryStore, questioner core.Questioner, bus *core.Bus, redactor redact.Redactor, model string, diagnostics io.Writer) (*chatSession, error) {
+func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID core.ID, provider core.Provider, fileBroker core.Broker, sessionLog core.SessionLog, memoryStore core.MemoryStore, questioner core.Questioner, bus *core.Bus, redactor redact.Redactor, model string, diagnostics io.Writer, mcpPolicy policy.Policy, approver core.Approver) (*chatSession, error) {
+	clock := core.SystemClock{}
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
 	for _, tool := range []core.Tool{
 		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes),
@@ -213,9 +236,20 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 		}
 	}
 
-	clock := core.SystemClock{}
+	// Unlike MCP, discovery is a one-time local filesystem read with no supervision or
+	// approval wait, so this runs synchronously here and needs no Close.
+	skillsCatalog := skills.BuildCatalog(cfg.Skills, paths, diagnostics)
+	if err := toolRegistry.Register(registry.SourceSkill, skills.BuildOpenTool(skillsCatalog)); err != nil {
+		return nil, err
+	}
+
+	// Async by design (BuildManager's own doc comment): connecting here, before the TUI's
+	// event loop starts reading approvals, would deadlock any server that needs Ask.
+	redactedEvents := redact.WrapSink(bus, redactor)
+	mcpManager := mcp.BuildManager(cfg.MCP, mcpPolicy, approver, clock, redactedEvents, diagnostics, toolRegistry, paths.StateDir)
+
 	ids := id.BuildULIDGenerator(clock)
-	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: redact.WrapSink(bus, redactor), Clock: clock, IDs: ids}
+	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: redactedEvents, Clock: clock, IDs: ids, Skills: skillsCatalog}
 	if sessionLog != nil {
 		deps.Log = redact.WrapSessionLog(sessionLog, redactor)
 	}
@@ -223,6 +257,7 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 	session := &chatSession{
 		conversation: loop.BuildAssistantConversation(deps, model, cfg.Brain.MaxSteps),
 		bus:          bus,
+		closeMCP:     mcpManager.Close,
 		waitForTrace: func() {},
 	}
 	for _, tool := range toolRegistry.List(registry.Filter{}) {
@@ -234,9 +269,10 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 	return session, nil
 }
 
-// close ends the session's event stream, which lets observers finish, then waits for the
-// trace to flush.
+// close stops MCP supervision first, so no late event from a dying server tries to publish
+// after the bus closes, then ends the session's event stream and waits for the trace to flush.
 func (s *chatSession) close() {
+	s.closeMCP()
 	s.bus.Close()
 	s.waitForTrace()
 }
