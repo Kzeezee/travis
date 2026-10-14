@@ -17,6 +17,7 @@ const (
 	EventTurnCompleted         EventType = "turn.completed"
 	EventPolicyDenied          EventType = "policy.denied"
 	EventBrokerUnavailable     EventType = "broker.unavailable"
+	EventMCPServerUnavailable  EventType = "mcp_server.unavailable"
 	EventFileChanged           EventType = "file.changed"
 	EventFilesReverted         EventType = "files.reverted"
 	EventConversationRewound   EventType = "conversation.rewound"
@@ -125,6 +126,19 @@ type BrokerUnavailable struct {
 
 func (BrokerUnavailable) ReportEventType() EventType {
 	return EventBrokerUnavailable
+}
+
+// MCPServerUnavailable records that a configured local MCP server exhausted its restart
+// attempts. Its tools are no longer in the registry; there is no degraded mode where a
+// dead server's tools are offered but fail every call.
+type MCPServerUnavailable struct {
+	EventHeader
+	Server string `json:"server"`
+	Reason string `json:"reason"`
+}
+
+func (MCPServerUnavailable) ReportEventType() EventType {
+	return EventMCPServerUnavailable
 }
 
 // FileChanged records that the broker wrote a file for a tool call. Path is workspace-relative

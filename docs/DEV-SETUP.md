@@ -220,6 +220,8 @@ CI's order: `build vet lint test-race tidy vuln`. Run it before pushing.
 | Target | What it is |
 | --- | --- |
 | `make build` | `go build ./...`, then `bin/travis` and `bin/travis-broker` with the broker's hash stamped in |
+| `make chat` | `make build`, then runs `bin/travis chat` here; pass flags with `ARGS="--model foo"` |
+| `make install` | installs `travis` and `travis-broker` to `$(go env GOPATH)/bin` with the hash stamped in, so plain `travis chat` works from any directory once that's on your PATH |
 | `make test` / `make test-race` | unit tests; `-race` is what CI runs |
 | `make lint` | `golangci-lint run` at the version pinned in `.golangci-lint-version` |
 | `make fmt` | `gofmt` + `goimports` — the same formatters gopls applies on save |
@@ -227,10 +229,27 @@ CI's order: `build vet lint test-race tidy vuln`. Run it before pushing.
 | `make tidy` | `go mod verify` and `go mod tidy -diff` |
 | `make vuln` | `govulncheck ./...` |
 
-**Run chat from `bin/`.** `travis` checks `travis-broker`'s SHA-256 before every session
-and refuses a mismatch, or a `travis` built without the hash (R-23), so `go run ./cmd/travis`
-and a plain `go build` cannot start a chat. Without make (Windows), do what `make build` does:
-build `travis-broker`, then build `travis` with `-ldflags "-X main.brokerSHA256=<its sha256>"`.
+**Why `go run ./cmd/travis` and a plain `go build` can't start a chat.** `travis` checks
+`travis-broker`'s SHA-256 before every session and refuses a mismatch, or a `travis` built
+without the hash (R-23). Two separate checks cause this: `ResolveBrokerExecutable` only ever
+looks for `travis-broker` sitting right beside the running `travis` binary, never on PATH —
+`go run` builds into a throwaway temp directory with nothing beside it, so this fails first.
+Even once it's found, `verifyBrokerBinary` refuses to run it unless its SHA-256 matches the
+hash `travis` was built with, which only `-ldflags "-X main.brokerSHA256=..."` sets — plain
+`go build`/`go install` never pass that flag, so the check fails closed instead of trusting
+whatever binary happens to be on disk. Both guard against a swapped broker silently inheriting
+every permission the real one has, so neither can be bypassed with an env var or flag.
+
+**Use `make chat` for local dev** (builds into `bin/` and runs it in place) **or `make
+install`** to get a `travis` you can run as a bare command from any directory once
+`$(go env GOPATH)/bin` is on your PATH. Without make (Windows), do what `make install` does
+by hand, in PowerShell:
+
+```powershell
+go build -o "$(go env GOPATH)\bin\travis-broker.exe" .\cmd\travis-broker
+$hash = (Get-FileHash "$(go env GOPATH)\bin\travis-broker.exe" -Algorithm SHA256).Hash.ToLower()
+go build -o "$(go env GOPATH)\bin\travis.exe" -ldflags "-X main.brokerSHA256=$hash" .\cmd\travis
+```
 
 `lint` and `vuln` install their pinned tool into `$(go env GOPATH)/bin` on first use.
 Bump a pin by editing `.golangci-lint-version` or `GOVULNCHECK_VERSION`, never by

@@ -102,10 +102,12 @@ func TestRedactEventOnlyTouchesFreeTextFields(t *testing.T) {
 			EventHeader: header,
 			Message:     core.Message{Role: core.RoleUser, Parts: []core.Part{core.TextPart{Text: "my topsecret value"}}},
 		},
-		"assistant text": core.AssistantTextStreamed{EventHeader: header, Text: "contains topsecret"},
-		"thought":        core.ThoughtStreamed{EventHeader: header, Text: "contains topsecret"},
-		"tool call":      core.ToolCallStarted{EventHeader: header, Call: core.ToolCall{ID: "c-1", Name: "fs_read", Arguments: json.RawMessage(`{"path":"topsecret"}`)}},
-		"tool result":    core.ToolCallFinished{EventHeader: header, Result: core.ToolResult{CallID: "c-1", Name: "fs_read", Content: "topsecret"}, Display: "topsecret"},
+		"assistant text":         core.AssistantTextStreamed{EventHeader: header, Text: "contains topsecret"},
+		"thought":                core.ThoughtStreamed{EventHeader: header, Text: "contains topsecret"},
+		"tool call":              core.ToolCallStarted{EventHeader: header, Call: core.ToolCall{ID: "c-1", Name: "fs_read", Arguments: json.RawMessage(`{"path":"topsecret"}`)}},
+		"tool result":            core.ToolCallFinished{EventHeader: header, Result: core.ToolResult{CallID: "c-1", Name: "fs_read", Content: "topsecret"}, Display: "topsecret"},
+		"broker unavailable":     core.BrokerUnavailable{EventHeader: header, Reason: "contains topsecret"},
+		"mcp server unavailable": core.MCPServerUnavailable{EventHeader: header, Server: "github", Reason: "contains topsecret"},
 	}
 
 	for name, event := range cases {

@@ -26,6 +26,7 @@ type Config struct {
 	Tools    ToolsCfg
 	Eval     EvalCfg
 	Session  SessionCfg
+	MCP      MCPCfg
 }
 
 // ProviderCfg selects which model profile is live and lists every profile a user has
@@ -41,6 +42,20 @@ type ProviderProfileCfg struct {
 	Model     string
 	MaxTokens int `toml:"max_tokens"`
 	Auth      AuthCfg
+}
+
+// MCPCfg lists every local MCP server a user has defined, keyed by whatever name they
+// chose. User-config only — see workspaceLayerCfg's doc comment: a cloned repo must never
+// be able to make `travis chat` exec a command just by being `cd`'d into (DESIGN.md R-27,
+// here for code execution rather than credential redirection).
+type MCPCfg struct {
+	Servers map[string]MCPServerCfg
+}
+
+type MCPServerCfg struct {
+	Command string
+	Args    []string
+	Env     map[string]string
 }
 
 // AuthCfg never carries a credential value, only a reference the broker resolves
@@ -208,6 +223,7 @@ func buildDefaultConfig() Config {
 		Tools:   ToolsCfg{ApprovalDefault: "ask", MaxExposed: 60},
 		Eval:    EvalCfg{Traces: true},
 		Session: SessionCfg{SnapshotMaxBytes: 16 << 20},
+		MCP:     MCPCfg{},
 	}
 }
 
@@ -264,6 +280,12 @@ func decodeWorkspaceLayerFile(readFile fileReader, path string, cfg *Config) (Di
 			Message:  fmt.Sprintf("config %s: [provider] may not be set by the workspace layer (DESIGN.md risk R-27); ignored", path),
 		})
 	}
+	if setsMCPTable(data) {
+		diags = append(diags, Diagnostic{
+			Severity: SeverityWarning,
+			Message:  fmt.Sprintf("config %s: [mcp] may not be set by the workspace layer (DESIGN.md risk R-27; here for code execution, not just credential redirection); ignored", path),
+		})
+	}
 
 	seed := workspaceLayerCfg{Profile: cfg.Profile, Brain: cfg.Brain, Tools: cfg.Tools}
 	if err := toml.Unmarshal(data, &seed); err != nil {
@@ -282,6 +304,18 @@ func setsProviderTable(data []byte) bool {
 		return false
 	}
 	_, ok := raw["provider"]
+	return ok
+}
+
+// setsMCPTable reports whether data has a top-level [mcp] table, purely to give
+// decodeWorkspaceLayerFile's warning a clear cause; workspaceLayerCfg's shape is what
+// actually enforces the restriction.
+func setsMCPTable(data []byte) bool {
+	var raw map[string]any
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		return false
+	}
+	_, ok := raw["mcp"]
 	return ok
 }
 
@@ -378,6 +412,15 @@ func (c *Config) Validate() Diagnostics {
 			Severity: SeverityWarning,
 			Message:  fmt.Sprintf("tools.approval_default %q is not one of auto, ask, never", c.Tools.ApprovalDefault),
 		})
+	}
+
+	// A server with no command is a silent no-op at best and a confusing exec target at
+	// worst; this is exec configuration, so it is held to the same hard-fail standard as
+	// a malformed [security.*] key, not treated as a soft warning.
+	for name, server := range c.MCP.Servers {
+		if server.Command == "" {
+			diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("mcp.servers.%s.command is empty", name)})
+		}
 	}
 
 	return diags

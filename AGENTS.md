@@ -122,7 +122,7 @@ A Bubbletea v2 (Go) CLI personal assistant app with modular feature sets, suppor
 - Do not create or use `pkg/`; all shared app code belongs under `internal/`
 - Put shared cross-module DTOs and seams in `internal/core`
 - Do not create the whole future folder tree; add only packages needed by the current PR
-- Keep `runtime.GOOS` out of packages that do not own OS behavior; OS-owning packages are `internal/config`, `internal/security/...`, `internal/frontends/voicein`, and `internal/frontends/voiceout`
+- Keep `runtime.GOOS` out of packages that do not own OS behavior; OS-owning packages are `internal/config`, `internal/security/...`, `internal/frontends/voicein`, `internal/frontends/voiceout`, and `internal/tools/mcp` (resolves `npx` vs `npx.cmd` for its own subprocess launches)
 - Use `filepath` and `config.BuildCurrentPathSet()` instead of hard-coded OS paths, `~`, `$HOME`, or path separators
 - Inner modules must not import outward modules
 - Keep external effects behind ports and adapters
