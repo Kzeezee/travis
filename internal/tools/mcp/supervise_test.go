@@ -32,8 +32,8 @@ func TestConnectDeniesWithNoExecGrantWithoutAsking(t *testing.T) {
 	if _, err := process.connect(context.Background()); !errors.Is(err, core.ErrDenied) {
 		t.Fatalf("connect() error = %v, want ErrDenied", err)
 	}
-	if len(approver.asked) != 0 {
-		t.Fatalf("approver.asked = %+v, want none: a request with no grant at all denies outright, it never asks", approver.asked)
+	if len(approver.askedOps()) != 0 {
+		t.Fatalf("approver.asked = %+v, want none: a request with no grant at all denies outright, it never asks", approver.askedOps())
 	}
 }
 
@@ -48,10 +48,10 @@ func TestConnectAsksThenConnectsOnApproval(t *testing.T) {
 	}
 	defer session.Close()
 
-	if len(approver.asked) != 1 {
-		t.Fatalf("approver.asked = %+v, want exactly one request", approver.asked)
+	if len(approver.askedOps()) != 1 {
+		t.Fatalf("approver.asked = %+v, want exactly one request", approver.askedOps())
 	}
-	if approver.asked[0].IsIrreversible {
+	if approver.askedOps()[0].IsIrreversible {
 		t.Fatal("the exec Operation should not be IsIrreversible: unlike generic exec, this approval is scoped to the exact (command, args) the trust store ties to, so Always must be offerable")
 	}
 
@@ -105,7 +105,7 @@ func TestServerProcessRestartsAfterCrash(t *testing.T) {
 	// session" — so a crash-triggered restart asks again. Only ApprovalAlways would skip
 	// re-asking, and policy.go's D-27 stance (exec is irreversible) means the approval
 	// modal never actually offers Always for this operation in the first place.
-	if len(approver.asked) != 2 {
-		t.Fatalf("approver.asked = %+v, want exactly two requests: the first connect, then the crash-triggered restart", approver.asked)
+	if len(approver.askedOps()) != 2 {
+		t.Fatalf("approver.asked = %+v, want exactly two requests: the first connect, then the crash-triggered restart", approver.askedOps())
 	}
 }

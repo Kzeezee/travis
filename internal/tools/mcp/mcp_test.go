@@ -7,7 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -71,28 +73,68 @@ func deniedExecPolicy() policy.Policy {
 }
 
 // fakeApprover scripts one canned answer, proving the approval seam is reached without a
-// real terminal.
+// real terminal. BuildManager connects every server on its own goroutine (that's the whole
+// point of the deadlock fix elsewhere in this package), so a test polling askedOps() from
+// its own goroutine while a connect is still in flight is a real concurrent access — asked
+// must be mutex-guarded, not a plain slice.
 type fakeApprover struct {
 	decision core.ApprovalDecision
-	asked    []core.Operation
+
+	mu    sync.Mutex
+	asked []core.Operation
 }
 
 func (a *fakeApprover) RequestApproval(_ context.Context, op core.Operation) (core.ApprovalDecision, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.asked = append(a.asked, op)
 	return a.decision, nil
+}
+
+// askedOps returns a snapshot of every Operation requested so far; always use this instead
+// of reading a.asked directly, even from a test that looks single-goroutine today.
+func (a *fakeApprover) askedOps() []core.Operation {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.asked)
 }
 
 func buildTestServerConfig(args ...string) config.MCPServerCfg {
 	return config.MCPServerCfg{Command: fakeServerPath, Args: args}
 }
 
+// syncBuffer is a thread-safe io.Writer + String(), for tests that pass a diagnostics
+// sink to BuildManager (whose connect goroutines write to it) and then poll its contents
+// from the test's own goroutine — a plain *strings.Builder is unsafe for exactly that.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // buildTestProcess is every test's entry point for a serverProcess wired to the real
 // fakeserver binary, with a FixedClock so restart backoff never actually waits and a
 // fresh trustStore backed by a temp directory, so trust tests never touch the real
-// state dir or leak between tests.
+// state dir or leak between tests. diagnostics is a syncBuffer, not a plain
+// *strings.Builder: superviseRestarts writes to it from its own background goroutine
+// (TestServerProcessRestartsAfterCrash exercises exactly this), and cancelling that
+// goroutine's context doesn't synchronously stop an in-flight write, so the Cleanup
+// below reading it back is a real concurrent access, same shape as the races CI caught
+// elsewhere in this file.
 func buildTestProcess(t *testing.T, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver) (*serverProcess, core.Clock) {
 	t.Helper()
-	var diagnostics strings.Builder
+	diagnostics := &syncBuffer{}
 	t.Cleanup(func() {
 		if testing.Verbose() {
 			t.Log(diagnostics.String())
@@ -100,6 +142,6 @@ func buildTestProcess(t *testing.T, cfg config.MCPServerCfg, pol policy.Policy, 
 	})
 	clock := core.FixedClock{Time: time.Now()}
 	trust := buildTrustStore(filepath.Join(t.TempDir(), trustFileName))
-	process := buildServerProcess("test-server", cfg, pol, approver, clock, nil, &diagnostics, trust)
+	process := buildServerProcess("test-server", cfg, pol, approver, clock, nil, diagnostics, trust)
 	return process, clock
 }
