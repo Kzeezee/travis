@@ -51,8 +51,8 @@ func TestConnectAsksThenConnectsOnApproval(t *testing.T) {
 	if len(approver.asked) != 1 {
 		t.Fatalf("approver.asked = %+v, want exactly one request", approver.asked)
 	}
-	if !approver.asked[0].IsIrreversible {
-		t.Fatal("the exec Operation should be IsIrreversible, matching policy.go's own D-27 comment")
+	if approver.asked[0].IsIrreversible {
+		t.Fatal("the exec Operation should not be IsIrreversible: unlike generic exec, this approval is scoped to the exact (command, args) the trust store ties to, so Always must be offerable")
 	}
 
 	listed, err := session.ListTools(ctx, &mcpsdk.ListToolsParams{})

@@ -87,7 +87,9 @@ func buildTestServerConfig(args ...string) config.MCPServerCfg {
 }
 
 // buildTestProcess is every test's entry point for a serverProcess wired to the real
-// fakeserver binary, with a FixedClock so restart backoff never actually waits.
+// fakeserver binary, with a FixedClock so restart backoff never actually waits and a
+// fresh trustStore backed by a temp directory, so trust tests never touch the real
+// state dir or leak between tests.
 func buildTestProcess(t *testing.T, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver) (*serverProcess, core.Clock) {
 	t.Helper()
 	var diagnostics strings.Builder
@@ -97,6 +99,7 @@ func buildTestProcess(t *testing.T, cfg config.MCPServerCfg, pol policy.Policy, 
 		}
 	})
 	clock := core.FixedClock{Time: time.Now()}
-	process := buildServerProcess("test-server", cfg, pol, approver, clock, nil, &diagnostics)
+	trust := buildTrustStore(filepath.Join(t.TempDir(), trustFileName))
+	process := buildServerProcess("test-server", cfg, pol, approver, clock, nil, &diagnostics, trust)
 	return process, clock
 }

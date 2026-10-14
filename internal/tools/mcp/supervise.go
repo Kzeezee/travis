@@ -43,12 +43,13 @@ func resolveServerCommand(command string) string {
 }
 
 // serverProcess owns one configured server's connection lifecycle: the exec-capability
-// gate, the subprocess, and restart-with-backoff after a crash. Policy treats exec as
-// irreversible and always escalates to Ask (policy.go: "exec is irreversible and always
-// asks (D-27)"), and the approval modal refuses ApprovalAlways for an irreversible
-// operation (§6.4) — so in practice every `travis chat` session re-asks to start each
-// configured server; alwaysApproved exists only in case that D-27 stance is ever narrowed
-// for a user's own already-configured servers, not because it fires today.
+// gate, the subprocess, and restart-with-backoff after a crash. Policy itself still
+// treats exec as irreversible and always escalates to Ask (policy.go: "exec is
+// irreversible and always asks (D-27)") — that stays untouched for genuine exec
+// requests. trust is the narrow, MCP-specific exception: a server the user already
+// approved "always" for its exact (command, args) is looked up there first, before
+// policy is even consulted, so configured servers stop re-asking every session without
+// weakening D-27 for anything else.
 type serverProcess struct {
 	name        string
 	cfg         config.MCPServerCfg
@@ -57,15 +58,15 @@ type serverProcess struct {
 	clock       core.Clock
 	events      core.EventSink
 	diagnostics io.Writer
+	trust       *trustStore
 
-	mu             sync.Mutex
-	alwaysApproved bool
-	session        *mcpsdk.ClientSession
-	unavailable    error
+	mu          sync.Mutex
+	session     *mcpsdk.ClientSession
+	unavailable error
 }
 
-func buildServerProcess(name string, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer) *serverProcess {
-	return &serverProcess{name: name, cfg: cfg, policy: pol, approver: approver, clock: clock, events: events, diagnostics: diagnostics}
+func buildServerProcess(name string, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, trust *trustStore) *serverProcess {
+	return &serverProcess{name: name, cfg: cfg, policy: pol, approver: approver, clock: clock, events: events, diagnostics: diagnostics, trust: trust}
 }
 
 // connectAndSupervise performs the first connect (so tools/list has something to report)
@@ -116,13 +117,11 @@ func (p *serverProcess) connect(ctx context.Context) (*mcpsdk.ClientSession, err
 	return session, nil
 }
 
-// authorizeExec evaluates the exec capability for the configured command, asking a human
-// when policy says Ask, and never starting anything policy says Deny.
+// authorizeExec checks the trust store first, then falls through to exactly today's
+// policy flow unchanged — asking a human when policy says Ask, never starting anything
+// policy says Deny.
 func (p *serverProcess) authorizeExec(ctx context.Context, command string) error {
-	p.mu.Lock()
-	alwaysApproved := p.alwaysApproved
-	p.mu.Unlock()
-	if alwaysApproved {
+	if p.trust != nil && p.trust.isTrusted(command, p.cfg.Args) {
 		return nil
 	}
 
@@ -143,11 +142,14 @@ func (p *serverProcess) requestApproval(ctx context.Context, command string) err
 	if p.approver == nil {
 		return fmt.Errorf("starting mcp server %q needs approval, but none is available: %w", p.name, core.ErrDenied)
 	}
+	// Not IsIrreversible: unlike generic exec, this operation is scoped to the exact
+	// (command, args) the user already wrote into their own trusted config — approving
+	// it "always" is safe to offer, because trust.add below ties the answer to that
+	// exact content, not to exec in general (D-27 stays untouched for anything else).
 	op := core.Operation{
-		Kind:           core.CapabilityExec,
-		Target:         command,
-		Explanation:    fmt.Sprintf("start local MCP server %q (%s)", p.name, command),
-		IsIrreversible: true,
+		Kind:        core.CapabilityExec,
+		Target:      command,
+		Explanation: fmt.Sprintf("start local MCP server %q (%s)", p.name, command),
 	}
 	decision, err := p.approver.RequestApproval(ctx, op)
 	if err != nil {
@@ -157,10 +159,10 @@ func (p *serverProcess) requestApproval(ctx context.Context, command string) err
 	case core.ApprovalOnce:
 		return nil
 	case core.ApprovalAlways:
-		p.mu.Lock()
-		p.alwaysApproved = true
-		p.mu.Unlock()
-		return nil
+		if p.trust == nil {
+			return nil
+		}
+		return p.trust.add(command, p.cfg.Args, "approval modal", p.clock)
 	case core.ApprovalDenied:
 		return fmt.Errorf("starting mcp server %q was denied by the user: %w", p.name, core.ErrDenied)
 	default:

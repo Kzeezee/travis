@@ -234,7 +234,7 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 	// Async by design (BuildManager's own doc comment): connecting here, before the TUI's
 	// event loop starts reading approvals, would deadlock any server that needs Ask.
 	redactedEvents := redact.WrapSink(bus, redactor)
-	mcpManager := mcp.BuildManager(cfg.MCP, mcpPolicy, approver, clock, redactedEvents, diagnostics, toolRegistry)
+	mcpManager := mcp.BuildManager(cfg.MCP, mcpPolicy, approver, clock, redactedEvents, diagnostics, toolRegistry, paths.StateDir)
 
 	ids := id.BuildULIDGenerator(clock)
 	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: redactedEvents, Clock: clock, IDs: ids}

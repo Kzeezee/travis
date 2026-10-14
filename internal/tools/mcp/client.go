@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sync"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -30,13 +31,15 @@ type Manager struct {
 // does not start until the caller that constructed us returns. Connecting synchronously
 // here would deadlock the whole session before the TUI ever draws a frame — it did, until
 // this was made async. A server that fails to connect, list its tools, or register one is
-// skipped with a diagnostic rather than failing the session.
-func BuildManager(servers config.MCPCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, reg *registry.Registry) *Manager {
+// skipped with a diagnostic rather than failing the session. stateDir is where the shared
+// trust store (mcp-trust.toml) lives — user-scoped, like the [mcp.servers] config itself.
+func BuildManager(servers config.MCPCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, reg *registry.Registry, stateDir string) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &Manager{cancel: cancel}
 
+	trust := buildTrustStore(filepath.Join(stateDir, trustFileName))
 	for name, serverCfg := range servers.Servers {
-		process := buildServerProcess(name, serverCfg, pol, approver, clock, events, diagnostics)
+		process := buildServerProcess(name, serverCfg, pol, approver, clock, events, diagnostics, trust)
 		manager.done.Add(1)
 		go func(name string, process *serverProcess) {
 			defer manager.done.Done()

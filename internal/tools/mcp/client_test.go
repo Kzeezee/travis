@@ -22,7 +22,7 @@ func TestBuildManagerConnectsAndRegistersAdaptedTools(t *testing.T) {
 
 	returned := make(chan *Manager, 1)
 	go func() {
-		returned <- BuildManager(servers, grantedExecPolicy(), approver, core.FixedClock{}, nil, &strings.Builder{}, reg)
+		returned <- BuildManager(servers, grantedExecPolicy(), approver, core.FixedClock{}, nil, &strings.Builder{}, reg, t.TempDir())
 	}()
 
 	var manager *Manager
@@ -97,7 +97,7 @@ func TestBuildManagerDoesNotBlockOnAPendingApproval(t *testing.T) {
 
 	returned := make(chan *Manager, 1)
 	go func() {
-		returned <- BuildManager(servers, grantedExecPolicy(), approver, core.FixedClock{}, nil, &strings.Builder{}, reg)
+		returned <- BuildManager(servers, grantedExecPolicy(), approver, core.FixedClock{}, nil, &strings.Builder{}, reg, t.TempDir())
 	}()
 
 	select {
@@ -108,11 +108,41 @@ func TestBuildManagerDoesNotBlockOnAPendingApproval(t *testing.T) {
 	}
 }
 
+// TestTrustPersistsAcrossManagersSharingAStateDir is the actual behavior this trust store
+// exists to deliver: approve a server "always" once, and a brand new Manager — standing in
+// for a brand new `travis chat` process — must connect without asking again, because the
+// approval survived on disk, not just in that first Manager's memory.
+func TestTrustPersistsAcrossManagersSharingAStateDir(t *testing.T) {
+	stateDir := t.TempDir()
+	servers := config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": buildTestServerConfig()}}
+
+	firstApprover := &fakeApprover{decision: core.ApprovalAlways}
+	first := BuildManager(servers, grantedExecPolicy(), firstApprover, core.FixedClock{}, nil, &strings.Builder{}, registry.BuildRegistry(100), stateDir)
+	pollUntil(t, 10*time.Second, func() bool { return len(firstApprover.asked) == 1 })
+	first.Close()
+	if len(firstApprover.asked) != 1 {
+		t.Fatalf("first manager asked %d times, want exactly 1", len(firstApprover.asked))
+	}
+
+	secondApprover := &fakeApprover{decision: core.ApprovalOnce} // must never be reached
+	reg := registry.BuildRegistry(100)
+	second := BuildManager(servers, grantedExecPolicy(), secondApprover, core.FixedClock{}, nil, &strings.Builder{}, reg, stateDir)
+	t.Cleanup(second.Close)
+
+	pollUntil(t, 10*time.Second, func() bool {
+		_, ok := reg.Lookup("mcp_fake_echo")
+		return ok
+	})
+	if len(secondApprover.asked) != 0 {
+		t.Fatalf("second manager asked %d times, want 0: an already-trusted server must not re-ask across a fresh Manager sharing the same state dir", len(secondApprover.asked))
+	}
+}
+
 func TestBuildManagerSkipsAServerDeniedByPolicy(t *testing.T) {
 	servers := config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": buildTestServerConfig()}}
 	diagnostics := &strings.Builder{}
 	reg := registry.BuildRegistry(100)
-	manager := BuildManager(servers, deniedExecPolicy(), nil, core.FixedClock{}, nil, diagnostics, reg)
+	manager := BuildManager(servers, deniedExecPolicy(), nil, core.FixedClock{}, nil, diagnostics, reg, t.TempDir())
 	t.Cleanup(manager.Close)
 
 	pollUntil(t, 2*time.Second, func() bool {
