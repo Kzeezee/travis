@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -107,5 +108,60 @@ func TestServerProcessRestartsAfterCrash(t *testing.T) {
 	// modal never actually offers Always for this operation in the first place.
 	if len(approver.askedOps()) != 2 {
 		t.Fatalf("approver.asked = %+v, want exactly two requests: the first connect, then the crash-triggered restart", approver.askedOps())
+	}
+}
+
+// TestServerProcessUnregistersItsToolsOnceRestartsAreExhausted proves the registry side of
+// 3C: once a server crashes more times than superviseRestarts will tolerate, it gives up for
+// good (reportUnavailable) and the unregister callback fires exactly once.
+func TestServerProcessUnregistersItsToolsOnceRestartsAreExhausted(t *testing.T) {
+	approver := &fakeApprover{decision: core.ApprovalOnce}
+	var mu sync.Mutex
+	unregisteredCalls := 0
+	process, _ := buildTestProcessWithUnregister(t, buildTestServerConfig(), grantedExecPolicy(), approver, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		unregisteredCalls++
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	session, err := process.connectAndSupervise(ctx)
+	if err != nil {
+		t.Fatalf("connectAndSupervise() error = %v", err)
+	}
+
+	// Each crash before the last must be survived by a successful restart, or the next
+	// crash call races a process that is already gone. The final crash pushes the attempt
+	// counter past maxRestartAttempts, so superviseRestarts gives up instead of restarting.
+	for attempt := 1; attempt <= maxRestartAttempts+1; attempt++ {
+		_, _ = session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "crash"})
+		if attempt > maxRestartAttempts {
+			break
+		}
+		pollUntil(t, 10*time.Second, func() bool {
+			current, err := process.currentSession()
+			if err != nil || current == nil {
+				return false
+			}
+			result, err := current.CallTool(ctx, &mcpsdk.CallToolParams{Name: "echo", Arguments: map[string]any{"message": "back up"}})
+			if err != nil || result.IsError {
+				return false
+			}
+			session = current
+			return true
+		})
+	}
+
+	pollUntil(t, 10*time.Second, func() bool {
+		_, err := process.currentSession()
+		return err != nil
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if unregisteredCalls != 1 {
+		t.Fatalf("unregisterTools called %d times, want exactly 1", unregisteredCalls)
 	}
 }

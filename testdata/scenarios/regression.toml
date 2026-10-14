@@ -40,3 +40,31 @@ contains = "Tuesday 13 October 2026, 10:15"
 [[scenario.assert_files]]
 path = "summary.md"
 contains = "10:15"
+
+# 3C regression: built-in tools (fs_read, fs_edit, fs_write) must stay exposed to the model
+# even when tools_max_exposed is far smaller than the built-in tool count, proving
+# Registry.Prune never prunes them. assert_tools_offered checks the tool specs the model
+# actually received on its first call, not just which ones got called (Lookup would still
+# find a tool by name even if Prune had wrongly left it out).
+[[scenario]]
+name = "built-in tools stay exposed under a tight max_exposed cap"
+fixture = "notes"
+tools_max_exposed = 1
+turns = ["Move my dentist appointment to 10:15 and write a summary."]
+assert_tools_offered = ["fs_read", "fs_edit", "fs_write"]
+assert_tools_called = ["fs_read", "fs_edit", "fs_write"]
+
+[[scenario.step]]
+tool = "fs_read"
+arguments = '{"path":"admin/clinic-confirmation.md"}'
+
+[[scenario.step]]
+tool = "fs_edit"
+arguments = '{"path":"admin/clinic-confirmation.md","old_string":"Tuesday 13 October 2026, 09:30\n","new_string":"Tuesday 13 October 2026, 10:15\n"}'
+
+[[scenario.step]]
+tool = "fs_write"
+arguments = '{"path":"summary.md","content":"Dentist moved to 10:15.\nRoom 4.\n"}'
+
+[[scenario.step]]
+final_text = "Moved the appointment and wrote summary.md."

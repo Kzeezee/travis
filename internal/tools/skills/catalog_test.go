@@ -151,6 +151,30 @@ func TestBuildCatalogDuplicateNamesWorkspaceWinsOverUser(t *testing.T) {
 	}
 }
 
+func TestReportSkillSummariesListsNameTierAndDescription(t *testing.T) {
+	paths := buildTestPathSet(t.TempDir())
+	cfg := config.SkillsCfg{Roots: []string{absTestdata(t, "valid")}}
+
+	catalog := BuildCatalog(cfg, paths, &strings.Builder{})
+	summaries := catalog.ReportSkillSummaries()
+	if len(summaries) != 1 {
+		t.Fatalf("summaries = %+v, want exactly one", summaries)
+	}
+	got := summaries[0]
+	if got.Name != "example" || got.Tier != TierUser || !strings.Contains(got.Description, "valid example skill") {
+		t.Fatalf("summary = %+v, want name=example, tier=user, description about the valid example skill", got)
+	}
+	if got.Tier.String() != "user" {
+		t.Fatalf("Tier.String() = %q, want %q", got.Tier.String(), "user")
+	}
+}
+
+func TestTierStringReportsWorkspace(t *testing.T) {
+	if got := TierWorkspace.String(); got != "workspace" {
+		t.Fatalf("TierWorkspace.String() = %q, want %q", got, "workspace")
+	}
+}
+
 func TestBuildCatalogWithNoRootsHasNoSections(t *testing.T) {
 	catalog := BuildCatalog(config.SkillsCfg{}, buildTestPathSet(t.TempDir()), &strings.Builder{})
 	if sections := catalog.ReportSystemPromptSections(); len(sections) != 0 {

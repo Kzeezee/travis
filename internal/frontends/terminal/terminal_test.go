@@ -310,7 +310,7 @@ func TestPaletteTypedDuringATurnOpensWhenItFinishes(t *testing.T) {
 	idleHeight := m.viewport.Height()
 	m, _ = pressKeys(m, typedKeys("hi")...)
 	m, turn := pressKeys(m, enterKey)
-	m, _ = pressKeys(m, typedKeys("/m")...)
+	m, _ = pressKeys(m, typedKeys("/q")...) // "q" still matches exactly one command (quit)
 	if m.viewport.Height() != idleHeight {
 		t.Fatal("the palette must stay closed while a turn runs")
 	}

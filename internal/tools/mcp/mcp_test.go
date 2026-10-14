@@ -133,6 +133,12 @@ func (b *syncBuffer) String() string {
 // below reading it back is a real concurrent access, same shape as the races CI caught
 // elsewhere in this file.
 func buildTestProcess(t *testing.T, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver) (*serverProcess, core.Clock) {
+	return buildTestProcessWithUnregister(t, cfg, pol, approver, nil)
+}
+
+// buildTestProcessWithUnregister is buildTestProcess plus a hook for tests that need to
+// observe the registry-unregister callback restart exhaustion fires.
+func buildTestProcessWithUnregister(t *testing.T, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver, unregisterTools func()) (*serverProcess, core.Clock) {
 	t.Helper()
 	diagnostics := &syncBuffer{}
 	t.Cleanup(func() {
@@ -142,6 +148,6 @@ func buildTestProcess(t *testing.T, cfg config.MCPServerCfg, pol policy.Policy, 
 	})
 	clock := core.FixedClock{Time: time.Now()}
 	trust := buildTrustStore(filepath.Join(t.TempDir(), trustFileName))
-	process := buildServerProcess("test-server", cfg, pol, approver, clock, nil, diagnostics, trust)
+	process := buildServerProcess("test-server", cfg, pol, approver, clock, nil, diagnostics, trust, unregisterTools)
 	return process, clock
 }

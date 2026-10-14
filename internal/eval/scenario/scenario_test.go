@@ -198,3 +198,19 @@ func TestCheckAssertionsFailsOnWrongOrMissingFileContent(t *testing.T) {
 		t.Fatal("expected an error: summary.md is missing")
 	}
 }
+
+func TestCheckAssertionsFailsWhenAToolWasNeverOffered(t *testing.T) {
+	sc := scenario.Scenario{Name: "sample", AssertToolsOffered: []string{"fs_write"}}
+	result := scenario.Result{ToolsOffered: []string{"fs_read"}}
+	if err := scenario.CheckAssertions(sc, result); err == nil {
+		t.Fatal("expected an error: fs_write was never offered")
+	}
+}
+
+func TestCheckAssertionsPassesWhenEveryAssertedToolWasOffered(t *testing.T) {
+	sc := scenario.Scenario{Name: "sample", AssertToolsOffered: []string{"fs_read", "fs_write"}}
+	result := scenario.Result{ToolsOffered: []string{"fs_read", "fs_write", "grep"}}
+	if err := scenario.CheckAssertions(sc, result); err != nil {
+		t.Fatalf("got %v, want nil", err)
+	}
+}

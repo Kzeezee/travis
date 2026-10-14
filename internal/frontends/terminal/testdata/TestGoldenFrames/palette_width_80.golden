@@ -2,14 +2,14 @@
                                                                                 
                                                                                 
                                                                                 
-                                                                                
    /help            list commands
  › /quit            exit travis
    /new             start a new conversation
    /model [name]    show or switch the model
    /tools           list available tools
+   /skills          list loaded skills
+   /memory          show the current memory
    /cost            show tokens used this session
-   /undo            rewind to before an earlier turn
 ────────────────────────────────────────────────────────────────────────────────
  › /                                                                            
 ────────────────────────────────────────────────────────────────────────────────

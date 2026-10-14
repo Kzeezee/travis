@@ -26,6 +26,14 @@ const (
 	TierWorkspace
 )
 
+// String reports t the way it should read outside this package, such as in /skills.
+func (t Tier) String() string {
+	if t == TierWorkspace {
+		return "workspace"
+	}
+	return "user"
+}
+
 // skill is one discovered SKILL.md. Body is stored in its final, already-wrapped form
 // for workspace tier (core.WrapUntrustedContent applied once at discovery, in
 // discover.go) — Open never has to remember to wrap it.
@@ -81,6 +89,30 @@ func (c *Catalog) addResolvingDuplicates(next skill, diagnostics io.Writer) {
 func (c *Catalog) open(name string) (string, bool) {
 	found, ok := c.byName[name]
 	return found.Body, ok
+}
+
+// SkillSummary is one catalog entry's identity for display outside this package (/skills),
+// without exposing a skill's body or trust-tier wrapping.
+type SkillSummary struct {
+	Name        string
+	Description string
+	Tier        Tier
+}
+
+// ReportSkillSummaries lists every loaded skill, sorted by name.
+func (c *Catalog) ReportSkillSummaries() []SkillSummary {
+	names := make([]string, 0, len(c.byName))
+	for name := range c.byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	summaries := make([]SkillSummary, 0, len(names))
+	for _, name := range names {
+		s := c.byName[name]
+		summaries = append(summaries, SkillSummary{Name: s.Name, Description: s.Description, Tier: s.Tier})
+	}
+	return summaries
 }
 
 // reportIndex builds the always-on system-prompt section (progressive disclosure level

@@ -39,7 +39,7 @@ func BuildManager(servers config.MCPCfg, pol policy.Policy, approver core.Approv
 
 	trust := buildTrustStore(filepath.Join(stateDir, trustFileName))
 	for name, serverCfg := range servers.Servers {
-		process := buildServerProcess(name, serverCfg, pol, approver, clock, events, diagnostics, trust)
+		process := buildServerProcess(name, serverCfg, pol, approver, clock, events, diagnostics, trust, buildUnregisterTools(reg, name))
 		manager.done.Add(1)
 		go func(name string, process *serverProcess) {
 			defer manager.done.Done()
@@ -47,6 +47,20 @@ func BuildManager(servers config.MCPCfg, pol policy.Policy, approver core.Approv
 		}(name, process)
 	}
 	return manager
+}
+
+// buildUnregisterTools reports a closure that removes every tool server has registered so
+// far from reg. Tools are namespaced mcp_<server>_<tool>, so server's own tools can always
+// be found again by name prefix alone — no separate bookkeeping of what got registered.
+func buildUnregisterTools(reg *registry.Registry, server string) func() {
+	return func() {
+		owned := reg.List(registry.Filter{Source: registry.SourceMCP, NamePrefix: toolNamePrefix(server)})
+		names := make([]string, len(owned))
+		for i, tool := range owned {
+			names[i] = tool.Name()
+		}
+		reg.Unregister(names...)
+	}
 }
 
 func connectAndRegister(ctx context.Context, name string, process *serverProcess, reg *registry.Registry, diagnostics io.Writer) {
