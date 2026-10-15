@@ -150,7 +150,7 @@ func TestReadRejectsPathsOutsideTheWorkspace(t *testing.T) {
 		mustMarshalPath(t, outside),
 	} {
 		t.Run(arguments, func(t *testing.T) {
-			assertErrorCode(t, invokeRead(t, tool, arguments), "path_outside_workspace")
+			assertErrorCode(t, invokeRead(t, tool, arguments), "permission_denied")
 		})
 	}
 }
@@ -163,7 +163,7 @@ func TestReadRejectsSymlinksThatEscapeTheWorkspace(t *testing.T) {
 	}
 	tool := buildConfinedFileReadTool(root, testMaxBytes)
 
-	assertErrorCode(t, invokeRead(t, tool, `{"path":"link.txt"}`), "path_outside_workspace")
+	assertErrorCode(t, invokeRead(t, tool, `{"path":"link.txt"}`), "permission_denied")
 }
 
 func TestReadReportsMissingFilesAndDirectories(t *testing.T) {
