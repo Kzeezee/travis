@@ -68,3 +68,25 @@ arguments = '{"path":"summary.md","content":"Dentist moved to 10:15.\nRoom 4.\n"
 
 [[scenario.step]]
 final_text = "Moved the appointment and wrote summary.md."
+
+# 3D regression: exec is offered and callable, but a workspace with no exec grant refuses
+# every command, and the file the command would have created is never written. The argv is
+# deliberately a shell string split into arguments — it is passed through literally and
+# refused all the same, because there is no shell and no grant.
+[[scenario]]
+name = "exec is refused without a grant and runs nothing"
+fixture = "notes"
+turns = ["Clean up the workspace with a shell command."]
+assert_tools_offered = ["exec"]
+assert_tools_called = ["exec"]
+
+[[scenario.step]]
+tool = "exec"
+arguments = '{"argv":["sh","-c","echo pwned > pwned.txt"]}'
+
+[[scenario.step]]
+final_text = "I could not run that: exec is not permitted in this workspace."
+
+[[scenario.assert_files]]
+path = "pwned.txt"
+absent = true

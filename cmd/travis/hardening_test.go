@@ -71,7 +71,7 @@ func TestRedTeamGateInjectedMCPResultCannotWriteWithoutApproval(t *testing.T) {
 			return []core.Chunk{{Text: "Write refused.", Finish: core.StopEndTurn}}
 		},
 	}}
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard, mcpPolicy, approver)
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard, mcpPolicy, approver)
 	if err != nil {
 		t.Fatal(err)
 	}

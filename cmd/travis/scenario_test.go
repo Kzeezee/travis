@@ -103,7 +103,7 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 		provider = scripted
 	}
 
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, nil, bus, redact.New(), model, &diagnostics, policy.Policy{}, nil)
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, nil, bus, redact.New(), model, &diagnostics, policy.Policy{}, nil)
 	if err != nil {
 		return scenario.Result{}, err
 	}
@@ -136,10 +136,14 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 		}
 	}
 
+	// A file that cannot be read is left out of the map rather than recorded as empty, so an
+	// absent-file assertion can tell "never written" from "written empty".
 	files := make(map[string]string, len(sc.AssertFiles))
 	for _, assertFile := range sc.AssertFiles {
-		content, _ := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(assertFile.Path)))
-		files[assertFile.Path] = string(content)
+		content, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(assertFile.Path)))
+		if err == nil {
+			files[assertFile.Path] = string(content)
+		}
 	}
 
 	var offered []string

@@ -137,7 +137,7 @@ func TestAskUserAndMemoryRunThroughTheRealConversationAndBroker(t *testing.T) {
 	paths.StateDir = stateDir
 	questioner := &fixedQuestioner{}
 	cfg := &config.Config{Brain: config.BrainCfg{MaxSteps: 5}, Tools: config.ToolsCfg{MaxExposed: 60}}
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, questioner, bus, redact.New(), "scripted-model", &diagnostics, policy.Policy{}, nil)
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, questioner, bus, redact.New(), "scripted-model", &diagnostics, policy.Policy{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func runNotesTask(t *testing.T, provider core.Provider, model string) notesTaskR
 	var diagnostics strings.Builder
 	bus := buildSessionBus(&diagnostics)
 	remote, _ := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, nil, bus, redact.New(), model, &diagnostics, policy.Policy{}, nil)
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, nil, bus, redact.New(), model, &diagnostics, policy.Policy{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +425,7 @@ func TestWriteTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
 	var diagnostics strings.Builder
 	bus := buildSessionBus(io.Discard)
 	remote, brokerStateDir := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard, policy.Policy{}, nil)
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard, policy.Policy{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +562,7 @@ func TestUndoRewindsFilesAndConversationThroughTheRealBroker(t *testing.T) {
 	var diagnostics strings.Builder
 	bus := buildSessionBus(io.Discard)
 	remote, brokerStateDir := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard, policy.Policy{}, nil)
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard, policy.Policy{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

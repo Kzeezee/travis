@@ -34,3 +34,21 @@ final_text = "Moved the appointment and wrote summary.md."
 [[scenario.assert_files]]
 path = "summary.md"
 contains = "this text never appears in the summary"
+
+# Known bad: asserts a file is absent that the scripted steps demonstrably write. It proves
+# the absent-file assertion the 3D exec scenario relies on is actually checking something.
+[[scenario]]
+name = "known bad: asserts a written file is absent"
+fixture = "notes"
+turns = ["Write a summary."]
+
+[[scenario.step]]
+tool = "fs_write"
+arguments = '{"path":"summary.md","content":"written\n"}'
+
+[[scenario.step]]
+final_text = "Wrote summary.md."
+
+[[scenario.assert_files]]
+path = "summary.md"
+absent = true

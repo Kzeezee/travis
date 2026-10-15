@@ -54,6 +54,12 @@ func CheckAssertions(sc Scenario, result Result) error {
 		}
 	}
 	for _, assertFile := range sc.AssertFiles {
+		if assertFile.IsAbsent {
+			if content, exists := result.Files[assertFile.Path]; exists {
+				return fmt.Errorf("%q: file %q exists, want it never written (content: %q)", sc.Name, assertFile.Path, content)
+			}
+			continue
+		}
 		if !strings.Contains(result.Files[assertFile.Path], assertFile.Contains) {
 			return fmt.Errorf("%q: file %q lacks %q (content: %q)", sc.Name, assertFile.Path, assertFile.Contains, result.Files[assertFile.Path])
 		}

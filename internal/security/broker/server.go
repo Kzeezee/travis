@@ -154,6 +154,16 @@ func (s *connectionSession) perform(ctx context.Context, req Request) (Response,
 		return Response{}, s.effects.AddDecisionRule(ctx, ConvertDecisionRuleMessage(*req.Rule))
 	case OpAppendEntries, OpListTurns, OpRewind:
 		return s.answerSessionLog(ctx, req)
+	case OpRunCommand:
+		runner, canRun := s.effects.(core.CommandRunner)
+		if !canRun {
+			return Response{}, fmt.Errorf("this broker runs no commands: %w", core.ErrUnsupported)
+		}
+		result, err := runner.RunCommand(ctx, req.Argv)
+		if err != nil {
+			return Response{}, err
+		}
+		return Response{Command: BuildCommandResultMessage(result)}, nil
 	case OpReadMemory, OpReplaceMemory:
 		store, isStore := s.effects.(core.MemoryStore)
 		if !isStore {

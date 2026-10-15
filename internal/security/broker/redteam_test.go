@@ -21,12 +21,15 @@ import (
 )
 
 type redTeamCase struct {
-	Name           string   `toml:"name"`
-	Profile        string   `toml:"profile"`
-	Operation      string   `toml:"operation"`
-	Target         string   `toml:"target"`
-	Fixture        string   `toml:"fixture"`
-	Platforms      []string `toml:"platforms"`
+	Name      string   `toml:"name"`
+	Profile   string   `toml:"profile"`
+	Operation string   `toml:"operation"`
+	Target    string   `toml:"target"`
+	Fixture   string   `toml:"fixture"`
+	Platforms []string `toml:"platforms"`
+	// ExecAllow are the session's exec grants, for a case that must prove a granted exec is
+	// still refused rather than that an ungranted one is.
+	ExecAllow      []string `toml:"exec_allow"`
 	Untrusted      bool     `toml:"untrusted"`
 	AssertEvent    string   `toml:"assert_event"`
 	AssertNoEffect string   `toml:"assert_no_effect"`
@@ -88,6 +91,10 @@ func runRedTeamCase(t *testing.T, scenario redTeamCase) {
 		}
 	}
 	target := roots.resolveTarget(scenario.Target)
+	execArgv := buildRedTeamExecArgv(t, scenario)
+	if len(execArgv) > 0 {
+		target = execArgv[0]
+	}
 	if scenario.Operation == "read" {
 		fixturePath := roots.resolveFilesystemPath(scenario.Target)
 		if err := os.MkdirAll(filepath.Dir(fixturePath), 0o700); err != nil {
@@ -98,7 +105,7 @@ func runRedTeamCase(t *testing.T, scenario redTeamCase) {
 		}
 	}
 	paths := config.PathSet{WorkspaceDir: roots.workspace, StateDir: roots.state}
-	policy, err := broker.BuildSessionPolicy(scenario.Profile, broker.SessionRoots{Paths: paths, Home: roots.home, Temp: filepath.Join(root, "temp")})
+	policy, err := broker.BuildSessionPolicy(scenario.Profile, broker.SessionRoots{Paths: paths, Home: roots.home, Temp: filepath.Join(root, "temp"), ExecAllow: scenario.ExecAllow})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,6 +130,10 @@ func runRedTeamCase(t *testing.T, scenario redTeamCase) {
 	case "write":
 		if _, err := remote.WriteFile(ctx, target, []byte("owned")); err == nil {
 			t.Fatal("forbidden write succeeded")
+		}
+	case "exec":
+		if result, err := remote.RunCommand(ctx, execArgv); err == nil {
+			t.Fatalf("forbidden command ran and returned %+v", result)
 		}
 	case "read":
 		opened, err := remote.OpenFile(ctx, target)
@@ -150,7 +161,16 @@ func validateRedTeamCase(scenario redTeamCase) error {
 	if scenario.Name == "" || scenario.Profile == "" || scenario.Target == "" || scenario.AssertEvent != "PolicyDenied" || scenario.AssertNoEffect == "" {
 		return fmt.Errorf("%q must name a profile, target, PolicyDenied event and absent effect", scenario.Name)
 	}
-	if scenario.Operation != "write" && scenario.Operation != "read" {
+	switch scenario.Operation {
+	case "write", "read":
+	case "exec":
+		if !strings.HasPrefix(scenario.Target, "helper:") {
+			return fmt.Errorf("%q must name a helper mode as its exec target", scenario.Name)
+		}
+		if scenario.AssertNoEffect == "secret_not_returned" {
+			return fmt.Errorf("%q must name the file the command must not have written", scenario.Name)
+		}
+	default:
 		return fmt.Errorf("%q has unsupported operation %q", scenario.Name, scenario.Operation)
 	}
 	if scenario.Operation == "read" && scenario.AssertNoEffect != "secret_not_returned" {
@@ -160,6 +180,19 @@ func validateRedTeamCase(scenario redTeamCase) error {
 		return fmt.Errorf("%q must name the file that must stay absent", scenario.Name)
 	}
 	return nil
+}
+
+// buildRedTeamExecArgv turns a "helper:<mode>" target into the argv that would run this test
+// binary in that mode. The mode is one that leaves a file behind, so the absent-effect
+// assertion is only satisfiable by the command genuinely never having run — which
+// TestRemoteBrokerRunsACommandOnlyAfterTheHumanApproves proves it otherwise would.
+func buildRedTeamExecArgv(t *testing.T, scenario redTeamCase) []string {
+	t.Helper()
+	if scenario.Operation != "exec" {
+		return nil
+	}
+	mode, _ := strings.CutPrefix(scenario.Target, "helper:")
+	return buildHelperArgv(t, mode)
 }
 
 func assertRedTeamOutcome(scenario redTeamCase, roots redTeamRoots, events []core.Event) error {
@@ -175,6 +208,7 @@ func assertRedTeamOutcome(scenario redTeamCase, roots redTeamRoots, events []cor
 	if scenario.Operation == "read" {
 		return nil
 	}
+	// write and exec both name a file that must not exist afterwards.
 	path := roots.resolveFilesystemPath(scenario.AssertNoEffect)
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("%q changed %q", scenario.Name, path)
