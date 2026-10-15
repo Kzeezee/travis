@@ -15,6 +15,8 @@ type Result struct {
 	// Registry.Prune actually returned for this session. Empty when the runner has no way
 	// to observe it (a cassette replay never exposes the request it would have made).
 	ToolsOffered []string
+	// SystemPrompt is the first provider call's system prompt, empty when unobservable.
+	SystemPrompt string
 	// Answer is the assistant's streamed text, concatenated across every turn.
 	Answer string
 	// Files holds the content of exactly the paths named in the scenario's AssertFiles.
@@ -51,6 +53,11 @@ func CheckAssertions(sc Scenario, result Result) error {
 	for _, want := range sc.AssertAnswerContains {
 		if !strings.Contains(result.Answer, want) {
 			return fmt.Errorf("%q: answer %q lacks %q", sc.Name, result.Answer, want)
+		}
+	}
+	for _, unwanted := range sc.AssertPromptLacks {
+		if strings.Contains(result.SystemPrompt, unwanted) {
+			return fmt.Errorf("%q: system prompt contains %q", sc.Name, unwanted)
 		}
 	}
 	for _, assertFile := range sc.AssertFiles {

@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"runtime"
 	"sync"
@@ -46,9 +45,9 @@ func resolveServerCommand(command string) string {
 // gate, the subprocess, and restart-with-backoff after a crash. Policy itself still
 // treats exec as irreversible and always escalates to Ask (policy.go: "exec is
 // irreversible and always asks (D-27)") — that stays untouched for genuine exec
-// requests. trust is the narrow, MCP-specific exception: a server the user already
-// approved "always" for its exact (command, args) is looked up there first, before
-// policy is even consulted, so configured servers stop re-asking every session without
+// requests. trust is the narrow, MCP-specific exception: once policy has granted the
+// command and asks, a server the user already approved "always" for its exact (command,
+// args) skips the modal, so configured servers stop re-asking every session without
 // weakening D-27 for anything else.
 type serverProcess struct {
 	name        string
@@ -120,22 +119,20 @@ func (p *serverProcess) connect(ctx context.Context) (*mcpsdk.ClientSession, err
 	return session, nil
 }
 
-// authorizeExec checks the trust store first, then falls through to exactly today's
-// policy flow unchanged — asking a human when policy says Ask, never starting anything
-// policy says Deny.
+// authorizeExec never starts anything policy says Deny, so a command must be in
+// [security] exec_allow even when trusted; the trust store only answers policy's Ask.
 func (p *serverProcess) authorizeExec(ctx context.Context, command string) error {
-	if p.trust != nil && p.trust.isTrusted(command, p.cfg.Args) {
-		return nil
-	}
-
 	decision := p.policy.Evaluate(ctx, policy.Request{Kind: core.CapabilityExec, Target: command})
 	switch decision.Verdict {
 	case policy.Allow:
 		return nil
 	case policy.Ask:
+		if p.trust != nil && p.trust.isTrusted(command, p.cfg.Args) {
+			return nil
+		}
 		return p.requestApproval(ctx, command)
 	case policy.Deny:
-		return fmt.Errorf("mcp server %q is not permitted to run %q: %w", p.name, command, core.ErrDenied)
+		return fmt.Errorf("mcp server %q is not permitted to run %q; add it to [security] exec_allow in your user config: %w", p.name, command, core.ErrDenied)
 	default:
 		return fmt.Errorf("mcp server %q is not permitted to run %q: %w", p.name, command, core.ErrDenied)
 	}
@@ -173,10 +170,10 @@ func (p *serverProcess) requestApproval(ctx context.Context, command string) err
 	}
 }
 
-// buildServerEnv layers the server's configured env over travis's own, so a server still
-// finds its runner (node, python, …) on PATH without the config needing to repeat it.
+// buildServerEnv layers the server's configured env over travis's own minus the provider
+// credential, so a server still finds its runner (node, python, …) on PATH.
 func buildServerEnv(configured map[string]string) []string {
-	env := os.Environ()
+	env := config.BuildEnvironmentWithoutSecrets()
 	for key, value := range configured {
 		env = append(env, key+"="+value)
 	}

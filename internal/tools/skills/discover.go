@@ -18,12 +18,8 @@ import (
 const skillFileName = "SKILL.md"
 
 // discoverSkills resolves every configured root, classifies its tier by workspace
-// containment, and walks it for skills. Workspace-tier roots are returned before
-// user-tier ones (and skipped entirely when !cfg.LoadWorkspace), so Catalog's
-// first-wins duplicate resolution gives workspace precedence over user, matching the
-// ticket's "workspace > user" rule.
-func discoverSkills(cfg config.SkillsCfg, paths config.PathSet, diagnostics io.Writer) []skill {
-	var workspaceRoots, userRoots []string
+// containment, and walks it for skills, reporting each tier separately.
+func discoverSkills(cfg config.SkillsCfg, paths config.PathSet, diagnostics io.Writer) (workspaceSkills, userSkills []skill) {
 	for _, root := range cfg.Roots {
 		resolved, err := paths.Resolve(root)
 		if err != nil {
@@ -31,26 +27,12 @@ func discoverSkills(cfg config.SkillsCfg, paths config.PathSet, diagnostics io.W
 			continue
 		}
 		if isWithinWorkspace(resolved, paths.WorkspaceDir) {
-			workspaceRoots = append(workspaceRoots, resolved)
+			workspaceSkills = append(workspaceSkills, discoverSkillsUnderRoot(resolved, TierWorkspace, diagnostics)...)
 		} else {
-			userRoots = append(userRoots, resolved)
+			userSkills = append(userSkills, discoverSkillsUnderRoot(resolved, TierUser, diagnostics)...)
 		}
 	}
-
-	var discovered []skill
-	if cfg.LoadWorkspace {
-		for _, root := range workspaceRoots {
-			discovered = append(discovered, discoverSkillsUnderRoot(root, TierWorkspace, diagnostics)...)
-		}
-	} else {
-		for _, root := range workspaceRoots {
-			fmt.Fprintf(diagnostics, "skills: workspace root %q skipped: skills.load_workspace is false\n", root)
-		}
-	}
-	for _, root := range userRoots {
-		discovered = append(discovered, discoverSkillsUnderRoot(root, TierUser, diagnostics)...)
-	}
-	return discovered
+	return workspaceSkills, userSkills
 }
 
 // isWithinWorkspace decides trust tier by where a root actually lives, not by which

@@ -76,9 +76,10 @@ func (t *adaptedTool) Invoke(ctx context.Context, arguments json.RawMessage) (co
 	}
 	text := extractText(result.Content)
 	return core.ToolOutput{
-		Content: core.WrapUntrustedContent(sourceName(t.server), text),
-		Display: display,
-		IsError: result.IsError,
+		Content:     core.WrapUntrustedContent(sourceName(t.server), text),
+		Display:     display,
+		IsError:     result.IsError,
+		IsUntrusted: true,
 	}, nil
 }
 

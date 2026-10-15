@@ -68,3 +68,23 @@ arguments = '{"path":"summary.md","content":"Dentist moved to 10:15.\nRoom 4.\n"
 
 [[scenario.step]]
 final_text = "Moved the appointment and wrote summary.md."
+
+# 3F regression: a workspace AGENTS.md stays out of the prompt until a human approves it,
+# and its presence alone never marks steps untrusted, so ordinary writes still run.
+[[scenario]]
+name = "unapproved AGENTS.md stays out of the prompt and writes still run"
+fixture = "agents-md"
+turns = ["Write a short todo list."]
+assert_prompt_lacks = ["AGENTS-MARKER"]
+assert_tools_called = ["fs_write"]
+
+[[scenario.step]]
+tool = "fs_write"
+arguments = '{"path":"todo.md","content":"- buy milk\n"}'
+
+[[scenario.step]]
+final_text = "Wrote todo.md."
+
+[[scenario.assert_files]]
+path = "todo.md"
+contains = "buy milk"

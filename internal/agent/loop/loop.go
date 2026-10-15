@@ -117,6 +117,8 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 	}
 
 	var usage core.Usage
+	// toolCtx marks only the step right after untrusted intake: escalation is step-scoped (§5.12.4, D-26).
+	toolCtx := ctx
 	for step := 0; step < c.maxSteps; step++ {
 		reply, err := c.runStep(ctx, prompt)
 		if err != nil {
@@ -135,11 +137,15 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 			return nil
 		}
 
-		results, err := c.runToolCalls(ctx, reply.calls)
+		results, hasUntrustedResult, err := c.runToolCalls(toolCtx, reply.calls)
 		err = errors.Join(err, c.recordToolResults(ctx, results))
 		if err != nil {
 			c.completeTurn(ctx, core.StopError, usage)
 			return err
+		}
+		toolCtx = ctx
+		if hasUntrustedResult {
+			toolCtx = core.MarkUntrustedStep(ctx)
 		}
 	}
 
@@ -283,9 +289,10 @@ func buildAssistantMessage(reply stepReply) core.Message {
 
 // runToolCalls dispatches sequentially: every Phase 1 tool is read-only, so parallelism
 // buys little yet, and order stays deterministic. Every call gets a result, even after a
-// failure, because the provider rejects a history with unanswered calls.
-func (c *AssistantConversation) runToolCalls(ctx context.Context, calls []core.ToolCall) ([]core.Part, error) {
-	parts := make([]core.Part, 0, len(calls))
+// failure, because the provider rejects a history with unanswered calls. hasUntrustedResult
+// reports whether any output carried untrusted text.
+func (c *AssistantConversation) runToolCalls(ctx context.Context, calls []core.ToolCall) (parts []core.Part, hasUntrustedResult bool, err error) {
+	parts = make([]core.Part, 0, len(calls))
 	for i, call := range calls {
 		c.events.Publish(ctx, core.ToolCallStarted{EventHeader: c.buildEventHeader(), Call: call})
 
@@ -293,6 +300,7 @@ func (c *AssistantConversation) runToolCalls(ctx context.Context, calls []core.T
 		if err != nil {
 			output = core.ToolOutput{Content: toolAbortedResult, Display: err.Error(), IsError: true}
 		}
+		hasUntrustedResult = hasUntrustedResult || output.IsUntrusted
 		result := core.ToolResult{CallID: call.ID, Name: call.Name, Content: output.Content, IsError: output.IsError}
 		c.events.Publish(ctx, core.ToolCallFinished{EventHeader: c.buildEventHeader(), Result: result, Display: output.Display})
 		parts = append(parts, core.ToolResultPart{ToolResult: result})
@@ -303,10 +311,10 @@ func (c *AssistantConversation) runToolCalls(ctx context.Context, calls []core.T
 					CallID: skipped.ID, Name: skipped.Name, Content: toolAbortedResult, IsError: true,
 				}})
 			}
-			return parts, fmt.Errorf("run tool %q: %w", call.Name, err)
+			return parts, hasUntrustedResult, fmt.Errorf("run tool %q: %w", call.Name, err)
 		}
 	}
-	return parts, nil
+	return parts, hasUntrustedResult, nil
 }
 
 // invokeTool turns an unknown name or a panicking tool into an error result for the

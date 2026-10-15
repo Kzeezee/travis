@@ -122,10 +122,8 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// TEMPORARY for manual testing: "dev" grants exec: "*", since "default" has no exec
-	// grant wired to any config yet ([security] exec_allow doesn't exist). Revert to
-	// "default" before this ships — see the conversation for why.
-	mcpPolicy, err := broker.BuildSessionPolicy("dev", broker.SessionRoots{Paths: paths, Home: home, Temp: os.TempDir()})
+	// exec_allow comes from the user layer only (config refuses [security] in the workspace).
+	mcpPolicy, err := broker.BuildSessionPolicy("default", broker.SessionRoots{Paths: paths, Home: home, Temp: os.TempDir(), ExecAllow: cfg.Security.ExecAllow})
 	if err != nil {
 		return err
 	}
@@ -179,7 +177,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 type chatSession struct {
 	conversation  *loop.AssistantConversation
 	bus           *core.Bus
-	closeMCP      func()
+	stopStartup   func() // ends MCP supervision and the workspace approval wait
 	toolRegistry  *registry.Registry
 	skillsCatalog *skills.Catalog
 	memoryStore   core.MemoryStore
@@ -260,12 +258,13 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 		}
 	}
 
-	// Unlike MCP, discovery is a one-time local filesystem read with no supervision or
-	// approval wait, so this runs synchronously here and needs no Close.
+	// Discovery is synchronous; the workspace approval waits for the frontend like MCP's does.
 	skillsCatalog := skills.BuildCatalog(cfg.Skills, paths, diagnostics)
 	if err := toolRegistry.Register(registry.SourceSkill, skills.BuildOpenTool(skillsCatalog)); err != nil {
 		return nil, err
 	}
+	approvalCtx, cancelApproval := context.WithCancel(context.Background())
+	go skillsCatalog.RequestWorkspaceApproval(approvalCtx, approver)
 
 	// Async by design (BuildManager's own doc comment): connecting here, before the TUI's
 	// event loop starts reading approvals, would deadlock any server that needs Ask.
@@ -281,7 +280,7 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 	session := &chatSession{
 		conversation:  loop.BuildAssistantConversation(deps, model, cfg.Brain.MaxSteps),
 		bus:           bus,
-		closeMCP:      mcpManager.Close,
+		stopStartup:   func() { cancelApproval(); mcpManager.Close() },
 		toolRegistry:  toolRegistry,
 		skillsCatalog: skillsCatalog,
 		memoryStore:   memoryStore,
@@ -293,10 +292,10 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 	return session, nil
 }
 
-// close stops MCP supervision first, so no late event from a dying server tries to publish
-// after the bus closes, then ends the session's event stream and waits for the trace to flush.
+// close stops background startup work first, so no late event from a dying server tries to
+// publish after the bus closes, then ends the session's event stream and waits for the trace.
 func (s *chatSession) close() {
-	s.closeMCP()
+	s.stopStartup()
 	s.bus.Close()
 	s.waitForTrace()
 }

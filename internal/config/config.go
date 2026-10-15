@@ -28,6 +28,14 @@ type Config struct {
 	Session  SessionCfg
 	MCP      MCPCfg
 	Skills   SkillsCfg
+	Security SecurityCfg
+}
+
+// SecurityCfg widens what the session policy grants. User-config only: the workspace layer
+// is refused outright, so a cloned repo can never grant itself exec (R-27).
+type SecurityCfg struct {
+	// ExecAllow lists exec targets as globs; an MCP server command must match one to start.
+	ExecAllow []string `toml:"exec_allow"`
 }
 
 // ProviderCfg selects which model profile is live and lists every profile a user has
@@ -67,10 +75,6 @@ type SkillsCfg struct {
 	// the workspace and is trusted (user tier); anything that resolves inside the
 	// workspace is untrusted (workspace tier), regardless of how it was spelled.
 	Roots []string
-	// LoadWorkspace gates discovering any workspace-tier root, and reading the workspace
-	// AGENTS.md, at all. Default false: no approval UX exists yet for untrusted content
-	// this is injected straight into the system prompt (ticket 2D, not built).
-	LoadWorkspace bool `toml:"load_workspace"`
 }
 
 // AuthCfg never carries a credential value, only a reference the broker resolves
@@ -153,8 +157,7 @@ func (d Diagnostics) HasErrors() bool {
 
 // hardErrorSection is the one section where an unknown key is never just a typo
 // warning: a misspelled security setting must never silently widen what the agent
-// is allowed to do. Every key under here is "unknown" until `security` ships its own
-// Config field, which is the correct failure mode for now, not a gap.
+// is allowed to do.
 const hardErrorSection = "security"
 
 const (
@@ -290,19 +293,22 @@ func decodeWorkspaceLayerFile(readFile fileReader, path string, cfg *Config) (Di
 		return diags, err
 	}
 
-	if setsProviderTable(data) {
+	if setsTopLevelTable(data, hardErrorSection) {
+		return diags, fmt.Errorf("config %s: [%s] may not be set by the workspace layer (DESIGN.md risk R-27): %w", path, hardErrorSection, core.ErrInvalid)
+	}
+	if setsTopLevelTable(data, "provider") {
 		diags = append(diags, Diagnostic{
 			Severity: SeverityWarning,
 			Message:  fmt.Sprintf("config %s: [provider] may not be set by the workspace layer (DESIGN.md risk R-27); ignored", path),
 		})
 	}
-	if setsMCPTable(data) {
+	if setsTopLevelTable(data, "mcp") {
 		diags = append(diags, Diagnostic{
 			Severity: SeverityWarning,
 			Message:  fmt.Sprintf("config %s: [mcp] may not be set by the workspace layer (DESIGN.md risk R-27; here for code execution, not just credential redirection); ignored", path),
 		})
 	}
-	if setsSkillsTable(data) {
+	if setsTopLevelTable(data, "skills") {
 		diags = append(diags, Diagnostic{
 			Severity: SeverityWarning,
 			Message:  fmt.Sprintf("config %s: [skills] may not be set by the workspace layer (DESIGN.md risk R-27; a workspace must not be able to turn on its own untrusted-content loading, R-02/D-23); ignored", path),
@@ -317,39 +323,15 @@ func decodeWorkspaceLayerFile(readFile fileReader, path string, cfg *Config) (Di
 	return diags, nil
 }
 
-// setsProviderTable reports whether data has a top-level [provider] table, purely to
-// give decodeWorkspaceLayerFile's warning a clear cause. It never affects what gets
-// applied — workspaceLayerCfg's shape is what actually enforces the restriction.
-func setsProviderTable(data []byte) bool {
+// setsTopLevelTable reports whether data has a top-level table called name, purely to give
+// decodeWorkspaceLayerFile a clear cause; workspaceLayerCfg's shape is what actually
+// enforces the restriction.
+func setsTopLevelTable(data []byte, name string) bool {
 	var raw map[string]any
 	if err := toml.Unmarshal(data, &raw); err != nil {
 		return false
 	}
-	_, ok := raw["provider"]
-	return ok
-}
-
-// setsMCPTable reports whether data has a top-level [mcp] table, purely to give
-// decodeWorkspaceLayerFile's warning a clear cause; workspaceLayerCfg's shape is what
-// actually enforces the restriction.
-func setsMCPTable(data []byte) bool {
-	var raw map[string]any
-	if err := toml.Unmarshal(data, &raw); err != nil {
-		return false
-	}
-	_, ok := raw["mcp"]
-	return ok
-}
-
-// setsSkillsTable reports whether data has a top-level [skills] table, purely to give
-// decodeWorkspaceLayerFile's warning a clear cause; workspaceLayerCfg's shape is what
-// actually enforces the restriction.
-func setsSkillsTable(data []byte) bool {
-	var raw map[string]any
-	if err := toml.Unmarshal(data, &raw); err != nil {
-		return false
-	}
-	_, ok := raw["skills"]
+	_, ok := raw[name]
 	return ok
 }
 

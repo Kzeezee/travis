@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -672,5 +673,41 @@ func TestRunWithNilSkillsLeavesTheSystemPromptUnchanged(t *testing.T) {
 	}
 	if strings.Contains(provider.requests[0].System, "skill") {
 		t.Fatalf("system prompt = %q, want no skills section when Dependencies.Skills is nil", provider.requests[0].System)
+	}
+}
+
+// untrustedStepProbe records whether each call ran in an untrusted step, and answers with
+// untrusted output when asked to.
+type untrustedStepProbe struct {
+	seenUntrusted []bool
+}
+
+func (*untrustedStepProbe) Name() string            { return "probe" }
+func (*untrustedStepProbe) Describe() core.ToolSpec { return core.ToolSpec{Name: "probe"} }
+func (p *untrustedStepProbe) Invoke(ctx context.Context, arguments json.RawMessage) (core.ToolOutput, error) {
+	p.seenUntrusted = append(p.seenUntrusted, core.ReportIsFromUntrustedStep(ctx))
+	return core.ToolOutput{Content: "ok", IsUntrusted: string(arguments) == `"untrusted"`}, nil
+}
+
+// The step right after untrusted output runs marked, so policy asks before its effects; the
+// mark does not spread to the step after that (§5.12.4, D-26).
+func TestRunMarksOnlyTheStepAfterUntrustedOutput(t *testing.T) {
+	probe := &untrustedStepProbe{}
+	call := func(id core.ID, arguments string) *fakeStream {
+		return buildToolCallStream(core.ToolCall{ID: id, Name: "probe", Arguments: json.RawMessage(arguments)})
+	}
+	provider := &fakeProvider{streams: []*fakeStream{
+		call("intake", `"untrusted"`),
+		call("acts-on-it", `"trusted"`),
+		call("later", `"trusted"`),
+		buildTextStream(core.Chunk{Text: "done"}),
+	}}
+	conversation := buildAssistantConversation(t, provider, &fakeToolLookup{tools: []core.Tool{probe}}, &recordingSink{})
+
+	if err := conversation.RunAssistantTurn(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []bool{false, true, false}; !slices.Equal(probe.seenUntrusted, want) {
+		t.Fatalf("untrusted per step = %v, want %v", probe.seenUntrusted, want)
 	}
 }

@@ -51,6 +51,10 @@ type Scenario struct {
 	AssertToolsOffered   []string     `toml:"assert_tools_offered"`
 	AssertAnswerContains []string     `toml:"assert_answer_contains"`
 	AssertFiles          []AssertFile `toml:"assert_files"`
+
+	// AssertPromptLacks checks the first call's system prompt; scripted runner only, like
+	// AssertToolsOffered.
+	AssertPromptLacks []string `toml:"assert_prompt_lacks"`
 }
 
 // Suite is every scenario in one TOML file.

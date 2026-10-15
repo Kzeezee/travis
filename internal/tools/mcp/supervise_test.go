@@ -60,8 +60,8 @@ func TestConnectAsksThenConnectsOnApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools() error = %v", err)
 	}
-	if len(listed.Tools) != 2 {
-		t.Fatalf("ListTools() returned %d tools, want 2 (echo, crash)", len(listed.Tools))
+	if len(listed.Tools) != 3 {
+		t.Fatalf("ListTools() returned %d tools, want 3 (echo, crash, env)", len(listed.Tools))
 	}
 }
 

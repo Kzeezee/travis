@@ -74,6 +74,9 @@ type ToolOutput struct {
 	Content string
 	Display string
 	IsError bool
+	// IsUntrusted means Content carries text travis cannot vouch for (an MCP result, a workspace
+	// skill), so the loop marks the next step untrusted (§5.12.4).
+	IsUntrusted bool
 }
 
 type ToolResult struct {
