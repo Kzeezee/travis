@@ -319,3 +319,52 @@ func TestPaletteTypedDuringATurnOpensWhenItFinishes(t *testing.T) {
 		t.Fatalf("got viewport height %d, want %d to make room for the palette", m.viewport.Height(), idleHeight-1)
 	}
 }
+
+// Bracketed paste arrives as one tea.PasteMsg rather than a run of key presses, so the input
+// never sees it unless Update forwards it (the paste was dropped entirely before this).
+func TestPasteReachesThePrompt(t *testing.T) {
+	m := buildTestModel(ChatActions{})
+
+	next, _ := m.Update(tea.PasteMsg{Content: "git status --short"})
+
+	if got := next.(chatModel).input.Value(); got != "git status --short" {
+		t.Fatalf("prompt = %q, want the pasted text", got)
+	}
+}
+
+// Multi-line paste stays in the prompt as one value: a newline inside a paste is content, not
+// the Enter that submits a turn.
+func TestPasteDoesNotSubmitTheTurn(t *testing.T) {
+	submitted := make(chan string, 1)
+	m := buildTestModel(ChatActions{RunTurn: func(_ context.Context, prompt string) error {
+		submitted <- prompt
+		return nil
+	}})
+
+	next, _ := m.Update(tea.PasteMsg{Content: "first\nsecond"})
+
+	if len(submitted) != 0 {
+		t.Fatalf("a paste submitted %q", <-submitted)
+	}
+	if got := next.(chatModel).input.Value(); !strings.Contains(got, "first") {
+		t.Fatalf("prompt = %q, want the pasted text", got)
+	}
+}
+
+// A paste must not slip into the prompt behind a modal: an approval is keyboard-only (D-10),
+// and text the user cannot see is text they cannot choose to send.
+func TestPasteIsIgnoredWhileAModalIsOpen(t *testing.T) {
+	m, _ := buildPendingApproval(t)
+
+	next, cmd := m.Update(tea.PasteMsg{Content: "y"})
+
+	if got := next.(chatModel).input.Value(); got != "" {
+		t.Fatalf("prompt = %q, want it untouched while the modal is open", got)
+	}
+	if cmd != nil {
+		t.Fatal("a paste answered the approval modal")
+	}
+	if next.(chatModel).pendingApproval == nil {
+		t.Fatal("the modal was dismissed by a paste")
+	}
+}

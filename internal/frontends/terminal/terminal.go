@@ -274,6 +274,8 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize(msg.Width, msg.Height)
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case tea.PasteMsg:
+		return m.handlePaste(msg)
 	case tea.MouseWheelMsg:
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -316,6 +318,21 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// handlePaste puts bracketed-paste text in the prompt. A modal swallows it instead of letting
+// it through: an approval is answered by a real keypress and nothing else (D-10), and pasted
+// text landing in a prompt hidden behind a modal is text the user cannot see they are about
+// to send.
+func (m chatModel) handlePaste(paste tea.PasteMsg) (tea.Model, tea.Cmd) {
+	if m.pendingApproval != nil || m.pendingQuestion != nil || m.undoPicker != nil {
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(paste)
+	m.paletteIndex = 0
+	m.fitViewport()
+	return m, cmd
 }
 
 // handleKey routes keys: only PgUp/PgDn reach the transcript, so typing never scrolls it.
