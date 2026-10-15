@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/Kzeezee/travis/internal/core"
@@ -28,6 +29,11 @@ type Config struct {
 	Session  SessionCfg
 	MCP      MCPCfg
 	Skills   SkillsCfg
+	Security SecurityCfg
+}
+
+type SecurityCfg struct {
+	ExecAllow []string `toml:"exec_allow"`
 }
 
 // ProviderCfg selects which model profile is live and lists every profile a user has
@@ -67,10 +73,6 @@ type SkillsCfg struct {
 	// the workspace and is trusted (user tier); anything that resolves inside the
 	// workspace is untrusted (workspace tier), regardless of how it was spelled.
 	Roots []string
-	// LoadWorkspace gates discovering any workspace-tier root, and reading the workspace
-	// AGENTS.md, at all. Default false: no approval UX exists yet for untrusted content
-	// this is injected straight into the system prompt (ticket 2D, not built).
-	LoadWorkspace bool `toml:"load_workspace"`
 }
 
 // AuthCfg never carries a credential value, only a reference the broker resolves
@@ -151,10 +153,7 @@ func (d Diagnostics) HasErrors() bool {
 	return false
 }
 
-// hardErrorSection is the one section where an unknown key is never just a typo
-// warning: a misspelled security setting must never silently widen what the agent
-// is allowed to do. Every key under here is "unknown" until `security` ships its own
-// Config field, which is the correct failure mode for now, not a gap.
+// A misspelled security setting must fail closed rather than silently change permissions.
 const hardErrorSection = "security"
 
 const (
@@ -308,6 +307,15 @@ func decodeWorkspaceLayerFile(readFile fileReader, path string, cfg *Config) (Di
 			Message:  fmt.Sprintf("config %s: [skills] may not be set by the workspace layer (DESIGN.md risk R-27; a workspace must not be able to turn on its own untrusted-content loading, R-02/D-23); ignored", path),
 		})
 	}
+	var tables map[string]any
+	if err := toml.Unmarshal(data, &tables); err != nil {
+		return diags, fmt.Errorf("config %s: %w", path, err)
+	}
+	for name := range tables {
+		if strings.EqualFold(name, "security") {
+			return diags, fmt.Errorf("config %s: [security] may not be set by the workspace layer: %w", path, core.ErrInvalid)
+		}
+	}
 
 	seed := workspaceLayerCfg{Profile: cfg.Profile, Brain: cfg.Brain, Tools: cfg.Tools}
 	if err := toml.Unmarshal(data, &seed); err != nil {
@@ -410,6 +418,11 @@ func applyEnvOverrides(cfg *Config, lookup envLookup) {
 // fatal (Load already treats it as such).
 func (c *Config) Validate() Diagnostics {
 	var diags Diagnostics
+	for _, pattern := range c.Security.ExecAllow {
+		if pattern == "" || strings.TrimSpace(pattern) != pattern || !doublestar.ValidatePattern(pattern) {
+			diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("security.exec_allow has invalid pattern %q", pattern)})
+		}
+	}
 
 	if c.Provider.Active == "" {
 		diags = append(diags, Diagnostic{Severity: SeverityError, Message: "provider.active is empty"})

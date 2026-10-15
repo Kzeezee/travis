@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 
@@ -18,6 +19,12 @@ type echoArgs struct {
 }
 
 func main() {
+	requireNoProviderKey := flag.Bool("require-no-provider-key", false, "fail if a provider credential was inherited")
+	flag.Parse()
+	if _, hasProviderKey := os.LookupEnv("OPENAI_API_KEY"); *requireNoProviderKey && hasProviderKey {
+		fmt.Fprintln(os.Stderr, "provider credential reached MCP process")
+		os.Exit(1)
+	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "fakeserver", Version: "0.1.0"}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "echo", Description: "echoes the message back"}, echoTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "crash", Description: "exits the process immediately"}, crashTool)

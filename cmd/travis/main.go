@@ -122,10 +122,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// TEMPORARY for manual testing: "dev" grants exec: "*", since "default" has no exec
-	// grant wired to any config yet ([security] exec_allow doesn't exist). Revert to
-	// "default" before this ships — see the conversation for why.
-	mcpPolicy, err := broker.BuildSessionPolicy("dev", broker.SessionRoots{Paths: paths, Home: home, Temp: os.TempDir()})
+	mcpPolicy, err := broker.BuildSessionPolicy("default", broker.SessionRoots{Paths: paths, Home: home, Temp: os.TempDir(), ExecAllow: cfg.Security.ExecAllow})
 	if err != nil {
 		return err
 	}
@@ -260,9 +257,7 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 		}
 	}
 
-	// Unlike MCP, discovery is a one-time local filesystem read with no supervision or
-	// approval wait, so this runs synchronously here and needs no Close.
-	skillsCatalog := skills.BuildCatalog(cfg.Skills, paths, diagnostics)
+	skillsCatalog := skills.BuildCatalog(cfg.Skills, paths, diagnostics, approver)
 	if err := toolRegistry.Register(registry.SourceSkill, skills.BuildOpenTool(skillsCatalog)); err != nil {
 		return nil, err
 	}

@@ -1,12 +1,14 @@
 package skills
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -17,11 +19,7 @@ import (
 
 const skillFileName = "SKILL.md"
 
-// discoverSkills resolves every configured root, classifies its tier by workspace
-// containment, and walks it for skills. Workspace-tier roots are returned before
-// user-tier ones (and skipped entirely when !cfg.LoadWorkspace), so Catalog's
-// first-wins duplicate resolution gives workspace precedence over user, matching the
-// ticket's "workspace > user" rule.
+// discoverSkills orders workspace candidates first so approved workspace entries win duplicates.
 func discoverSkills(cfg config.SkillsCfg, paths config.PathSet, diagnostics io.Writer) []skill {
 	var workspaceRoots, userRoots []string
 	for _, root := range cfg.Roots {
@@ -38,18 +36,13 @@ func discoverSkills(cfg config.SkillsCfg, paths config.PathSet, diagnostics io.W
 	}
 
 	var discovered []skill
-	if cfg.LoadWorkspace {
-		for _, root := range workspaceRoots {
-			discovered = append(discovered, discoverSkillsUnderRoot(root, TierWorkspace, diagnostics)...)
-		}
-	} else {
-		for _, root := range workspaceRoots {
-			fmt.Fprintf(diagnostics, "skills: workspace root %q skipped: skills.load_workspace is false\n", root)
-		}
+	for _, root := range workspaceRoots {
+		discovered = append(discovered, discoverSkillsUnderRoot(root, TierWorkspace, paths.WorkspaceDir, diagnostics)...)
 	}
 	for _, root := range userRoots {
-		discovered = append(discovered, discoverSkillsUnderRoot(root, TierUser, diagnostics)...)
+		discovered = append(discovered, discoverSkillsUnderRoot(root, TierUser, paths.WorkspaceDir, diagnostics)...)
 	}
+	sort.SliceStable(discovered, func(i, j int) bool { return discovered[i].Tier > discovered[j].Tier })
 	return discovered
 }
 
@@ -57,18 +50,31 @@ func discoverSkills(cfg config.SkillsCfg, paths config.PathSet, diagnostics io.W
 // config.PathSet.Resolve prefix produced it (R-02 is about workspace-owned content,
 // regardless of how the path was spelled).
 func isWithinWorkspace(path, workspaceDir string) bool {
-	rel, err := filepath.Rel(workspaceDir, path)
+	if isPathWithinRoot(path, workspaceDir) {
+		return true
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(workspaceDir); err == nil {
+		workspaceDir = resolved
+	}
+	return isPathWithinRoot(path, workspaceDir)
+}
+
+func isPathWithinRoot(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		return false
 	}
-	return rel == "." || (!strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel))
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // discoverSkillsUnderRoot walks one directory level: root/<skill-name>/SKILL.md,
 // matching the real SKILL.md ecosystem convention. A missing root is the common case
 // (no default skills directory exists on a fresh machine) and is silent; any other
 // per-skill failure is a diagnostic line, never fatal to the rest of the catalog.
-func discoverSkillsUnderRoot(root string, tier Tier, diagnostics io.Writer) []skill {
+func discoverSkillsUnderRoot(root string, tier Tier, workspaceDir string, diagnostics io.Writer) []skill {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
@@ -96,16 +102,21 @@ func discoverSkillsUnderRoot(root string, tier Tier, diagnostics io.Writer) []sk
 			continue
 		}
 
+		skillTier := tier
+		if isWithinWorkspace(skillPath, workspaceDir) {
+			skillTier = TierWorkspace
+		}
 		body := parsed.body
-		if tier == TierWorkspace {
+		if skillTier == TierWorkspace {
 			body = core.WrapUntrustedContent(fmt.Sprintf("workspace skill:%s", parsed.name), body)
 		}
 		discovered = append(discovered, skill{
 			Name:        parsed.name,
 			Description: parsed.description,
 			Body:        body,
-			Tier:        tier,
+			Tier:        skillTier,
 			Root:        root,
+			ContentHash: sha256.Sum256(data),
 		})
 	}
 	return discovered

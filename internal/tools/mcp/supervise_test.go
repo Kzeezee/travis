@@ -74,6 +74,33 @@ func TestConnectDeniedByApprover(t *testing.T) {
 	}
 }
 
+func TestRedTeamGateMCPDoesNotInheritProviderCredential(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "canary-provider-key-never-forward")
+	process, _ := buildTestProcess(t, buildTestServerConfig("-require-no-provider-key"), grantedExecPolicy(), &fakeApprover{decision: core.ApprovalOnce})
+	session, err := process.connect(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if _, err := session.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "echo", Arguments: map[string]any{"message": "alive"}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRedTeamGateRememberedMCPTrustCannotBypassRemovedExecGrant(t *testing.T) {
+	approver := &fakeApprover{decision: core.ApprovalOnce}
+	process, clock := buildTestProcess(t, buildTestServerConfig(), deniedExecPolicy(), approver)
+	if err := process.trust.add(process.cfg.Command, process.cfg.Args, "previously approved", clock); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := process.connect(t.Context()); !errors.Is(err, core.ErrDenied) {
+		t.Fatalf("trusted server without an exec grant: %v", err)
+	}
+	if len(approver.askedOps()) != 0 {
+		t.Fatal("a removed grant must deny without asking")
+	}
+}
+
 // TestServerProcessRestartsAfterCrash proves restart-with-backoff against a real dead
 // subprocess: the crash tool exits the fake server, and supervision should reconnect
 // without any new approval (the same server was already approved once this session).

@@ -639,7 +639,9 @@ type fakeSkillsIndex struct {
 	sections []string
 }
 
-func (f *fakeSkillsIndex) ReportSystemPromptSections() []string { return f.sections }
+func (f *fakeSkillsIndex) BuildSystemPromptSections(context.Context) ([]string, error) {
+	return f.sections, nil
+}
 
 func TestRunAppendsSkillsSectionsToTheSystemPrompt(t *testing.T) {
 	provider := &fakeProvider{streams: []*fakeStream{buildTextStream(core.Chunk{Text: "done"})}}

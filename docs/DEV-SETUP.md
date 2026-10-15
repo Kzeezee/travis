@@ -274,9 +274,27 @@ files. Applying it re-triggers the workflow; no push is needed.
 
 ## 7. Common problems
 
+MCP server commands must be granted in your user `config.toml` before they can launch:
+
+```toml
+[security]
+exec_allow = ["node", "python3"]
+```
+
+Use the command spelled in `[mcp.servers.<name>].command`; an absolute command needs
+an absolute allowlist entry, written with forward slashes. This grant allows the launch
+approval prompt; it does not approve the server. Removing a grant blocks even a server
+previously approved with “always”. Workspace config cannot set `[security]`.
+
+`[skills] load_workspace` has been removed. Configure workspace skill roots in your
+user `[skills] roots` instead. Workspace skills and `AGENTS.md` require one keyboard
+approval per content snapshot per chat session. Content changes ask again; declining
+keeps the workspace instructions out of the prompt and `skill_open`.
+
 | Symptom | Cause |
 | --- | --- |
 | `command not found: go` in a new terminal | PATH not picked up — restart the terminal, or check the install location |
+| A newly approved MCP server's tools are absent from the first reply | Discovery runs asynchronously; wait for the server's tools to appear in `/tools` before sending the request |
 | `gopls` not found, but it is installed | `$(go env GOPATH)/bin` missing from PATH (§2) |
 | Golden-file tests fail only on Windows | line endings. Goldens normalise before comparing (§8.1) — the test is wrong, not your machine |
 | Tests pass locally, fail in CI | CI runs `-race` natively on three OSes. Run `go test -race ./...` before pushing |

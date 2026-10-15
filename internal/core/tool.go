@@ -71,9 +71,10 @@ func ReportIsFromUntrustedStep(ctx context.Context) bool {
 }
 
 type ToolOutput struct {
-	Content string
-	Display string
-	IsError bool
+	Content     string
+	Display     string
+	IsError     bool
+	IsUntrusted bool
 }
 
 type ToolResult struct {

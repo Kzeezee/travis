@@ -16,9 +16,10 @@ import (
 
 // SessionRoots are the directories a session's grants and deny-list are anchored to.
 type SessionRoots struct {
-	Paths config.PathSet
-	Home  string
-	Temp  string
+	Paths     config.PathSet
+	Home      string
+	Temp      string
+	ExecAllow []string
 }
 
 // BuildSessionPolicy builds the policy a broker enforces for one session under the named
@@ -34,6 +35,7 @@ func BuildSessionPolicy(profile string, roots SessionRoots) (policy.Policy, erro
 		Workspace: paths.WorkspaceDir,
 		Temp:      resolveRootSymlinks(roots.Temp),
 		Home:      home,
+		ExecAllow: roots.ExecAllow,
 	})
 	if err != nil {
 		return policy.Policy{}, err

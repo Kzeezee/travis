@@ -217,7 +217,6 @@ func TestLoadWorkspaceLayerCannotSetSkills(t *testing.T) {
 	files := map[string]string{
 		"/workspace/.travis/config.toml": `
 [skills]
-load_workspace = true
 roots           = ["."]
 
 [brain]
@@ -230,7 +229,7 @@ max_steps = 3
 		t.Fatalf("load() error = %v, diags = %v", err, diags)
 	}
 
-	if cfg.Skills.LoadWorkspace {
+	if len(cfg.Skills.Roots) != 1 || cfg.Skills.Roots[0] != "config:skills" {
 		t.Fatal("the workspace file's [skills] table was applied; the restriction did not hold")
 	}
 	if cfg.Brain.MaxSteps != 3 {
