@@ -58,6 +58,8 @@ type GrepTool struct {
 	broker core.Broker
 	// workspaceRoot is the scope this tool declares; the broker enforces it.
 	workspaceRoot string
+	// isUntrustedPath reports workspace paths whose text is untrusted instructions; nil means none.
+	isUntrustedPath func(workspacePath string) bool
 }
 
 type grepArgs struct {
@@ -94,8 +96,8 @@ type grepResults struct {
 	isTruncated bool
 }
 
-func BuildGrepTool(broker core.Broker, workspaceRoot string) *GrepTool {
-	return &GrepTool{broker: broker, workspaceRoot: workspaceRoot}
+func BuildGrepTool(broker core.Broker, workspaceRoot string, isUntrustedPath func(workspacePath string) bool) *GrepTool {
+	return &GrepTool{broker: broker, workspaceRoot: workspaceRoot, isUntrustedPath: isUntrustedPath}
 }
 
 func (t *GrepTool) Name() string {
@@ -133,7 +135,7 @@ func (t *GrepTool) Invoke(ctx context.Context, arguments json.RawMessage) (core.
 	if err != nil {
 		return core.ToolOutput{}, err
 	}
-	return core.ToolOutput{Content: formatGrepResults(results, query.mode), Display: describeSearch(args, results)}, nil
+	return core.ToolOutput{Content: formatGrepResults(results, query.mode), Display: describeSearch(args, results), IsUntrusted: t.reportHasUntrustedLines(results)}, nil
 }
 
 // decodeGrepArgs fills defaults into the returned args, so callers can describe the search as it ran.
@@ -382,6 +384,17 @@ func (r *grepResults) addMatch(match grepMatch) bool {
 	}
 	r.matches = append(r.matches, match)
 	return true
+}
+
+// reportHasUntrustedLines reports whether any matched line of text came from an untrusted path;
+// files mode returns names only.
+func (t *GrepTool) reportHasUntrustedLines(results grepResults) bool {
+	for _, match := range results.matches {
+		if match.line > 0 && t.isUntrustedPath != nil && t.isUntrustedPath(match.path) {
+			return true
+		}
+	}
+	return false
 }
 
 func formatGrepResults(results grepResults, mode string) string {

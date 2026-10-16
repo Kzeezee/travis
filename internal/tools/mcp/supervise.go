@@ -124,7 +124,7 @@ func (p *serverProcess) authorizeExec(ctx context.Context, command string) error
 		}
 		return p.requestApproval(ctx, command)
 	case policy.Deny:
-		return fmt.Errorf("mcp server %q is not permitted to run %q: %w", p.name, command, core.ErrDenied)
+		return fmt.Errorf("mcp server %q is not permitted to run %q; add it to [security] exec_allow in your user config: %w", p.name, command, core.ErrDenied)
 	default:
 		return fmt.Errorf("mcp server %q is not permitted to run %q: %w", p.name, command, core.ErrDenied)
 	}

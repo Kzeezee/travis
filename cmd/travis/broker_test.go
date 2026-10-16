@@ -107,7 +107,7 @@ func TestFileReadThroughTheBrokerProcessIsRefusedByPolicy(t *testing.T) {
 	bus := buildSessionBus(io.Discard)
 	events, _ := bus.Subscribe(nil)
 	fileBroker, _ := startTestSessionBroker(t, config.PathSet{WorkspaceDir: workspace, RuntimeDir: buildShortRuntimeDir(t)}, &diagnostics, broker.RemoteOptions{Events: bus})
-	fileRead := builtin.BuildFileReadTool(fileBroker, workspace, defaultMaxReadBytes)
+	fileRead := builtin.BuildFileReadTool(fileBroker, workspace, defaultMaxReadBytes, nil)
 
 	refused, err := fileRead.Invoke(core.WithToolCallID(context.Background(), "call-env"), json.RawMessage(`{"path":".env"}`))
 	if err != nil {

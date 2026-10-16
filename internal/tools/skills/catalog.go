@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -62,6 +63,9 @@ type Catalog struct {
 	decisionHash [sha256.Size]byte
 	hasDecision  bool
 	isApproved   bool
+	// instructionPaths are workspace-relative, lower-cased, slash-separated paths whose text is
+	// workspace instructions: AGENTS.md and every workspace skill root.
+	instructionPaths []string
 }
 
 // BuildCatalog loads user skills; workspace approval waits until the frontend can answer it.
@@ -69,7 +73,16 @@ func BuildCatalog(cfg config.SkillsCfg, paths config.PathSet, diagnostics io.Wri
 	if diagnostics == nil {
 		diagnostics = io.Discard
 	}
-	catalog := &Catalog{cfg: cfg, paths: paths, diagnostics: diagnostics, approver: approver}
+	catalog := &Catalog{cfg: cfg, paths: paths, diagnostics: diagnostics, approver: approver, instructionPaths: []string{strings.ToLower(agentsFileName)}}
+	for _, root := range cfg.Roots {
+		resolved, err := paths.Resolve(root)
+		if err != nil || !isWithinWorkspace(resolved, paths.WorkspaceDir) {
+			continue
+		}
+		if rel, err := filepath.Rel(paths.WorkspaceDir, resolved); err == nil && isPathWithinRoot(resolved, paths.WorkspaceDir) {
+			catalog.instructionPaths = append(catalog.instructionPaths, strings.ToLower(filepath.ToSlash(rel)))
+		}
+	}
 	catalog.replaceSnapshot(discoverSkills(cfg, paths, diagnostics), "", false)
 	return catalog
 }
@@ -114,6 +127,19 @@ func (c *Catalog) BuildSystemPromptSections(ctx context.Context) ([]string, erro
 	}
 	c.replaceSnapshot(discovered, agentsBlock, c.isApproved)
 	return c.ReportSystemPromptSections(), nil
+}
+
+// ReportIsWorkspaceInstructionPath reports whether workspacePath (relative, slash-separated)
+// holds workspace instructions, so a tool reading it can mark its output untrusted even when
+// the human never approved loading it. Case-insensitive, which only ever over-marks.
+func (c *Catalog) ReportIsWorkspaceInstructionPath(workspacePath string) bool {
+	path := strings.ToLower(workspacePath)
+	for _, instruction := range c.instructionPaths {
+		if instruction == "." || path == instruction || strings.HasPrefix(path, instruction+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Catalog) replaceSnapshot(discovered []skill, agentsBlock string, isApproved bool) {

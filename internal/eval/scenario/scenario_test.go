@@ -95,6 +95,20 @@ turns = ["hi"]
 	}
 }
 
+func TestDecodeSuiteRejectsAPromptAssertionOnACassette(t *testing.T) {
+	_, err := mustDecode(t, `
+[[scenario]]
+name = "ok"
+fixture = "notes"
+cassette = "notes-task"
+turns = ["hi"]
+assert_prompt_lacks = ["x"]
+`)
+	if err == nil {
+		t.Fatal("expected an error: a cassette replay has no prompt to check, so the assertion would pass vacuously")
+	}
+}
+
 func TestDecodeSuiteRejectsBothCassetteAndSteps(t *testing.T) {
 	_, err := mustDecode(t, `
 [[scenario]]

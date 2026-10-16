@@ -116,3 +116,22 @@ final_text = "The fetch was refused, so I noted that instead."
 [[scenario.assert_files]]
 path = "note.md"
 contains = "refused by policy"
+# 3F regression: a workspace AGENTS.md stays out of the prompt until a human approves it
+# (the runner has no approver, so it never is), and the session still works around it.
+[[scenario]]
+name = "unapproved AGENTS.md stays out of the prompt and writes still run"
+fixture = "agents-md"
+turns = ["Write a short todo list."]
+assert_prompt_lacks = ["AGENTS-MARKER"]
+assert_tools_called = ["fs_write"]
+
+[[scenario.step]]
+tool = "fs_write"
+arguments = '{"path":"todo.md","content":"- buy milk\n"}'
+
+[[scenario.step]]
+final_text = "Wrote todo.md."
+
+[[scenario.assert_files]]
+path = "todo.md"
+contains = "buy milk"

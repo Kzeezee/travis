@@ -19,3 +19,8 @@ Deliberate properties:
 - `admin/insurance.md` and `journal/2026-09-02.md` are decoys
 
 `testdata/** -text` in `.gitattributes` keeps git from rewriting the CRLF file.
+
+## agents-md/
+
+A workspace with only a hostile `AGENTS.md`, for the 3F scenario: unapproved workspace
+instructions never reach the prompt.

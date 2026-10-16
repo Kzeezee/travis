@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -674,5 +675,47 @@ func TestRunWithNilSkillsLeavesTheSystemPromptUnchanged(t *testing.T) {
 	}
 	if strings.Contains(provider.requests[0].System, "skill") {
 		t.Fatalf("system prompt = %q, want no skills section when Dependencies.Skills is nil", provider.requests[0].System)
+	}
+}
+
+// untrustedStepProbe records whether each call ran in an untrusted step, and answers with
+// untrusted output when asked to.
+type untrustedStepProbe struct {
+	seenUntrusted []bool
+}
+
+func (*untrustedStepProbe) Name() string            { return "probe" }
+func (*untrustedStepProbe) Describe() core.ToolSpec { return core.ToolSpec{Name: "probe"} }
+func (p *untrustedStepProbe) Invoke(ctx context.Context, arguments json.RawMessage) (core.ToolOutput, error) {
+	p.seenUntrusted = append(p.seenUntrusted, core.ReportIsFromUntrustedStep(ctx))
+	return core.ToolOutput{Content: "ok", IsUntrusted: string(arguments) == `"untrusted"`}, nil
+}
+
+// Untrusted output in a turn that runs out of steps still marks the next turn's first step,
+// the first that can act on it; a text reply right after intake spends the mark.
+func TestRunCarriesTheUntrustedMarkOnlyPastAnEarlyTurnEnd(t *testing.T) {
+	probe := &untrustedStepProbe{}
+	call := func(arguments string) *fakeStream {
+		return buildToolCallStream(core.ToolCall{ID: "c", Name: "probe", Arguments: json.RawMessage(arguments)})
+	}
+	var streams []*fakeStream
+	for range testMaxSteps {
+		streams = append(streams, call(`"untrusted"`))
+	}
+	streams = append(streams,
+		call(`"trusted"`), buildTextStream(core.Chunk{Text: "done"}),
+		call(`"untrusted"`), buildTextStream(core.Chunk{Text: "read it"}),
+		call(`"trusted"`), buildTextStream(core.Chunk{Text: "done"}),
+	)
+	conversation := buildAssistantConversation(t, &fakeProvider{streams: streams}, &fakeToolLookup{tools: []core.Tool{probe}}, &recordingSink{})
+
+	for _, prompt := range []string{"loop", "continue", "fetch", "continue"} {
+		if err := conversation.RunAssistantTurn(context.Background(), prompt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	probe.seenUntrusted = probe.seenUntrusted[testMaxSteps-1:]
+	if want := []bool{true, true, false, false}; !slices.Equal(probe.seenUntrusted, want) {
+		t.Fatalf("untrusted per tool step from the budget's last step on = %v, want %v", probe.seenUntrusted, want)
 	}
 }
