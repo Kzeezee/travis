@@ -107,7 +107,7 @@ linters:
 
       # The adapters that own OS and environment specifics (DESIGN.md §8.1). tools/mcp
       # resolves npx vs npx.cmd for its own subprocess launches (ticket 3A).
-      - path: (^|/)internal/(config|security|voicein|voiceout|tools/mcp)/
+      - path: (^|/)internal/(config|security|frontends/(voicein|voiceout)|tools/mcp)/
         linters:
           - forbidigo
         text: runtime\.GOOS|os\.Getenv

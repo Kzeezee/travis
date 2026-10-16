@@ -189,7 +189,7 @@ The last column names what a decision supersedes, or the sections it affects.
 | **D-13** | **The change journal stores content-addressed blobs, not git refs.** Closes `OQ-22`. | Git only holds bytes for files that are tracked *and committed*. Four of five cases fail: tracked-but-dirty, untracked, `.gitignore`d, and outside-the-repo/not-a-repo. A git-backed journal would silently under-restore — the exact defect we criticise in competitors. Blobs are ~80 lines with free dedup and no `go-git` dependency. | §5.15, §6.4, `OQ-22` |
 | **D-14** | **The OS sandbox is deferred to a late phase but is required in the final submission.** Scope: **the `strict` tier, applied to MCP servers, on all three OSes.** The `workspace` tier for `exec` is *deferred*, not the other way round. | The sandbox is defence-in-depth (§9.2.1); policy enforcement is the primary control and ships far earlier. Nobody on the team has done OS security work, and a half-correct sandbox is worse than an absent one because it gives false confidence. **On which tier to build first:** `DESIGN.md` §9.2 assigns `strict` to MCP and `workspace` to `exec`, and only `strict` contains a compromised MCP server (R-01) — the threat the sandbox primarily exists for. `exec` is *already* human-gated (§5.5 sets `"exec" = "ask"`, with a resolved-executable allowlist), whereas an MCP server process starts lazily and then **runs continuously in the background, unsupervised**. Build the tier protecting the thing nobody is watching. | §9.2, §9.2.1, `OQ-16`, `OQ-24` |
 | **D-15** | **Voice is full duplex in v1: `voiceout` *and* `voicein`, built as §5.10 designs it** — `malgo` for capture, the `cmd/travis-audio` helper process, local `whisper_server` for STT. **Supersedes the earlier output-only position.** Also closes `OQ-13` in favour of the helper process. `OQ-14` (wake word) stays deferred. | Output-only was chosen while voice and the sandbox looked like they competed for the same people; it was kept after that reasoning dissolved, which was an error. Under D-11 (personal assistant) being able to *talk to* it is the point — §1's pitch is *"talk to while doing something else"*, and that requires input. Local Whisper over hosted STT because a hot mic streaming to a cloud service can capture **a third party's conversation in the room** — audio nobody chose to send. That is categorically worse than sending text the user typed deliberately, and it would contradict the project's own posture. | §5.10, §5.11, C8, R-10, R-19, `OQ-13`, `OQ-14`, D-11, D-34 |
-| **D-16** | **Cassette record/replay ships in Phase 1, not M5.** | Cassettes are *test infrastructure* and belong before the code they test. Without them, `ai` and `brain` tests are slow (seconds per call), non-deterministic (a live model answers differently every run), and cannot regression-test provider quirks (R-05 requires a *recording* of malformed tool-call JSON to test the repair shim against). A free local model fixes the cost problem only — it makes speed worse, not better. | §5.13, M1, M5 |
+| **D-16** | **Cassette record/replay ships in Phase 1, not M6.** | Cassettes are *test infrastructure* and belong before the code they test. Without them, `ai` and `brain` tests are slow (seconds per call), non-deterministic (a live model answers differently every run), and cannot regression-test provider quirks (R-05 requires a *recording* of malformed tool-call JSON to test the repair shim against). A free local model fixes the cost problem only — it makes speed worse, not better. | §5.13, M1, M5 |
 | **D-17** | **`security` is two separate jobs, needing different skills and belonging in different phases** — see §3.7 for the plain-language version. **Job 1 (early, critical path, ordinary portable Go):** capabilities, policy, glob matching, the broker process, IPC, token derivation. **Job 2 (late, platform expertise):** the OS sandbox. | `DESIGN.md` treats these as one package, which makes security look like one hard job. It is one *learnable* job that carries the entire guarantee, and one *hard* job that is only a backstop. Keeping them together would put the project's hardest code on the critical path for no reason. | §5.12, §9.2 |
 | **D-18** | **`coretools` calls a `Broker` *interface*. Phase 1 ships `LocalBroker` (direct IO, no IPC, no policy); Phase 2 swaps in `RemoteBroker`.** | This is the seam that lets tools and security be built in parallel. It is the single most important parallelisation device in the plan and is not named in `DESIGN.md`. The swap to `RemoteBroker` is the moment enforcement becomes real. | §4.3, §5.6, §5.12 |
 | **D-19** | **The broker wire protocol (msgpack request/response shapes) is a Phase-0 artifact**, frozen alongside `internal/core`. | Both `coretools` and `security` compile against it. Unfrozen, two tracks churn against each other. `DESIGN.md` treats it as part of `security`'s work (§5.12.5), which is too late. | §5.12.5, M0 |
@@ -1189,7 +1189,7 @@ from MCP is a real, near-term problem: 12 MCP servers can easily mean 300 tools 
 40k tokens of schema. Pruning is not a nice-to-have.
 
 **Failure modes.** Name collision across sources → deterministic namespacing wins
-(`mcp.<server>.<tool>`); a collision _within_ a source is a startup error listing
+(`mcp__<server>__<tool>`, D-31); a collision _within_ a source is a startup error listing
 both, never a silent overwrite. Schema validation of model-supplied args happens
 before `Invoke` — a malformed-args error goes back to the model as a tool result, not
 as a crash.
@@ -1451,6 +1451,16 @@ real-world compatibility issue: server profiles (`profiles/mcp/*.toml`) may decl
 `path_style = "posix"`, and the broker translates — still declarative data, still no
 per-server Go code (D-02).
 
+**Launch-time trust (shipped in 3A).** Before a server's process starts, the human is
+asked to approve that exact launch — the command and its argv, not the server's name, so
+editing `[mcp.servers]` to point at something else asks again. The question is marked
+irreversible (D-27), so the modal offers once-or-deny and never an "always" keypress;
+"always" is a separate, deliberate answer, recorded as one `[[entry]]` in
+`mcp-trust.toml` beside the user config. That file is user-scoped rather than
+per-workspace, because `[mcp.servers]` is itself user-config-only (R-27) and applies
+everywhere. It is a convenience, not a security boundary: an unreadable or corrupted
+trust file is treated as empty, which asks again rather than failing the session.
+
 **Failure modes / the elephant.** `npx <anything>` executes arbitrary third-party code
 with the user's privileges. A project whose selling point is "extremely secure" cannot
 also be "curl | node whatever". Therefore:
@@ -1504,7 +1514,8 @@ type Skill struct {
 **Three-level disclosure** (matching how the ecosystem already works):
 
 1. **Always in context:** name + description, one line each. ~30 tokens per skill.
-2. **On demand:** the model calls `skill.open("pptx")` → full `SKILL.md` body.
+2. **On demand:** the model calls `skill_open` with a name (D-31: the separator is `_`) →
+   full `SKILL.md` body.
 3. **Referenced:** body points at `reference.md`, `scripts/build.py` etc.; the model
    reads them with `fs_read` or runs them with `exec`.
 
@@ -1526,6 +1537,11 @@ attacker-controlled text that ends up in the system prompt. Workspace-local skil
 `untrusted` by default: they load only after explicit user approval, they are rendered
 inside a delimiter block marked as untrusted content, and they **cannot** declare
 capabilities. `[R-02]`
+
+As 3F shipped it, that approval is keyed on a hash of the content itself, so changed text
+asks again, and a denial leaves the skill absent rather than recording a lasting deny
+rule. Approval covers the current session only. Reading one through `skill_open` marks
+the step untrusted (D-26), which is what makes the next write ask.
 
 **Failure modes.** Malformed frontmatter → skill is skipped with a diagnostic, never
 fatal. Duplicate names → workspace beats user beats system, with a visible warning.
@@ -1720,7 +1736,7 @@ and talks to over a pipe. This keeps CGO out of the main binary entirely, keeps
 driver segfault does not take down the session. `[OQ-13]` confirms this is worth the
 IPC.
 
-**Per-OS notes that will otherwise bite in M4.** macOS requires a signed
+**Per-OS notes that will otherwise bite in M5.** macOS requires a signed
 `NSMicrophoneUsageDescription` entitlement and shows a system permission dialog on
 first capture — the helper must handle denial as a normal error, not a crash, and
 onboarding must explain the prompt before triggering it. Windows requires the
@@ -1842,18 +1858,38 @@ type Policy interface {
     Evaluate(ctx context.Context, req Request) Decision  // Allow | Ask | Deny
     Explain(req Request) string                          // human-readable rule trace
 }
-type Broker interface {
-    OpenFile(ctx context.Context, tok Token, path string, mode Mode) (File, error)
-    Exec(ctx context.Context, tok Token, spec ExecSpec) (Process, error)
-    Dial(ctx context.Context, tok Token, network, addr string) (net.Conn, error)
-    Secret(ctx context.Context, tok Token, ref string) (string, error)
+// As built, the effects are several narrow ports in core rather than one Broker handle.
+// Nothing carries a Token: a caller does not hold a capability it can present, the
+// session's grants are the broker's own state, and the broker decides per call. Each port
+// is injected separately, so a tool that reads files cannot reach exec by having a broker.
+type Broker interface {                 // files only
+    DescribePath(ctx context.Context, path string) (PathInfo, error)
+    ListDirectory(ctx context.Context, path string) ([]PathInfo, error)
+    OpenFile(ctx context.Context, path string) (OpenedFile, error)
+    WriteFile(ctx context.Context, path string, content []byte) (PathInfo, error)
+    AddDecisionRule(ctx context.Context, rule DecisionRule) error   // narrows an Ask (D-30)
+}
+type CommandRunner interface {          // exec (§5.6)
+    RunCommand(ctx context.Context, argv []string) (CommandResult, error)
+}
+type PageFetcher interface {            // fetch (§9.3)
+    FetchPage(ctx context.Context, url string) (FetchedPage, error)
+}
+type MemoryStore interface {
+    ReadMemory(ctx context.Context) (string, error)
+    ReplaceMemory(ctx context.Context, content string) error
 }
 type Capability struct {
-    Kind  Kind      // fs_read fs_write exec net_http audio_capture audio_play secret
-    Scope string    // glob, host pattern, argv-0 allowlist, or secret name
-    TTL   time.Duration
+    Kind  CapabilityKind  // fs_read fs_write exec net_http secret
+    Scope string          // glob, host pattern, argv-0 allowlist, or secret name
 }
 ```
+
+A capability has no `TTL`. Session lifetime is the only expiry: grants come from the
+profile and the config allowlists when the session starts, and a once-approval is
+spent as soon as its operation settles. Secrets never reach a tool at all — the broker
+resolves `keyring://` refs into a server's environment itself (§5.7), so there is no
+`Secret` call for the model's side of the process to make.
 
 #### 5.12.1 Enforcement, not persuasion
 
@@ -2162,23 +2198,29 @@ nothing to replay.
 **Public interface.**
 
 ```go
-type Store interface {
-    Create(meta Meta) (ID, error)
-    Append(id ID, e core.Event) error
-    Load(id ID) (Snapshot, error)
-    Fork(id ID, atTurn ID) (ID, error)
-    List(filter Filter) []Meta
+// As built, the log is one port travis reaches across the wire, and the broker performs
+// every part of it. There is no separate Journal interface: a change is an entry in this
+// same log (file_changed), and /undo is a Rewind the broker carries out, so the audit log
+// and the undo history cannot disagree.
+type SessionLog interface {
+    AppendEntries(ctx context.Context, entries []SessionEntry) error
+    ListTurns(ctx context.Context) ([]TurnSummary, error)
+    Rewind(ctx context.Context, fromTurn ID, mode RewindMode) (RewindReport, error)
 }
 
-// Journal is the change log that makes autonomy safe (§6.4, D-09). The broker calls
-// Snapshot before every write; the UI calls Restore for /undo.
-type Journal interface {
-    Snapshot(ctx context.Context, path string) (BlobRef, error) // pre-write state
-    Record(turn, call core.ID, path string, before, after BlobRef) error
-    Changes(turn core.ID) []Change
-    Restore(ctx context.Context, sel Selector) ([]string, error) // returns paths restored
-}
+// The backup bytes are a content-addressed store the broker owns directly
+// (internal/state/blobs). Ref is a sha256 hex string, and "" means the file was absent.
+func Open(dir string, maxSnapshotBytes int64) (*Store, error)
+func HashContent(content []byte) Ref
+func (s *Store) Snapshot(ctx context.Context, path string) (Ref, error)
+func (s *Store) Restore(ctx context.Context, path string, ref Ref) error
 ```
+
+`Create`/`Load`/`Fork`/`List` are not a port: one `travis chat` owns one session, whose
+file is opened at startup (`internal/state/session/filestore`), and the rules for reading
+a log back — validation, history, turn summaries, the revert plan — are pure functions in
+`internal/state/session`, shared by the loop and the broker. Forking is not built; the log
+keeps everything a fork would need.
 
 **Where it runs, and who vouches for what.** The session log is kept by the **broker
 process**, as the append-only audit log §4.4 gives it. It is one JSON-lines file per session
@@ -2810,7 +2852,7 @@ and `<name>test/` (the contract suite alternative implementations must pass).
 
 The team develops on Linux, macOS, and Windows, and all three are shipped. This is
 mostly free — Go cross-compiles and Bubble Tea v2 is cross-platform — provided a
-handful of rules are followed from M0 rather than retrofitted in M4.
+handful of rules are followed from M0 rather than retrofitted later.
 
 - **OS-specific code is confined to named files with build tags**, and only in these
   packages: `config` (paths), `security` (sandbox, IPC transport, ACLs), `voicein`/
@@ -3009,11 +3051,12 @@ release.**
 | --- | ----------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | M0  | Skeleton    | `internal/core`, `internal/config` (incl. per-OS paths), `internal/log`, single-module layout, CI matrix, `deps.yaml` | `travis version` builds **and its tests pass natively** on linux/amd64, darwin/arm64, windows/amd64; `lint-deps` + `lint-portability` blocking and green                                                |
 | M1  | Text loop   | `ai` (api-key + OAuth credentials), `brain`, `tools`, `coretools` (8 tools), minimal `cli` on **Bubble Tea v2** | fixes a failing test in a fixture repo, end to end, demonstrated on all three OSes                                                                                                                      |
-| M2  | Enforcement | `security` broker (UDS + named pipe), sandbox tiers, approval UX, change journal + `/undo`                      | red-team suite green on all three OSes; `paranoid` provably blocks writes; Windows tier reported honestly in the UI                                                                                     |
+| M2  | Enforcement | `security` broker (UDS + named pipe), policy, approval UX, change journal + `/undo`                             | red-team suite green on all three OSes; `paranoid` provably blocks writes                                                                                                                               |
 | M3  | Ecosystem   | `mcp`, `skills`, palette, tools inspector, **`Registry.Prune`**                                                 | 10 public MCP servers install and work from a pin, **with zero lines of per-server Go code**, on Linux/macOS/Windows (`npx.cmd` path included), and tool-schema tokens stay under 6k with all 10 loaded |
-| M4  | Voice       | `voicein`, `voiceout`, audio helper, selective speech, keyboard-only approvals + spoken alerts                  | full voice turn ≤ 900 ms to first syllable; hold-to-talk works on a Tier-1 terminal on each OS                                                                                                          |
-| M5  | Rigour      | `eval`, `session`, traces, cassettes, scorecard                                                                 | replay-based regression suite runs per-PR; `prompts_per_task` and `undo_rate` tracked (§6.4)                                                                                                            |
-| M6  | Swarm       | `swarm`, subagent tool, budgets                                                                                 | a 3-subagent research task completes within budget                                                                                                                                                      |
+| M4  | Sandbox     | `Sandbox` interface, Landlock/seccomp (Linux), `sandbox-exec` (macOS), restricted token + job object (Windows), MCP servers launched inside it | the same escape test passes natively on all three OSes; the status bar reports the real tier and `require_sandbox` refuses to start below it (§9.2.1)                                                    |
+| M5  | Voice       | `voicein`, `voiceout`, audio helper, selective speech, keyboard-only approvals + spoken alerts                  | full voice turn ≤ 900 ms to first syllable; hold-to-talk works on a Tier-1 terminal on each OS                                                                                                          |
+| M6  | Rigour      | `eval`, `session`, traces, cassettes, scorecard                                                                 | replay-based regression suite runs per-PR; `prompts_per_task` and `undo_rate` tracked (§6.4)                                                                                                            |
+| M7  | Swarm       | `swarm`, subagent tool, budgets                                                                                 | a 3-subagent research task completes within budget                                                                                                                                                      |
 
 M1→M2 ordering is deliberate: enforcement arrives before the ecosystem that makes it
 necessary. Do not reorder. **Every exit criterion is a three-OS criterion** (G8): "it
@@ -3028,13 +3071,13 @@ is the native CI matrix from M0 — platform bugs found in M4 are ten times the 
 >
 > - **M1's exit criterion changes** under D-11: a 3+ tool-call *assistant* task over a
 >   fixture notes tree, with the failing-Go-test fixture retained only as an internal test.
-> - **Cassettes move from M5 to M1** (D-16) — they are test infrastructure and belong
+> - **Cassettes move from M6 to M1** (D-16) — they are test infrastructure and belong
 >   before the code they test.
 > - **The OS sandbox moves out of M2** (D-14) to a late phase, while remaining required at
 >   submission; M2 ships policy enforcement with the tier honestly reported as `none`.
 > - **`security` splits in two** (D-17): policy, capabilities, the broker and IPC are
 >   portable Go on the critical path; the OS sandbox is platform work, late.
-> - **Swarm (M6) and user hooks are rejected for v1** (C11, D-20).
+> - **Swarm (M7) and user hooks are rejected for v1** (C11, D-20).
 
 ---
 
@@ -3114,7 +3157,7 @@ is impossible and a crash is catastrophic.
 
 **C8 — Audio + CGO + "single static binary" is a genuine trilemma.** §5.10 resolves it
 with a helper process, but this is real engineering cost that should be budgeted (~1–2
-weeks) rather than discovered in M4.
+weeks) rather than discovered in M5.
 
 **C9 — Voice-first and approval-modals conflict. `RESOLVED → D-10.`** The conflict was
 real; the proposed fix (spoken approvals) was worse than the problem. Decision: **voice
@@ -3136,7 +3179,7 @@ replay is what belongs in CI; judged scenarios run nightly.
 
 **C11 — Multi-agent is the lowest value-per-unit-risk item on the list.** It is the
 most fashionable and the most likely to produce an impressive demo and a bad product.
-Keeping it at M6, behind `exp_swarm`, supervisor-worker only, is correct. Resist
+Keeping it at M7, behind `exp_swarm`, supervisor-worker only, is correct. Resist
 scope growth here specifically.
 
 **C12 — Nothing in the brief addresses cost and context budgets.** Added to `brain`
@@ -3195,13 +3238,13 @@ first as skipped Windows CI jobs. Treat a red Windows job exactly like a red Lin
 | OQ-10     | MCP roots and resource subscriptions                                                                             |       | M3                                                                    |
 | OQ-11     | Skill capability grants                                                                                          |       | M3                                                                    |
 | OQ-12     | Inline (non-altscreen) render mode                                                                               |       | M1                                                                    |
-| OQ-13     | Audio helper process vs build tags                                                                               |       | M4                                                                    |
+| OQ-13     | Audio helper process vs build tags                                                                               |       | M5                                                                    |
 | OQ-14     | Wake-word engine                                                                                                 |       | post-v1                                                               |
-| OQ-15     | May tool results speak                                                                                           |       | M4                                                                    |
+| OQ-15     | May tool results speak                                                                                           |       | M5                                                                    |
 | OQ-16     | Behaviour when Landlock is unavailable                                                                           |       | M2                                                                    |
-| OQ-17     | Adopt an external benchmark                                                                                      |       | M5                                                                    |
-| OQ-18     | Subagent UI presentation                                                                                         |       | M6                                                                    |
-| OQ-19     | Session encryption at rest                                                                                       |       | M5                                                                    |
+| OQ-17     | Adopt an external benchmark                                                                                      |       | M6                                                                    |
+| OQ-18     | Subagent UI presentation                                                                                         |       | M7                                                                    |
+| OQ-19     | Session encryption at rest                                                                                       |       | M6                                                                    |
 | ~~OQ-20~~ | ~~Confidence signal for ambiguity detection~~                                                                    | —     | **CLOSED → D-09: self-reported confidence is uncalibrated; not used** |
 | ~~OQ-21~~ | ~~One Go module or sixteen~~                                                                                     | —     | **CLOSED → D-01: one module, feature packages**                       |
 | ~~OQ-22~~ | ~~Change-journal storage: blobs vs `git stash`-style refs~~                                                      | —     | **CLOSED → D-13: content-addressed blobs. Git holds bytes only for files that are tracked *and* committed; tracked-but-dirty, untracked, `.gitignore`d and outside-the-repo all fail** |
@@ -3236,7 +3279,7 @@ first as skipped Windows CI jobs. Treat a red Windows job exactly like a red Lin
 | R-16 | Feature-package boundaries erode without `go.mod` walls | Med | `deps.yaml` + blocking `lint-deps`, shared types confined to `internal/core` | 8, C1 |
 | R-17 | Pressure to relax MCP sandbox defaults per broken server | Med | sticky status-bar indicator for relaxed sandboxes, curated verified profiles | C3 |
 | R-18 | Vendor blocks or bans third-party use of an OAuth subscription plan | Med | never the default; explicit ToS warning at auth; honest `User-Agent`; no credential scraping; API-key path always available | 5.3.1 |
-| R-19 | Audio device permission/enumeration differs per OS and blocks M4 | Med | helper process abstracts three backends; permission denial is a normal error; voice degrades off, never blocks startup | 5.10 |
+| R-19 | Audio device permission/enumeration differs per OS and blocks M5 | Med | helper process abstracts three backends; permission denial is a normal error; voice degrades off, never blocks startup | 5.10 |
 | R-20 | Windows sandbox is weaker than Linux/macOS | Med | policy layer is OS-independent and is the primary control; tier shown in status bar; `require_sandbox` fails closed; red-team runs on all three OSes | 9.2.1 |
 | R-21 | Autonomy model over-corrects and the agent acts when it should ask | High | conservative reversibility classifier (journal-backed only), irreversible actions never learnable to `auto`, untrusted-intake escalation exempt from `always`, `undo_rate` tracked per-PR | 6.4 |
 | R-22 | Case-insensitive filesystems bypass capability globs | High | single matcher with per-OS case flag, red-team cases for `\\?\`, 8.3 names, ADS, junctions | 8.1, 9.4 |

@@ -259,9 +259,10 @@ mistakes become security bugs, so:
 | **M1** | Text loop | Completes a 3+ tool-call **assistant** task over a fixture notes tree (revised by D-11) |
 | **M2** | Enforcement | Red-team suite green; `paranoid` provably blocks writes; change journal + `/undo` work; sandbox tier reported as `none`, honestly |
 | **M3** | Ecosystem | 10 public MCP servers install from a pin with **zero per-server Go code**; tool schemas stay under 6k tokens |
-| **M4** | Sandbox + Voice | `strict` tier contains a compromised MCP server; full voice turn ≤ 900 ms to first syllable |
-| **M5** | Rigour | Replay-based regression suite runs per PR; `prompts_per_task` and `undo_rate` tracked |
-| ~~M6~~ | ~~Swarm~~ | **Rejected for v1** — C11: lowest value-per-unit-risk item in the project |
+| **M4** | Sandbox | `strict` tier contains a compromised MCP server; the same escape test passes natively on all three OSes |
+| **M5** | Voice | Full voice turn ≤ 900 ms to first syllable; hold-to-talk works on a Tier-1 terminal on each OS |
+| **M6** | Rigour | Replay-based regression suite runs per PR; `prompts_per_task` and `undo_rate` tracked |
+| ~~M7~~ | ~~Swarm~~ | **Rejected for v1** — C11: lowest value-per-unit-risk item in the project |
 
 **M1 → M2 ordering is deliberate:** enforcement arrives before the ecosystem that makes
 it necessary. Do not reorder.
@@ -270,7 +271,8 @@ it necessary. Do not reorder.
 > Task ordering, what runs in parallel at each stage, and the priority stack when time
 > runs short live in **[`PLAN.md`](./PLAN.md)** — read that before starting a phase.
 > `PLAN.md` is newer and moves some work between milestones (cassettes to M1, the OS
-> sandbox out of M2).
+> sandbox out of M2). The numbers above are the phase numbers in `PLAN.md`: M4 Sandbox,
+> M5 Voice, M6 Evaluation.
 
 ---
 

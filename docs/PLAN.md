@@ -23,6 +23,11 @@ material, not active guidance.
 
 ## 1. Where We Are
 
+**Phases 3 to 6 are planned ticket by ticket in
+[`docs/plans/phase-3-6/overview.md`](plans/phase-3-6/overview.md).** That plan supersedes
+the Phase 3 to 6 rows below where they disagree, because those rows predate the code that
+has since landed. This file stays the phase-level build order.
+
 Already landed:
 
 | Done             | Detail                                                                           |
@@ -197,6 +202,8 @@ Phase 2 exit:
 ### Phase 3 - MCP And Skills
 
 Goal: make Travis useful outside local files while still treating third-party
+
+Tickets: [`docs/plans/phase-3-6/phase-3.md`](plans/phase-3-6/phase-3.md).
 code carefully. Public MCP should not be considered safe until Phase 4 sandboxing
 exists.
 
@@ -215,6 +222,8 @@ Phase 3 exit:
 ### Phase 4 - Sandbox
 
 Goal: make third-party MCP servers safe enough to run by default.
+
+Tickets: [`docs/plans/phase-3-6/phase-4.md`](plans/phase-3-6/phase-4.md).
 
 | PR                                   | Work                                                                         | Depends on |
 | ------------------------------------ | ---------------------------------------------------------------------------- | ---------- |
@@ -241,6 +250,8 @@ Phase 4 exit:
 
 Goal: add voice without blocking the text assistant path.
 
+Tickets: [`docs/plans/phase-3-6/phase-5.md`](plans/phase-3-6/phase-5.md).
+
 | PR                          | Work                                                                                    | Depends on |
 | --------------------------- | --------------------------------------------------------------------------------------- | ---------- |
 | **5A - Voice output**       | `internal/frontends/voiceout`; speech selection and system TTS adapter                  | 1F         |
@@ -255,6 +266,8 @@ Phase 5 exit:
 ### Phase 6 - Evaluation
 
 Goal: measure whether Travis is useful, not just whether it works.
+
+Tickets: [`docs/plans/phase-3-6/phase-6.md`](plans/phase-3-6/phase-6.md).
 
 | PR                              | Work                                                                        | Depends on |
 | ------------------------------- | --------------------------------------------------------------------------- | ---------- |
