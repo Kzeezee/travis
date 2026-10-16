@@ -1,3 +1,5 @@
+//go:build !windows
+
 package sandbox
 
 import (
@@ -7,7 +9,7 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 )
 
-// No OS has a backend yet, so every sandboxed launch fails closed (§8.1); 4B to 4D narrow this file's build tag.
+// OSes without a backend fail every sandboxed launch closed (§8.1); 4B and 4C narrow this file's build tag further.
 
 var errSandboxUnsupportedOS = fmt.Errorf("no sandbox backend for this OS: %w", core.ErrUnsupported)
 

@@ -18,7 +18,7 @@ const (
 	TierNone            Tier = "none"
 	TierLandlock        Tier = "landlock"
 	TierSeatbelt        Tier = "seatbelt"
-	TierRestrictedToken Tier = "restricted-token"
+	TierRestrictedToken Tier = "restricted-token" // low-integrity restricted token + job object; no network containment (DESIGN §9.2.1)
 )
 
 // LauncherArg is the hidden first argument that switches a launcher binary into RunLauncher.

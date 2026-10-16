@@ -111,7 +111,8 @@ func TestSandboxEscape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := sandbox.BuildCommand(t.Context(), buildProbeSpec(t, self, "write", t.TempDir())); errors.Is(err, core.ErrUnsupported) {
+	_, tier, err := sandbox.BuildCommand(t.Context(), buildProbeSpec(t, self, "write", t.TempDir()))
+	if errors.Is(err, core.ErrUnsupported) {
 		t.Skipf("sandbox escape test on %s: %v", runtime.GOOS, err)
 	} else if err != nil {
 		t.Fatalf("BuildCommand: %v", err)
@@ -134,6 +135,9 @@ func TestSandboxEscape(t *testing.T) {
 	})
 
 	t.Run("network connect is denied without AllowNetwork", func(t *testing.T) {
+		if tier == sandbox.TierRestrictedToken {
+			t.Skip("restricted-token tier has no network containment (DESIGN §9.2.1)")
+		}
 		var listenConfig net.ListenConfig
 		listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
 		if err != nil {
