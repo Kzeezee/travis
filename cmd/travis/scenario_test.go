@@ -14,7 +14,6 @@ import (
 	"github.com/Kzeezee/travis/internal/providers/cassette"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
 	"github.com/Kzeezee/travis/internal/security/broker"
-	"github.com/Kzeezee/travis/internal/security/policy"
 	"github.com/Kzeezee/travis/internal/security/redact"
 )
 
@@ -103,7 +102,11 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 		provider = scripted
 	}
 
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, remote, nil, bus, redact.New(), model, &diagnostics, policy.Policy{}, nil)
+	session, err := assembleChatSession(chatSessionDeps{
+		Cfg: cfg, Paths: paths, Session: testSessionID, Provider: provider, Model: model,
+		Files: remote, Log: remote, Memory: remote, Commands: remote, Pages: remote,
+		Bus: bus, Diagnostics: &diagnostics, Redactor: redact.New(),
+	})
 	if err != nil {
 		return scenario.Result{}, err
 	}

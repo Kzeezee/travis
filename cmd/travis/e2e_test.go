@@ -18,7 +18,6 @@ import (
 	"github.com/Kzeezee/travis/internal/providers/cassette"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
 	"github.com/Kzeezee/travis/internal/security/broker"
-	"github.com/Kzeezee/travis/internal/security/policy"
 	"github.com/Kzeezee/travis/internal/security/redact"
 	"github.com/Kzeezee/travis/internal/state/blobs"
 	"github.com/Kzeezee/travis/internal/state/memory"
@@ -137,7 +136,12 @@ func TestAskUserAndMemoryRunThroughTheRealConversationAndBroker(t *testing.T) {
 	paths.StateDir = stateDir
 	questioner := &fixedQuestioner{}
 	cfg := &config.Config{Brain: config.BrainCfg{MaxSteps: 5}, Tools: config.ToolsCfg{MaxExposed: 60}}
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, remote, questioner, bus, redact.New(), "scripted-model", &diagnostics, policy.Policy{}, nil)
+	session, err := assembleChatSession(chatSessionDeps{
+		Cfg: cfg, Paths: paths, Session: testSessionID, Provider: provider, Model: "scripted-model",
+		Files: remote, Log: remote, Memory: remote, Commands: remote, Pages: remote,
+		Bus: bus, Diagnostics: &diagnostics, Redactor: redact.New(),
+		Questioner: questioner,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +287,11 @@ func runNotesTask(t *testing.T, provider core.Provider, model string) notesTaskR
 	var diagnostics strings.Builder
 	bus := buildSessionBus(&diagnostics)
 	remote, _ := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, remote, nil, bus, redact.New(), model, &diagnostics, policy.Policy{}, nil)
+	session, err := assembleChatSession(chatSessionDeps{
+		Cfg: cfg, Paths: paths, Session: testSessionID, Provider: provider, Model: model,
+		Files: remote, Log: remote, Memory: remote, Commands: remote, Pages: remote,
+		Bus: bus, Diagnostics: &diagnostics, Redactor: redact.New(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +433,11 @@ func TestWriteTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
 	var diagnostics strings.Builder
 	bus := buildSessionBus(io.Discard)
 	remote, brokerStateDir := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard, policy.Policy{}, nil)
+	session, err := assembleChatSession(chatSessionDeps{
+		Cfg: cfg, Paths: paths, Session: testSessionID, Provider: provider, Model: "scripted-model",
+		Files: remote, Log: remote, Memory: remote, Commands: remote, Pages: remote,
+		Bus: bus, Diagnostics: io.Discard, Redactor: redact.New(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +574,11 @@ func TestUndoRewindsFilesAndConversationThroughTheRealBroker(t *testing.T) {
 	var diagnostics strings.Builder
 	bus := buildSessionBus(io.Discard)
 	remote, brokerStateDir := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard, policy.Policy{}, nil)
+	session, err := assembleChatSession(chatSessionDeps{
+		Cfg: cfg, Paths: paths, Session: testSessionID, Provider: provider, Model: "scripted-model",
+		Files: remote, Log: remote, Memory: remote, Commands: remote, Pages: remote,
+		Bus: bus, Diagnostics: io.Discard, Redactor: redact.New(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,7 +11,6 @@ import (
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/security/broker"
-	"github.com/Kzeezee/travis/internal/security/policy"
 	"github.com/Kzeezee/travis/internal/security/redact"
 )
 
@@ -56,7 +55,12 @@ func TestRedTeamGateInjectedPageContentCannotWriteWithoutApproval(t *testing.T) 
 		},
 	}}
 
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, fetcher, nil, bus, redact.New(), "scripted-model", io.Discard, policy.Policy{}, approver)
+	session, err := assembleChatSession(chatSessionDeps{
+		Cfg: cfg, Paths: paths, Session: testSessionID, Provider: provider, Model: "scripted-model",
+		Files: remote, Log: remote, Memory: remote, Commands: remote, Pages: fetcher,
+		Bus: bus, Diagnostics: io.Discard, Redactor: redact.New(),
+		Approver: approver,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
