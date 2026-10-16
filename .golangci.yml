@@ -13,6 +13,7 @@ linters:
     - depguard
     - errorlint
     - exhaustive
+    - exhaustruct_v5
     - forbidigo
     - gosec
     - noctx
@@ -67,6 +68,17 @@ linters:
       errorf: true
       asserts: true
       comparison: true
+
+    exhaustruct_v5:
+      # Only the composition root's dependency struct. A struct literal may legally leave
+      # fields out, so the one place where an omission means a missing dependency rather
+      # than a sensible zero gets back the completeness check the parameter list used to
+      # give. Fields marked //exhaustruct:optional may still be omitted.
+      # Opt-in: without this the linter would demand every struct literal in the repo name
+      # every field, which is noise, not a rule anyone agreed to.
+      explicit-mode: true
+      enforce-patterns:
+        - 'github\.com/Kzeezee/travis/cmd/travis\.chatSessionDeps$'
 
     exhaustive:
       # allow/ask/deny and StopReason are "exactly one of N" only if the switch says so.

@@ -89,11 +89,19 @@ throughout · `deps.yaml`, `.golangci.yml` and the CI workflows are YAML · the 
     "editor.formatOnSave": true,
     "editor.codeActionsOnSave": { "source.organizeImports": "explicit" }
   },
-  "go.testFlags": ["-race", "-v"]
+  "go.testFlags": ["-race", "-v"],
+  "go.lintTool": "golangci-lint",
+  "go.lintOnSave": "workspace"
 }
 ```
 
 `-race` on tests matches what CI runs (§8.1).
+
+`lintOnSave` is worth setting: gopls runs staticcheck but not `golangci-lint`, so without
+it the project's own mechanical rules (`depguard`'s import directions, `forbidigo`'s
+`time.Now`/`runtime.GOOS` bans, `exhaustruct`'s required dependencies) are first seen at
+`make lint` or in CI. `"workspace"` rather than `"file"`, because those rules are about
+call sites across a package and per-file linting misses the ones in other files.
 
 **JetBrains GoLand** works too; it bundles its own analysis rather than using gopls. No
 project config needed beyond pointing it at the Go SDK.

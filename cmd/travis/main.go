@@ -148,7 +148,13 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	}()
 
 	provider := openaicompat.BuildProvider(profile.BaseURL, apiKey, nil, core.SystemClock{})
-	session, err := assembleChatSession(cfg, paths, sessionID, provider, sessionBroker.Remote, sessionBroker.Remote, sessionBroker.Remote, sessionBroker.Remote, sessionBroker.Remote, terminal.BuildQuestioner(questions), bus, redactor, profile.Model, os.Stderr, mcpPolicy, approver)
+	session, err := assembleChatSession(chatSessionDeps{
+		Cfg: cfg, Paths: paths, Session: sessionID, Provider: provider, Model: profile.Model,
+		Files: sessionBroker.Remote, Log: sessionBroker.Remote,
+		Memory: sessionBroker.Remote, Commands: sessionBroker.Remote, Pages: sessionBroker.Remote,
+		Bus: bus, Diagnostics: os.Stderr, Redactor: redactor,
+		Questioner: terminal.BuildQuestioner(questions), Approver: approver, MCPPolicy: mcpPolicy,
+	})
 	if err != nil {
 		return err
 	}
@@ -246,24 +252,90 @@ func startSessionBroker(paths config.PathSet, sessionID core.ID, sessionCfg conf
 	return sessionBroker, nil
 }
 
+// chatSessionDeps is everything one chat session is assembled from. It is a struct rather than
+// a parameter list because the end-to-end and scenario tests substitute a different subset each
+// time, and reading which of sixteen positional arguments was which had become guesswork.
+//
+// The optional fields are the ones a test with no human and no broker process leaves out; the
+// rest are required, and assembleChatSession says which is missing rather than panicking on it.
+type chatSessionDeps struct {
+	Cfg      *config.Config
+	Paths    config.PathSet
+	Session  core.ID
+	Provider core.Provider
+	Model    string
+	// Files performs the file effects the built-in tools ask for.
+	Files core.Broker
+	// Bus is where this session publishes; Diagnostics receives trace and MCP status lines.
+	Bus         *core.Bus
+	Diagnostics io.Writer
+	// Redactor keeps the provider credential out of events and the session log. Its zero value
+	// redacts nothing, which is what a test with no credential wants.
+	Redactor redact.Redactor //exhaustruct:optional
+
+	// Log records the conversation. Nil records nothing, which only a test without a broker
+	// process may choose.
+	Log core.SessionLog //exhaustruct:optional
+	// Memory, Commands and Pages back the memory, exec and fetch tools; a nil one leaves its
+	// tool registered but reporting itself unavailable, so the model is told rather than the
+	// turn failing.
+	Memory   core.MemoryStore   //exhaustruct:optional
+	Commands core.CommandRunner //exhaustruct:optional
+	Pages    core.PageFetcher   //exhaustruct:optional
+	// Questioner and Approver reach the human. Nil means nobody can answer, which is the
+	// fail-closed reading: ask_user cannot ask and anything needing approval is refused.
+	Questioner core.Questioner //exhaustruct:optional
+	Approver   core.Approver   //exhaustruct:optional
+	// MCPPolicy decides MCP server launches. Its zero value grants nothing.
+	MCPPolicy policy.Policy //exhaustruct:optional
+}
+
+// validate reports the first required dependency that is missing. A struct of dependencies
+// trades the compiler's "not enough arguments" for a nil at run time, so it is checked here,
+// once, before anything is built from it.
+func (d chatSessionDeps) validate() error {
+	for _, required := range []struct {
+		name      string
+		isPresent bool
+	}{
+		{"cfg", d.Cfg != nil},
+		{"workspace dir", d.Paths.WorkspaceDir != ""},
+		{"state dir", d.Paths.StateDir != ""},
+		{"session id", d.Session != ""},
+		{"provider", d.Provider != nil},
+		{"model", d.Model != ""},
+		{"file broker", d.Files != nil},
+		{"event bus", d.Bus != nil},
+		{"diagnostics", d.Diagnostics != nil},
+	} {
+		if !required.isPresent {
+			return fmt.Errorf("a chat session needs a %s: %w", required.name, core.ErrInvalid)
+		}
+	}
+	return nil
+}
+
 // assembleChatSession wires the registry, built-in tools, bus, trace and conversation for
-// one session. The provider, file broker, session log and bus are parameters so the end-to-end
-// test can script the model while everything else stays real; diagnostics receives trace status
-// lines. A nil sessionLog records nothing, which only a test without a broker process may choose.
-func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID core.ID, provider core.Provider, fileBroker core.Broker, sessionLog core.SessionLog, memoryStore core.MemoryStore, commandRunner core.CommandRunner, pageFetcher core.PageFetcher, questioner core.Questioner, bus *core.Bus, redactor redact.Redactor, model string, diagnostics io.Writer, mcpPolicy policy.Policy, approver core.Approver) (*chatSession, error) {
+// one session. Its dependencies are injected so the end-to-end test can script the model
+// while everything else stays real.
+func assembleChatSession(deps chatSessionDeps) (*chatSession, error) {
+	if err := deps.validate(); err != nil {
+		return nil, err
+	}
+	cfg, paths := deps.Cfg, deps.Paths
 	clock := core.SystemClock{}
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
-	skillsCatalog := skills.BuildCatalog(cfg.Skills, paths, diagnostics, approver)
+	skillsCatalog := skills.BuildCatalog(cfg.Skills, paths, deps.Diagnostics, deps.Approver)
 	isInstructionPath := skillsCatalog.ReportIsWorkspaceInstructionPath
 	for _, tool := range []core.Tool{
-		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes, isInstructionPath),
-		builtin.BuildGrepTool(fileBroker, paths.WorkspaceDir, isInstructionPath),
-		builtin.BuildFileWriteTool(fileBroker, paths.WorkspaceDir, defaultMaxWriteBytes, config.ReportNativeLineEnding()),
-		builtin.BuildFileEditTool(fileBroker, paths.WorkspaceDir, defaultMaxWriteBytes),
-		builtin.BuildAskUserTool(questioner),
-		builtin.BuildExecTool(commandRunner),
-		builtin.BuildFetchTool(pageFetcher),
-		builtin.BuildMemoryTool(memoryStore, filepath.Join(paths.StateDir, memory.FileName)),
+		builtin.BuildFileReadTool(deps.Files, paths.WorkspaceDir, defaultMaxReadBytes, isInstructionPath),
+		builtin.BuildGrepTool(deps.Files, paths.WorkspaceDir, isInstructionPath),
+		builtin.BuildFileWriteTool(deps.Files, paths.WorkspaceDir, defaultMaxWriteBytes, config.ReportNativeLineEnding()),
+		builtin.BuildFileEditTool(deps.Files, paths.WorkspaceDir, defaultMaxWriteBytes),
+		builtin.BuildAskUserTool(deps.Questioner),
+		builtin.BuildExecTool(deps.Commands),
+		builtin.BuildFetchTool(deps.Pages),
+		builtin.BuildMemoryTool(deps.Memory, filepath.Join(paths.StateDir, memory.FileName)),
 	} {
 		if err := toolRegistry.Register(registry.SourceBuiltin, tool); err != nil {
 			return nil, err
@@ -276,26 +348,26 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 
 	// Async by design (BuildManager's own doc comment): connecting here, before the TUI's
 	// event loop starts reading approvals, would deadlock any server that needs Ask.
-	redactedEvents := redact.WrapSink(bus, redactor)
-	mcpManager := mcp.BuildManager(cfg.MCP, mcpPolicy, approver, clock, redactedEvents, diagnostics, toolRegistry, paths.StateDir)
+	redactedEvents := redact.WrapSink(deps.Bus, deps.Redactor)
+	mcpManager := mcp.BuildManager(cfg.MCP, deps.MCPPolicy, deps.Approver, clock, redactedEvents, deps.Diagnostics, toolRegistry, paths.StateDir)
 
 	ids := id.BuildULIDGenerator(clock)
-	deps := loop.Dependencies{Provider: provider, Tools: toolRegistry, Events: redactedEvents, Clock: clock, IDs: ids, Skills: skillsCatalog}
-	if sessionLog != nil {
-		deps.Log = redact.WrapSessionLog(sessionLog, redactor)
+	loopDeps := loop.Dependencies{Provider: deps.Provider, Tools: toolRegistry, Events: redactedEvents, Clock: clock, IDs: ids, Skills: skillsCatalog}
+	if deps.Log != nil {
+		loopDeps.Log = redact.WrapSessionLog(deps.Log, deps.Redactor)
 	}
 
 	session := &chatSession{
-		conversation:  loop.BuildAssistantConversation(deps, model, cfg.Brain.MaxSteps),
-		bus:           bus,
+		conversation:  loop.BuildAssistantConversation(loopDeps, deps.Model, cfg.Brain.MaxSteps),
+		bus:           deps.Bus,
 		closeMCP:      mcpManager.Close,
 		toolRegistry:  toolRegistry,
 		skillsCatalog: skillsCatalog,
-		memoryStore:   memoryStore,
+		memoryStore:   deps.Memory,
 		waitForTrace:  func() {},
 	}
 	if cfg.Eval.Traces {
-		session.waitForTrace = startSessionTrace(bus, filepath.Join(paths.StateDir, "traces"), sessionID, diagnostics)
+		session.waitForTrace = startSessionTrace(deps.Bus, filepath.Join(paths.StateDir, "traces"), deps.Session, deps.Diagnostics)
 	}
 	return session, nil
 }
