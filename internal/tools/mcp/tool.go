@@ -54,6 +54,15 @@ func (t *adaptedTool) Invoke(ctx context.Context, arguments json.RawMessage) (co
 		return core.ToolOutput{}, err
 	}
 
+	if core.ReportIsFromUntrustedStep(ctx) {
+		if err := t.requestUntrustedCallApproval(ctx); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return core.ToolOutput{}, ctxErr
+			}
+			return core.ToolOutput{IsError: true, Content: `{"error":"mcp_call_denied"}`, Display: "mcp call denied"}, nil
+		}
+	}
+
 	session, err := t.process.currentSession()
 	if err != nil {
 		return core.ToolOutput{IsError: true, Content: err.Error(), Display: "mcp server unavailable"}, nil
@@ -81,6 +90,27 @@ func (t *adaptedTool) Invoke(ctx context.Context, arguments json.RawMessage) (co
 		IsError:     result.IsError,
 		IsUntrusted: true,
 	}, nil
+}
+
+// requestUntrustedCallApproval asks before an MCP call in a step with untrusted intake: the
+// server's effects never pass the broker, so this is the only place the step mark can bite.
+func (t *adaptedTool) requestUntrustedCallApproval(ctx context.Context) error {
+	if t.process.approver == nil {
+		return core.ErrDenied
+	}
+	decision, err := t.process.approver.RequestApproval(ctx, core.Operation{
+		Kind:           core.CapabilityExec,
+		Target:         t.Name(),
+		Explanation:    "call an MCP tool in a step with untrusted intake (§5.12.4)",
+		IsIrreversible: true,
+	})
+	if err != nil {
+		return err
+	}
+	if decision == core.ApprovalDenied {
+		return core.ErrDenied
+	}
+	return nil
 }
 
 // extractText concatenates every text part of an MCP result; non-text content (images,

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -16,6 +17,10 @@ import (
 )
 
 const skillFileName = "SKILL.md"
+
+// skillNamePattern keeps names, which reach the approval modal and the prompt, free of
+// control characters and markup.
+var skillNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
 // discoverSkills resolves every configured root, classifies its tier by workspace
 // containment, and walks it for skills, reporting each tier separately.
@@ -65,7 +70,7 @@ func discoverSkillsUnderRoot(root string, tier Tier, diagnostics io.Writer) []sk
 			continue
 		}
 		skillPath := filepath.Join(root, entry.Name(), skillFileName)
-		data, err := os.ReadFile(skillPath)
+		data, err := readInstructionFile(skillPath)
 		if err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
 				fmt.Fprintf(diagnostics, "skills: %s: %v\n", skillPath, err)
@@ -135,6 +140,9 @@ func parseSkillMarkdown(data []byte) (parsedSkill, error) {
 	description := strings.TrimSpace(frontmatter.Description)
 	if name == "" || description == "" {
 		return parsedSkill{}, errors.New("frontmatter must set both name and description")
+	}
+	if !skillNamePattern.MatchString(name) {
+		return parsedSkill{}, fmt.Errorf("skill name %q must match %s", name, skillNamePattern)
 	}
 	return parsedSkill{name: name, description: description, body: strings.TrimSpace(rest)}, nil
 }

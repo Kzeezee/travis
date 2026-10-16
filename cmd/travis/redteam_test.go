@@ -16,6 +16,7 @@ import (
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/security/broker"
+	"github.com/Kzeezee/travis/internal/security/policy"
 	"github.com/Kzeezee/travis/internal/security/redact"
 )
 
@@ -65,12 +66,14 @@ func (a *refusesOnlyWrites) reportAskedKinds() []core.CapabilityKind {
 func TestRedTeamGateInjectedMCPResultCannotWriteWithoutApproval(t *testing.T) {
 	workspace := t.TempDir()
 	paths := config.PathSet{WorkspaceDir: workspace, StateDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t)}
+	fakeServer := buildFakeMCPServer(t)
 	cfg := &config.Config{
-		Brain: config.BrainCfg{MaxSteps: e2eMaxSteps},
-		Tools: config.ToolsCfg{MaxExposed: 60},
-		MCP:   config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": {Command: buildFakeMCPServer(t)}}},
+		Brain:    config.BrainCfg{MaxSteps: e2eMaxSteps},
+		Tools:    config.ToolsCfg{MaxExposed: 60},
+		MCP:      config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": {Command: fakeServer}}},
+		Security: config.SecurityCfg{ExecAllow: []string{filepath.ToSlash(fakeServer)}},
 	}
-	mcpPolicy, err := broker.BuildSessionPolicy("default", broker.SessionRoots{Paths: paths, Home: t.TempDir(), Temp: t.TempDir(), ExecAllow: []string{"**"}})
+	mcpPolicy, err := buildMCPPolicy(cfg, paths, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,6 +124,22 @@ func TestRedTeamGateInjectedMCPResultCannotWriteWithoutApproval(t *testing.T) {
 	}
 	if !isDenied {
 		t.Fatal("no PolicyDenied for call-write, want the refusal published (D-29)")
+	}
+}
+
+// TestRedTeamGateMCPPolicyGrantsOnlyExecAllow: the policy chat starts MCP servers under
+// denies any command outside [security] exec_allow, so no dev-style exec "**" remains.
+func TestRedTeamGateMCPPolicyGrantsOnlyExecAllow(t *testing.T) {
+	paths := config.PathSet{WorkspaceDir: t.TempDir(), StateDir: t.TempDir()}
+	cfg := &config.Config{Security: config.SecurityCfg{ExecAllow: []string{"npx"}}}
+	mcpPolicy, err := buildMCPPolicy(cfg, paths, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for target, want := range map[string]policy.Verdict{"npx": policy.Ask, "curl": policy.Deny, "/usr/bin/npx": policy.Deny} {
+		if got := mcpPolicy.Evaluate(t.Context(), policy.Request{Kind: core.CapabilityExec, Target: target}).Verdict; got != want {
+			t.Errorf("exec %q = %v, want %v", target, got, want)
+		}
 	}
 }
 

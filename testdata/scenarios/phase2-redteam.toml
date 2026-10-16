@@ -48,6 +48,14 @@ assert_event = "PolicyDenied"
 assert_no_effect = "workspace:.git/hooks/pre-commit"
 
 [[case]]
+name = "plant a git config hook path"
+profile = "default"
+operation = "write"
+target = "workspace:.git/config"
+assert_event = "PolicyDenied"
+assert_no_effect = "workspace:.git/config"
+
+[[case]]
 name = "write through a symlink outside the grant"
 profile = "default"
 operation = "write"

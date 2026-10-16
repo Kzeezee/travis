@@ -1,9 +1,9 @@
 // Command fakeserver is a tiny, real MCP stdio server used only by internal/tools/mcp's
 // own tests, in place of a real public server (the project's testing convention: fakes for
-// process boundaries, never a live third-party service). It exposes two tools: echo, which
-// proves a normal round trip, and crash, which exits the process so restart-with-backoff
-// supervision can be exercised against a real dead subprocess. env reports one environment
-// variable, so tests can prove what a server can see.
+// process boundaries, never a live third-party service). It exposes three tools: echo, which
+// proves a normal round trip; crash, which exits the process so restart-with-backoff
+// supervision can be exercised against a real dead subprocess; and env, which reports one
+// environment variable so tests can prove what a server can see.
 package main
 
 import (

@@ -122,8 +122,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// exec_allow comes from the user layer only (config refuses [security] in the workspace).
-	mcpPolicy, err := broker.BuildSessionPolicy("default", broker.SessionRoots{Paths: paths, Home: home, Temp: os.TempDir(), ExecAllow: cfg.Security.ExecAllow})
+	mcpPolicy, err := buildMCPPolicy(cfg, paths, home)
 	if err != nil {
 		return err
 	}
@@ -172,12 +171,18 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	return chatErr
 }
 
+// buildMCPPolicy is the policy MCP server launches run under: the default profile plus the
+// user's exec_allow, which config refuses to take from the workspace layer.
+func buildMCPPolicy(cfg *config.Config, paths config.PathSet, home string) (policy.Policy, error) {
+	return broker.BuildSessionPolicy("default", broker.SessionRoots{Paths: paths, Home: home, Temp: os.TempDir(), ExecAllow: cfg.Security.ExecAllow})
+}
+
 // chatSession is everything a chat runs on apart from its frontend: the conversation,
 // the bus it publishes to, and the trace recording that bus.
 type chatSession struct {
 	conversation  *loop.AssistantConversation
 	bus           *core.Bus
-	stopStartup   func() // ends MCP supervision and the workspace approval wait
+	stopWorkers   func() // ends MCP supervision and the workspace approval wait
 	toolRegistry  *registry.Registry
 	skillsCatalog *skills.Catalog
 	memoryStore   core.MemoryStore
@@ -223,7 +228,7 @@ func startSessionBroker(paths config.PathSet, sessionID core.ID, sessionCfg conf
 		WorkspaceDir:   paths.WorkspaceDir,
 		RuntimeDir:     paths.RuntimeDir,
 		// Not cfg.Profile: the workspace config layer can set that, and a cloned repo must not
-		// choose its own security profile. Selectable once [security] config exists.
+		// choose its own security profile.
 		Profile:          "default",
 		SessionID:        sessionID,
 		SnapshotMaxBytes: sessionCfg.SnapshotMaxBytes,
@@ -280,7 +285,7 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 	session := &chatSession{
 		conversation:  loop.BuildAssistantConversation(deps, model, cfg.Brain.MaxSteps),
 		bus:           bus,
-		stopStartup:   func() { cancelApproval(); mcpManager.Close() },
+		stopWorkers:   func() { cancelApproval(); mcpManager.Close() },
 		toolRegistry:  toolRegistry,
 		skillsCatalog: skillsCatalog,
 		memoryStore:   memoryStore,
@@ -292,10 +297,10 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 	return session, nil
 }
 
-// close stops background startup work first, so no late event from a dying server tries to
+// close stops background workers first, so no late event from a dying server tries to
 // publish after the bus closes, then ends the session's event stream and waits for the trace.
 func (s *chatSession) close() {
-	s.stopStartup()
+	s.stopWorkers()
 	s.bus.Close()
 	s.waitForTrace()
 }

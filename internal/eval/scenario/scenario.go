@@ -106,6 +106,9 @@ func validateScenario(sc Scenario) error {
 	if (sc.Cassette != "") == (len(sc.Steps) > 0) {
 		return fmt.Errorf("%q: exactly one of cassette or step entries is required", sc.Name)
 	}
+	if sc.Cassette != "" && (len(sc.AssertPromptLacks) > 0 || len(sc.AssertToolsOffered) > 0) {
+		return fmt.Errorf("%q: a cassette replay cannot observe the prompt or offered tools", sc.Name)
+	}
 	for i, step := range sc.Steps {
 		if (step.Tool != "") == (step.FinalText != "") {
 			return fmt.Errorf("%q: step %d must set exactly one of tool or final_text", sc.Name, i)

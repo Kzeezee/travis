@@ -75,6 +75,9 @@ type AssistantConversation struct {
 	entries []core.SessionEntry
 	// turnID is minted when a turn starts and stamped on every event it publishes.
 	turnID core.ID
+	// isNextStepUntrusted carries untrusted intake to the next step, even across a turn
+	// boundary, because that next step is the first to act on it (§5.12.4).
+	isNextStepUntrusted bool
 }
 
 // BuildAssistantConversation returns a conversation that sends every turn to the given
@@ -117,8 +120,6 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 	}
 
 	var usage core.Usage
-	// toolCtx marks only the step right after untrusted intake: escalation is step-scoped (§5.12.4, D-26).
-	toolCtx := ctx
 	for step := 0; step < c.maxSteps; step++ {
 		reply, err := c.runStep(ctx, prompt)
 		if err != nil {
@@ -137,15 +138,17 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 			return nil
 		}
 
+		toolCtx := ctx
+		if c.isNextStepUntrusted {
+			toolCtx = core.MarkUntrustedStep(ctx)
+		}
+		// Only the step right after intake is marked: escalation is step-scoped (D-26).
 		results, hasUntrustedResult, err := c.runToolCalls(toolCtx, reply.calls)
+		c.isNextStepUntrusted = hasUntrustedResult
 		err = errors.Join(err, c.recordToolResults(ctx, results))
 		if err != nil {
 			c.completeTurn(ctx, core.StopError, usage)
 			return err
-		}
-		toolCtx = ctx
-		if hasUntrustedResult {
-			toolCtx = core.MarkUntrustedStep(ctx)
 		}
 	}
 
@@ -198,6 +201,7 @@ func (c *AssistantConversation) Rewind(ctx context.Context, fromTurn core.ID, mo
 // The session log keeps them; only this conversation's copy is dropped.
 func (c *AssistantConversation) ResetHistory() {
 	c.entries = nil
+	c.isNextStepUntrusted = false
 }
 
 // SelectModel sends every later turn to the named model.

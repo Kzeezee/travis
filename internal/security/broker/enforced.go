@@ -31,6 +31,9 @@ func BuildSessionPolicy(profile string, roots SessionRoots) (policy.Policy, erro
 	paths := roots.Paths
 	paths.WorkspaceDir = resolveRootSymlinks(paths.WorkspaceDir)
 	paths.StateDir = resolveRootSymlinks(paths.StateDir)
+	if paths.ConfigDir != "" {
+		paths.ConfigDir = resolveRootSymlinks(paths.ConfigDir)
+	}
 
 	grants, err := capabilities.BuildProfileSet(profile, capabilities.Roots{
 		Workspace: paths.WorkspaceDir,

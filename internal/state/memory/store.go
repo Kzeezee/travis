@@ -125,6 +125,13 @@ func splitMemory(content string) (string, string, error) {
 	return trusted, untrusted, nil
 }
 
+// ReportHasUntrustedNotes reports whether content, as ReadMemory returned it, carries any
+// untrusted-derived notes; malformed content counts as untrusted.
+func ReportHasUntrustedNotes(content string) bool {
+	_, untrusted, err := splitMemory(content)
+	return err != nil || strings.TrimSpace(untrusted) != ""
+}
+
 func validateMemory(content string) error {
 	if len(content) > MaxBytes || strings.Count(content, "\n") > MaxLines || !utf8.ValidString(content) {
 		return fmt.Errorf("memory exceeds %d bytes or %d lines, or is not UTF-8: %w", MaxBytes, MaxLines, core.ErrInvalid)

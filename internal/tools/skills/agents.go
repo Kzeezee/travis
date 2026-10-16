@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 
 	"github.com/Kzeezee/travis/internal/config"
@@ -19,7 +18,7 @@ const agentsFileName = "AGENTS.md"
 // approved. A missing file or a read error is a diagnostic, never fatal.
 func loadWorkspaceAgentsBlock(paths config.PathSet, diagnostics io.Writer) string {
 	path := filepath.Join(paths.WorkspaceDir, agentsFileName)
-	data, err := os.ReadFile(path)
+	data, err := readInstructionFile(path)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			fmt.Fprintf(diagnostics, "skills: %s: %v\n", path, err)

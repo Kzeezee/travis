@@ -14,27 +14,7 @@ import (
 func TestRedTeamGateMCPServerCannotSeeTheProviderKey(t *testing.T) {
 	const canary = "sk-canary-3f-do-not-leak"
 	t.Setenv("OPENAI_API_KEY", canary)
-	process, _ := buildTestProcess(t, buildTestServerConfig(), grantedExecPolicy(), &fakeApprover{decision: core.ApprovalOnce})
-	session, err := process.connect(t.Context())
-	if err != nil {
-		t.Fatalf("connect() error = %v", err)
-	}
-	t.Cleanup(func() { _ = session.Close() })
-	process.session = session
-
-	listed, err := session.ListTools(t.Context(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var env *adaptedTool
-	for _, remoteTool := range listed.Tools {
-		if remoteTool.Name == "env" {
-			env = buildAdaptedTool(process, "fake", remoteTool)
-		}
-	}
-	if env == nil {
-		t.Fatal("fakeserver did not list an env tool")
-	}
+	env := connectFakeTool(t, &fakeApprover{decision: core.ApprovalOnce}, "env")
 
 	output, err := env.Invoke(t.Context(), json.RawMessage(`{"name":"OPENAI_API_KEY"}`))
 	if err != nil || output.IsError || !strings.Contains(output.Content, "OPENAI_API_KEY=") {
@@ -49,7 +29,7 @@ func TestRedTeamGateMCPServerCannotSeeTheProviderKey(t *testing.T) {
 }
 
 // A server approved "always" earlier still cannot start once exec_allow no longer covers it.
-func TestConnectDeniesATrustedServerThatPolicyNoLongerGrants(t *testing.T) {
+func TestRedTeamGateTrustedServerStillNeedsExecAllow(t *testing.T) {
 	process, clock := buildTestProcess(t, buildTestServerConfig(), grantedExecPolicy(), &fakeApprover{decision: core.ApprovalDenied})
 	if err := process.trust.add(process.cfg.Command, process.cfg.Args, "test", clock); err != nil {
 		t.Fatal(err)
@@ -64,4 +44,52 @@ func TestConnectDeniesATrustedServerThatPolicyNoLongerGrants(t *testing.T) {
 	if _, err := process.connect(t.Context()); !errors.Is(err, core.ErrDenied) {
 		t.Fatalf("connect() error = %v, want core.ErrDenied despite the trust entry", err)
 	}
+}
+
+// TestRedTeamGateMCPCallInAnUntrustedStepAsks: an injected result cannot drive another MCP
+// call (whose effects never pass the broker) without a human saying yes.
+func TestRedTeamGateMCPCallInAnUntrustedStepAsks(t *testing.T) {
+	approver := &fakeApprover{decision: core.ApprovalOnce}
+	echo := connectFakeTool(t, approver, "echo")
+	approver.mu.Lock()
+	approver.decision, approver.asked = core.ApprovalDenied, nil
+	approver.mu.Unlock()
+
+	untrusted := core.MarkUntrustedStep(t.Context())
+	output, err := echo.Invoke(untrusted, json.RawMessage(`{"message":"ran"}`))
+	if err != nil || !output.IsError || strings.Contains(output.Content, "ran") {
+		t.Fatalf("denied call = %+v, %v; want a refusal that never reached the server", output, err)
+	}
+	asked := approver.askedOps()
+	if len(asked) != 1 || asked[0].Target != echo.Name() || !asked[0].IsIrreversible {
+		t.Fatalf("asked %+v, want one irreversible approval naming %s", asked, echo.Name())
+	}
+
+	output, err = echo.Invoke(t.Context(), json.RawMessage(`{"message":"ran"}`))
+	if err != nil || output.IsError || len(approver.askedOps()) != 1 {
+		t.Fatalf("trusted-step call = %+v, %v; want it to run without asking", output, err)
+	}
+}
+
+// connectFakeTool starts the fake server, approving its launch, and adapts its tool name.
+func connectFakeTool(t *testing.T, approver *fakeApprover, name string) *adaptedTool {
+	t.Helper()
+	process, _ := buildTestProcess(t, buildTestServerConfig(), grantedExecPolicy(), approver)
+	session, err := process.connect(t.Context())
+	if err != nil {
+		t.Fatalf("connect() error = %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	process.session = session
+	listed, err := session.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, remoteTool := range listed.Tools {
+		if remoteTool.Name == name {
+			return buildAdaptedTool(process, "fake", remoteTool)
+		}
+	}
+	t.Fatalf("fakeserver did not list a %s tool", name)
+	return nil
 }

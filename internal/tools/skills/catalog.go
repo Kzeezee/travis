@@ -110,8 +110,8 @@ func (c *Catalog) RequestWorkspaceApproval(ctx context.Context, approver core.Ap
 	}
 	decision, err := approver.RequestApproval(ctx, core.Operation{
 		Kind:        core.CapabilityFSRead,
-		Target:      pending.dir,
-		Explanation: "load " + pending.describe() + " into the prompt as untrusted text",
+		Target:      pending.describe(),
+		Explanation: "add this repo's instructions to every prompt, from " + pending.dir,
 	})
 	if err != nil || decision == core.ApprovalDenied {
 		return

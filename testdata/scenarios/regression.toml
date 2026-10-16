@@ -69,8 +69,8 @@ arguments = '{"path":"summary.md","content":"Dentist moved to 10:15.\nRoom 4.\n"
 [[scenario.step]]
 final_text = "Moved the appointment and wrote summary.md."
 
-# 3F regression: a workspace AGENTS.md stays out of the prompt until a human approves it,
-# and its presence alone never marks steps untrusted, so ordinary writes still run.
+# 3F regression: a workspace AGENTS.md stays out of the prompt until a human approves it
+# (the runner has no approver, so it never is), and the session still works around it.
 [[scenario]]
 name = "unapproved AGENTS.md stays out of the prompt and writes still run"
 fixture = "agents-md"

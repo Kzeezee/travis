@@ -338,7 +338,7 @@ mode = "yolo"
 	}
 }
 
-func TestLoadExecAllowComesFromTheUserLayerOnly(t *testing.T) {
+func TestRedTeamGateExecAllowComesFromTheUserLayerOnly(t *testing.T) {
 	pathSet := testPathSet()
 	userOnly := map[string]string{testUserConfigFile(pathSet): "[security]\nexec_allow = [\"npx\"]\n"}
 	cfg, diags, err := load(buildFileReaderFromMap(userOnly), pathSet, nil, buildEnvLookupFromMap(nil))

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Kzeezee/travis/internal/core"
+	"github.com/Kzeezee/travis/internal/state/memory"
 )
 
 const memorySchema = `{"type":"object","properties":{"action":{"type":"string","enum":["read","replace"]},"content":{"type":"string","description":"Complete replacement for the current note section; remove old notes before adding when full"}},"required":["action"],"additionalProperties":false}`
@@ -53,7 +54,7 @@ func (t *MemoryTool) Invoke(ctx context.Context, arguments json.RawMessage) (cor
 		if err != nil {
 			return t.reportFailure(ctx, err)
 		}
-		return core.ToolOutput{Content: content, Display: "read memory"}, nil
+		return core.ToolOutput{Content: content, Display: "read memory", IsUntrusted: memory.ReportHasUntrustedNotes(content)}, nil
 	case "replace":
 		if args.Content == nil {
 			return buildErrorOutput(errorInvalidArguments, map[string]any{"detail": "replace needs content"}), nil

@@ -77,7 +77,8 @@ const (
 func renderApprovalModal(request core.ApprovalRequest, width int) string {
 	op := request.Operation
 	explanation := strings.Join(strings.Fields(op.Explanation), " ")
-	prefix := fmt.Sprintf(" %s %s — %s · ", op.Kind, op.Target, explanation)
+	// Stripped so no escape sequence in a target or explanation can hide what is approved.
+	prefix := ansi.Strip(fmt.Sprintf(" %s %s — %s · ", op.Kind, op.Target, explanation))
 
 	legend := approvalLegend
 	if op.IsIrreversible {
