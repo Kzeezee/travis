@@ -53,6 +53,10 @@ type Scenario struct {
 	AssertToolsOffered   []string     `toml:"assert_tools_offered"`
 	AssertAnswerContains []string     `toml:"assert_answer_contains"`
 	AssertFiles          []AssertFile `toml:"assert_files"`
+
+	// AssertPromptLacks checks the first call's system prompt; scripted runner only, like
+	// AssertToolsOffered.
+	AssertPromptLacks []string `toml:"assert_prompt_lacks"`
 }
 
 // Suite is every scenario in one TOML file.
@@ -103,6 +107,9 @@ func validateScenario(sc Scenario) error {
 	}
 	if (sc.Cassette != "") == (len(sc.Steps) > 0) {
 		return fmt.Errorf("%q: exactly one of cassette or step entries is required", sc.Name)
+	}
+	if sc.Cassette != "" && (len(sc.AssertPromptLacks) > 0 || len(sc.AssertToolsOffered) > 0) {
+		return fmt.Errorf("%q: a cassette replay cannot observe the prompt or offered tools", sc.Name)
 	}
 	for i, step := range sc.Steps {
 		if (step.Tool != "") == (step.FinalText != "") {

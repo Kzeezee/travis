@@ -18,7 +18,7 @@ import (
 // buildConfinedGrepTool runs the tool over a LocalBroker, so these tests cover the walk end to
 // end on a real temporary workspace.
 func buildConfinedGrepTool(root string) *builtin.GrepTool {
-	return builtin.BuildGrepTool(broker.BuildLocalBroker(root, core.SystemClock{}), root)
+	return builtin.BuildGrepTool(broker.BuildLocalBroker(root, core.SystemClock{}), root, nil)
 }
 
 func invokeGrep(t *testing.T, tool *builtin.GrepTool, arguments string) core.ToolOutput {
@@ -311,5 +311,21 @@ func TestGrepFilesSearchMatchesSpacedWordsWithSmartCase(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			assertContent(t, invokeGrep(t, tool, tc.arguments), tc.want)
 		})
+	}
+}
+
+func TestGrepMarksOnlyLinesFromUntrustedPathsUntrusted(t *testing.T) {
+	root := writeNotesFixture(t)
+	isUntrusted := func(path string) bool { return path == "inbox.md" }
+	tool := builtin.BuildGrepTool(broker.BuildLocalBroker(root, core.SystemClock{}), root, isUntrusted)
+
+	for arguments, want := range map[string]bool{
+		`{"pattern":"plumber"}`:               true,
+		`{"pattern":"logo"}`:                  false,
+		`{"mode":"files","pattern":"inbox*"}`: false,
+	} {
+		if got := invokeGrep(t, tool, arguments).IsUntrusted; got != want {
+			t.Errorf("grep %s IsUntrusted = %v, want %v", arguments, got, want)
+		}
 	}
 }

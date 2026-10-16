@@ -1947,6 +1947,14 @@ Untrusted content (fetched web pages, file contents, MCP tool results, workspace
 - flagged so that a tool call _originating_ in the same step as untrusted intake
   escalates its approval mode by one level (`auto` → `ask`).
 
+*Amended 2026-10-15 (3F):* the flag covers the rest of the intake's batch and the next step,
+carried into the next turn's first step when the turn ends (budget, error) before one runs;
+later steps run unmarked. A do-nothing step can spend the mark, an accepted cost against
+asking a human who has already seen and answered once.
+Reads are exempt, since they change nothing. Reads of the workspace `AGENTS.md` and skill
+roots count as untrusted intake. An approved `AGENTS.md` sets no flag; its approval is the
+control.
+
 That last rule is the cheapest high-value mitigation available and is not in the
 original sketch. `[R-12]`
 

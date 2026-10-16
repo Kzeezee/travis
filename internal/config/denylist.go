@@ -33,7 +33,13 @@ func buildDenyGlobsFromInputs(lookup envLookup, paths PathSet, home string) Deny
 	for _, rel := range []string{".bashrc", ".zshrc", ".profile", ".config/fish/**", ".ssh/authorized_keys"} {
 		globs.Write = append(globs.Write, buildRootedGlob(home, rel))
 	}
-	globs.Write = append(globs.Write, "**/.travis/**", "**/.git/hooks/**")
+	// .git/config can set core.hooksPath or core.fsmonitor, the same code-on-next-git-run hole.
+	globs.Write = append(globs.Write, "**/.travis/**", "**/.git/hooks/**", "**/.git/config")
+	// User config grants exec_allow and trusted skills; the model must never write it, even
+	// when the workspace contains it (travis run from $HOME).
+	if paths.ConfigDir != "" {
+		globs.Write = append(globs.Write, buildRootedGlob(paths.ConfigDir, "**"))
+	}
 
 	appendPlatformDenyGlobs(lookup, home, &globs)
 	globs.Write = append(globs.Write, globs.Read...)

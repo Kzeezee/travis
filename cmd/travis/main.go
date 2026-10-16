@@ -122,7 +122,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	mcpPolicy, err := broker.BuildSessionPolicy("default", broker.SessionRoots{Paths: paths, Home: home, Temp: os.TempDir(), ExecAllow: cfg.Security.ExecAllow})
+	mcpPolicy, err := buildMCPPolicy(cfg, paths, home)
 	if err != nil {
 		return err
 	}
@@ -169,6 +169,12 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		terminal.Options{ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions})
 	session.close()
 	return chatErr
+}
+
+// buildMCPPolicy is the policy MCP server launches run under: the default profile plus the
+// user's exec_allow, which config refuses to take from the workspace layer.
+func buildMCPPolicy(cfg *config.Config, paths config.PathSet, home string) (policy.Policy, error) {
+	return broker.BuildSessionPolicy("default", broker.SessionRoots{Paths: paths, Home: home, Temp: os.TempDir(), ExecAllow: cfg.Security.ExecAllow})
 }
 
 // chatSession is everything a chat runs on apart from its frontend: the conversation,
@@ -244,9 +250,11 @@ func startSessionBroker(paths config.PathSet, sessionID core.ID, sessionCfg conf
 func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID core.ID, provider core.Provider, fileBroker core.Broker, sessionLog core.SessionLog, memoryStore core.MemoryStore, commandRunner core.CommandRunner, questioner core.Questioner, bus *core.Bus, redactor redact.Redactor, model string, diagnostics io.Writer, mcpPolicy policy.Policy, approver core.Approver) (*chatSession, error) {
 	clock := core.SystemClock{}
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
+	skillsCatalog := skills.BuildCatalog(cfg.Skills, paths, diagnostics, approver)
+	isInstructionPath := skillsCatalog.ReportIsWorkspaceInstructionPath
 	for _, tool := range []core.Tool{
-		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes),
-		builtin.BuildGrepTool(fileBroker, paths.WorkspaceDir),
+		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes, isInstructionPath),
+		builtin.BuildGrepTool(fileBroker, paths.WorkspaceDir, isInstructionPath),
 		builtin.BuildFileWriteTool(fileBroker, paths.WorkspaceDir, defaultMaxWriteBytes, config.ReportNativeLineEnding()),
 		builtin.BuildFileEditTool(fileBroker, paths.WorkspaceDir, defaultMaxWriteBytes),
 		builtin.BuildAskUserTool(questioner),
@@ -258,7 +266,6 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 		}
 	}
 
-	skillsCatalog := skills.BuildCatalog(cfg.Skills, paths, diagnostics, approver)
 	if err := toolRegistry.Register(registry.SourceSkill, skills.BuildOpenTool(skillsCatalog)); err != nil {
 		return nil, err
 	}

@@ -147,12 +147,14 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 	}
 
 	var offered []string
+	var systemPrompt string
 	if scripted != nil && len(scripted.requests) > 0 {
 		for _, spec := range scripted.requests[0].Tools {
 			offered = append(offered, spec.Name)
 		}
+		systemPrompt = scripted.requests[0].System
 	}
-	return scenario.Result{ToolsCalled: called, ToolsOffered: offered, Answer: answer.String(), Files: files}, nil
+	return scenario.Result{ToolsCalled: called, ToolsOffered: offered, SystemPrompt: systemPrompt, Answer: answer.String(), Files: files}, nil
 }
 
 // buildScriptedProviderFromSteps turns a scenario's fixed steps into the same scriptedProvider

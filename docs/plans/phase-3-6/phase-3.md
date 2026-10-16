@@ -33,7 +33,7 @@ delimited after approval. No durable workspace trust file is added.
 
 Escalation covers the remaining tool calls in the current batch and the next model
 step. A step without fresh untrusted output clears it, and a new user turn starts
-without it. Denial stops the attempted effect; it does not create a lasting deny rule
+without it unless the last turn ended (budget, error) before that next step ran. Denial stops the attempted effect; it does not create a lasting deny rule
 for that path. This preserves D-26's step-scoped design rather than propagating trust
 marks through the whole conversation.
 
