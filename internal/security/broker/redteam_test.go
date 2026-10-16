@@ -27,9 +27,10 @@ type redTeamCase struct {
 	Target    string   `toml:"target"`
 	Fixture   string   `toml:"fixture"`
 	Platforms []string `toml:"platforms"`
-	// ExecAllow are the session's exec grants, for a case that must prove a granted exec is
-	// still refused rather than that an ungranted one is.
+	// ExecAllow and HostAllow are the session's grants, for a case that must prove a granted
+	// capability is still refused rather than that an ungranted one is.
 	ExecAllow      []string `toml:"exec_allow"`
+	HostAllow      []string `toml:"host_allow"`
 	Untrusted      bool     `toml:"untrusted"`
 	AssertEvent    string   `toml:"assert_event"`
 	AssertNoEffect string   `toml:"assert_no_effect"`
@@ -105,7 +106,7 @@ func runRedTeamCase(t *testing.T, scenario redTeamCase) {
 		}
 	}
 	paths := config.PathSet{WorkspaceDir: roots.workspace, StateDir: roots.state}
-	policy, err := broker.BuildSessionPolicy(scenario.Profile, broker.SessionRoots{Paths: paths, Home: roots.home, Temp: filepath.Join(root, "temp"), ExecAllow: scenario.ExecAllow})
+	policy, err := broker.BuildSessionPolicy(scenario.Profile, broker.SessionRoots{Paths: paths, Home: roots.home, Temp: filepath.Join(root, "temp"), ExecAllow: scenario.ExecAllow, HostAllow: scenario.HostAllow})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +136,14 @@ func runRedTeamCase(t *testing.T, scenario redTeamCase) {
 		if result, err := remote.RunCommand(ctx, execArgv); err == nil {
 			t.Fatalf("forbidden command ran and returned %+v", result)
 		}
+	case "fetch":
+		page, err := remote.FetchPage(ctx, scenario.Target)
+		if err == nil {
+			t.Fatalf("forbidden fetch returned %d bytes from %q", len(page.Text), page.URL)
+		}
+		if strings.Contains(err.Error(), "red-team secret") {
+			t.Fatalf("a refused fetch leaked content in its error: %v", err)
+		}
 	case "read":
 		opened, err := remote.OpenFile(ctx, target)
 		if err == nil {
@@ -163,6 +172,13 @@ func validateRedTeamCase(scenario redTeamCase) error {
 	}
 	switch scenario.Operation {
 	case "write", "read":
+	case "fetch":
+		if !strings.HasPrefix(scenario.Target, "https://") {
+			return fmt.Errorf("%q must name an https url as its fetch target", scenario.Name)
+		}
+		if scenario.AssertNoEffect != "no_page_returned" {
+			return fmt.Errorf("%q must assert no page was returned", scenario.Name)
+		}
 	case "exec":
 		if !strings.HasPrefix(scenario.Target, "helper:") {
 			return fmt.Errorf("%q must name a helper mode as its exec target", scenario.Name)
@@ -205,7 +221,7 @@ func assertRedTeamOutcome(scenario redTeamCase, roots redTeamRoots, events []cor
 	if !hasDenial {
 		return fmt.Errorf("%q did not publish PolicyDenied for the attack call", scenario.Name)
 	}
-	if scenario.Operation == "read" {
+	if scenario.Operation == "read" || scenario.Operation == "fetch" {
 		return nil
 	}
 	// write and exec both name a file that must not exist afterwards.

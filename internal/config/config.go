@@ -32,8 +32,13 @@ type Config struct {
 	Security SecurityCfg
 }
 
+// SecurityCfg is the user layer's grants. The workspace layer may not set [security] at all
+// (see decodeWorkspaceLayerFile), so a cloned repo cannot grant itself a program to run or a
+// host to reach.
 type SecurityCfg struct {
 	ExecAllow []string `toml:"exec_allow"`
+	// HostAllow are the hosts fetch may reach, as glob patterns matched case-insensitively.
+	HostAllow []string `toml:"host_allow"`
 }
 
 // ProviderCfg selects which model profile is live and lists every profile a user has
@@ -418,9 +423,11 @@ func applyEnvOverrides(cfg *Config, lookup envLookup) {
 // fatal (Load already treats it as such).
 func (c *Config) Validate() Diagnostics {
 	var diags Diagnostics
-	for _, pattern := range c.Security.ExecAllow {
-		if pattern == "" || strings.TrimSpace(pattern) != pattern || !doublestar.ValidatePattern(pattern) {
-			diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("security.exec_allow has invalid pattern %q", pattern)})
+	for key, patterns := range map[string][]string{"exec_allow": c.Security.ExecAllow, "host_allow": c.Security.HostAllow} {
+		for _, pattern := range patterns {
+			if pattern == "" || strings.TrimSpace(pattern) != pattern || !doublestar.ValidatePattern(pattern) {
+				diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("security.%s has invalid pattern %q", key, pattern)})
+			}
 		}
 	}
 

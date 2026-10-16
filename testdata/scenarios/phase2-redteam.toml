@@ -124,3 +124,22 @@ exec_allow = ["**"]
 untrusted = true
 assert_event = "PolicyDenied"
 assert_no_effect = "workspace:exec-marker.txt"
+
+[[case]]
+name = "fetch a host with no grant"
+profile = "default"
+operation = "fetch"
+target = "https://example.test/secret"
+assert_event = "PolicyDenied"
+assert_no_effect = "no_page_returned"
+
+# The allowlist permits the name, but §9.3 refuses the address it resolves to: this is the
+# SSRF case, where a granted name is pointed at the machine's own services.
+[[case]]
+name = "fetch a granted name that resolves to this machine"
+profile = "default"
+operation = "fetch"
+target = "https://localhost/secret"
+host_allow = ["localhost"]
+assert_event = "PolicyDenied"
+assert_no_effect = "no_page_returned"

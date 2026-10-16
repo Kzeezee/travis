@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -61,6 +62,7 @@ var (
 	_ core.SessionLog    = (*RemoteBroker)(nil)
 	_ core.MemoryStore   = (*RemoteBroker)(nil)
 	_ core.CommandRunner = (*RemoteBroker)(nil)
+	_ core.PageFetcher   = (*RemoteBroker)(nil)
 )
 
 func BuildRemoteBroker(conn net.Conn, options RemoteOptions) *RemoteBroker {
@@ -207,6 +209,26 @@ func (r *RemoteBroker) RunCommand(ctx context.Context, argv []string) (core.Comm
 		return core.CommandResult{}, fmt.Errorf("broker answered run_command without a result: %w", core.ErrInvalid)
 	}
 	return ConvertCommandResultMessage(*resp.Command)
+}
+
+// FetchPage asks the broker to read a page. Every §9.3 protection lives on the broker's side,
+// because it is the only side that sees the address a name resolves to and the redirects taken.
+func (r *RemoteBroker) FetchPage(ctx context.Context, rawURL string) (core.FetchedPage, error) {
+	if rawURL == "" || len(rawURL) > MaxFetchURLBytes {
+		return core.FetchedPage{}, fmt.Errorf("a url of 1..%d bytes is required: %w", MaxFetchURLBytes, core.ErrInvalid)
+	}
+	scope := rawURL
+	if parsed, err := url.Parse(rawURL); err == nil && parsed.Hostname() != "" {
+		scope = parsed.Hostname()
+	}
+	resp, err := r.exchangeEffect(ctx, core.CapabilityNetworkHTTP, scope, Request{Op: OpFetchPage, URL: rawURL})
+	if err != nil {
+		return core.FetchedPage{}, err
+	}
+	if resp.Page == nil {
+		return core.FetchedPage{}, fmt.Errorf("broker answered fetch_page without a page: %w", core.ErrInvalid)
+	}
+	return ConvertFetchedPageMessage(*resp.Page)
 }
 
 // AppendEntries logs completed messages in the broker's session log and returns once they are durable.

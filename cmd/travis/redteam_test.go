@@ -72,7 +72,7 @@ func TestRedTeamGateDeniedAGENTSReadByHandStillAsksBeforeAWrite(t *testing.T) {
 			return []core.Chunk{{Text: "done", Finish: core.StopEndTurn}}
 		},
 	}}
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard, policy.Policy{}, approver)
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, remote, nil, bus, redact.New(), "scripted-model", io.Discard, policy.Policy{}, approver)
 	if err != nil {
 		t.Fatal(err)
 	}
