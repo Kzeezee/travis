@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/vmihailenco/msgpack/v5"
@@ -21,8 +22,9 @@ import (
 // ProtocolVersion is carried on every request; a broker refuses any version it does not speak.
 // Version 2 added write_file, approve_once, add_decision_rule, the needs_approval error and
 // list_directory paging. Version 3 added session entries and irreversible approvals; version 4
-// added rewind; version 5 added managed memory operations; version 6 adds run_command.
-const ProtocolVersion uint16 = 6
+// added rewind; version 5 added managed memory operations; version 6 added run_command;
+// version 7 adds fetch_page.
+const ProtocolVersion uint16 = 7
 
 const (
 	// MaxFrameBytes bounds what either side allocates for one message.
@@ -38,7 +40,11 @@ const (
 	// cannot make the broker allocate an unbounded command line.
 	MaxCommandArgs     = 256
 	MaxCommandArgBytes = 32 << 10
-	frameHeaderBytes   = 4
+	// MaxPageTextBytes bounds the sanitised page one fetch_page response carries (§9.3 size cap).
+	MaxPageTextBytes = 256 << 10
+	// MaxFetchURLBytes bounds a requested URL before anything parses it.
+	MaxFetchURLBytes = 2048
+	frameHeaderBytes = 4
 )
 
 type Op string
@@ -64,6 +70,8 @@ const (
 	OpReplaceMemory Op = "replace_memory"
 	// OpRunCommand runs Argv with no shell; it always needs approval (D-27).
 	OpRunCommand Op = "run_command"
+	// OpFetchPage reads the page at URL over HTTPS, under the §9.3 rules.
+	OpFetchPage Op = "fetch_page"
 )
 
 type Request struct {
@@ -94,6 +102,9 @@ type Request struct {
 	Mode     string `msgpack:"mode,omitempty"`
 	// Argv is the program and its arguments run_command runs, passed to the program directly.
 	Argv []string `msgpack:"argv,omitempty"`
+	// URL is the page fetch_page reads. It is not Path: a URL is not a filesystem path, and
+	// policy evaluates its host rather than the whole string.
+	URL string `msgpack:"url,omitempty"`
 }
 
 // EntryMessage is one conversation message travis reports. Message is core.Message's JSON, which
@@ -141,6 +152,16 @@ type Response struct {
 	Rewind *RewindReportMessage `msgpack:"rewind,omitempty"`
 	// Command answers run_command: how the command ended.
 	Command *CommandResultMessage `msgpack:"command,omitempty"`
+	// Page answers fetch_page.
+	Page *FetchedPageMessage `msgpack:"page,omitempty"`
+}
+
+type FetchedPageMessage struct {
+	URL         string `msgpack:"url"`
+	ContentType string `msgpack:"content_type,omitempty"`
+	Text        string `msgpack:"text,omitempty"`
+	IsTruncated bool   `msgpack:"truncated,omitempty"`
+	StatusCode  int    `msgpack:"status_code"`
 }
 
 type CommandResultMessage struct {
@@ -278,6 +299,10 @@ func validateRequest(req Request) error {
 		}
 	case OpRunCommand:
 		return validateCommandArgv(req.Argv)
+	case OpFetchPage:
+		if req.URL == "" || len(req.URL) > MaxFetchURLBytes {
+			return fmt.Errorf("%s needs a URL of at most %d bytes: %w", req.Op, MaxFetchURLBytes, core.ErrInvalid)
+		}
 	default:
 		return fmt.Errorf("unknown op %q: %w", req.Op, core.ErrInvalid)
 	}
@@ -318,6 +343,30 @@ func ConvertCommandResultMessage(msg CommandResultMessage) (core.CommandResult, 
 	return core.CommandResult{
 		ExitCode: msg.ExitCode, Output: msg.Output,
 		IsOutputTruncated: msg.IsOutputTruncated, IsTimedOut: msg.IsTimedOut,
+	}, nil
+}
+
+// BuildFetchedPageMessage converts a retrieved page for the wire.
+func BuildFetchedPageMessage(page core.FetchedPage) *FetchedPageMessage {
+	return &FetchedPageMessage{
+		URL: page.URL, ContentType: page.ContentType, Text: page.Text,
+		IsTruncated: page.IsTruncated, StatusCode: page.StatusCode,
+	}
+}
+
+// ConvertFetchedPageMessage validates the broker's answer. Text past the cap, or a final URL
+// that is not HTTPS, means the broker did not apply the §9.3 rules it is the only side able to
+// apply — so the page is refused rather than handed to the model.
+func ConvertFetchedPageMessage(msg FetchedPageMessage) (core.FetchedPage, error) {
+	if len(msg.Text) > MaxPageTextBytes {
+		return core.FetchedPage{}, fmt.Errorf("page text of %d bytes exceeds the %d-byte cap: %w", len(msg.Text), MaxPageTextBytes, core.ErrInvalid)
+	}
+	if !strings.HasPrefix(msg.URL, "https://") {
+		return core.FetchedPage{}, fmt.Errorf("page came from %q, which is not https: %w", msg.URL, core.ErrInvalid)
+	}
+	return core.FetchedPage{
+		URL: msg.URL, ContentType: msg.ContentType, Text: msg.Text,
+		IsTruncated: msg.IsTruncated, StatusCode: msg.StatusCode,
 	}, nil
 }
 

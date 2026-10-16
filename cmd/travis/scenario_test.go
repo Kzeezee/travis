@@ -103,7 +103,7 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 		provider = scripted
 	}
 
-	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, nil, bus, redact.New(), model, &diagnostics, policy.Policy{}, nil)
+	session, err := assembleChatSession(cfg, paths, testSessionID, provider, remote, remote, remote, remote, remote, nil, bus, redact.New(), model, &diagnostics, policy.Policy{}, nil)
 	if err != nil {
 		return scenario.Result{}, err
 	}

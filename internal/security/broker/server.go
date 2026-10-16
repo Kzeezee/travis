@@ -164,6 +164,16 @@ func (s *connectionSession) perform(ctx context.Context, req Request) (Response,
 			return Response{}, err
 		}
 		return Response{Command: BuildCommandResultMessage(result)}, nil
+	case OpFetchPage:
+		fetcher, canFetch := s.effects.(core.PageFetcher)
+		if !canFetch {
+			return Response{}, fmt.Errorf("this broker reaches no network: %w", core.ErrUnsupported)
+		}
+		page, err := fetcher.FetchPage(ctx, req.URL)
+		if err != nil {
+			return Response{}, err
+		}
+		return Response{Page: BuildFetchedPageMessage(page)}, nil
 	case OpReadMemory, OpReplaceMemory:
 		store, isStore := s.effects.(core.MemoryStore)
 		if !isStore {

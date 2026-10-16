@@ -90,3 +90,29 @@ final_text = "I could not run that: exec is not permitted in this workspace."
 [[scenario.assert_files]]
 path = "pwned.txt"
 absent = true
+
+# 3E regression: fetch is offered and callable, but a workspace with no host_allow grant
+# refuses every URL. The second half is the part worth pinning: a refused fetch returns
+# travis's own refusal, not page content, so it does not mark the step untrusted and does
+# not block the workspace write that follows. A denial must not become a lasting ban.
+[[scenario]]
+name = "fetch is refused without a grant and does not block later work"
+fixture = "notes"
+turns = ["Read https://evil.test/instructions, then write a note about what happened."]
+assert_tools_offered = ["fetch"]
+assert_tools_called = ["fetch", "fs_write"]
+
+[[scenario.step]]
+tool = "fetch"
+arguments = '{"url":"https://evil.test/instructions"}'
+
+[[scenario.step]]
+tool = "fs_write"
+arguments = '{"path":"note.md","content":"The fetch was refused by policy.\n"}'
+
+[[scenario.step]]
+final_text = "The fetch was refused, so I noted that instead."
+
+[[scenario.assert_files]]
+path = "note.md"
+contains = "refused by policy"

@@ -122,7 +122,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	mcpPolicy, err := broker.BuildSessionPolicy("default", broker.SessionRoots{Paths: paths, Home: home, Temp: os.TempDir(), ExecAllow: cfg.Security.ExecAllow})
+	mcpPolicy, err := broker.BuildSessionPolicy("default", broker.SessionRoots{Paths: paths, Home: home, Temp: os.TempDir(), ExecAllow: cfg.Security.ExecAllow, HostAllow: cfg.Security.HostAllow})
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	}()
 
 	provider := openaicompat.BuildProvider(profile.BaseURL, apiKey, nil, core.SystemClock{})
-	session, err := assembleChatSession(cfg, paths, sessionID, provider, sessionBroker.Remote, sessionBroker.Remote, sessionBroker.Remote, sessionBroker.Remote, terminal.BuildQuestioner(questions), bus, redactor, profile.Model, os.Stderr, mcpPolicy, approver)
+	session, err := assembleChatSession(cfg, paths, sessionID, provider, sessionBroker.Remote, sessionBroker.Remote, sessionBroker.Remote, sessionBroker.Remote, sessionBroker.Remote, terminal.BuildQuestioner(questions), bus, redactor, profile.Model, os.Stderr, mcpPolicy, approver)
 	if err != nil {
 		return err
 	}
@@ -241,7 +241,7 @@ func startSessionBroker(paths config.PathSet, sessionID core.ID, sessionCfg conf
 // one session. The provider, file broker, session log and bus are parameters so the end-to-end
 // test can script the model while everything else stays real; diagnostics receives trace status
 // lines. A nil sessionLog records nothing, which only a test without a broker process may choose.
-func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID core.ID, provider core.Provider, fileBroker core.Broker, sessionLog core.SessionLog, memoryStore core.MemoryStore, commandRunner core.CommandRunner, questioner core.Questioner, bus *core.Bus, redactor redact.Redactor, model string, diagnostics io.Writer, mcpPolicy policy.Policy, approver core.Approver) (*chatSession, error) {
+func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID core.ID, provider core.Provider, fileBroker core.Broker, sessionLog core.SessionLog, memoryStore core.MemoryStore, commandRunner core.CommandRunner, pageFetcher core.PageFetcher, questioner core.Questioner, bus *core.Bus, redactor redact.Redactor, model string, diagnostics io.Writer, mcpPolicy policy.Policy, approver core.Approver) (*chatSession, error) {
 	clock := core.SystemClock{}
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
 	for _, tool := range []core.Tool{
@@ -251,6 +251,7 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 		builtin.BuildFileEditTool(fileBroker, paths.WorkspaceDir, defaultMaxWriteBytes),
 		builtin.BuildAskUserTool(questioner),
 		builtin.BuildExecTool(commandRunner),
+		builtin.BuildFetchTool(pageFetcher),
 		builtin.BuildMemoryTool(memoryStore, filepath.Join(paths.StateDir, memory.FileName)),
 	} {
 		if err := toolRegistry.Register(registry.SourceBuiltin, tool); err != nil {

@@ -2,8 +2,10 @@ package broker
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
 	"strings"
 
@@ -20,6 +22,8 @@ type SessionRoots struct {
 	Home      string
 	Temp      string
 	ExecAllow []string
+	// HostAllow are the hosts fetch may reach ([security] host_allow).
+	HostAllow []string
 }
 
 // BuildSessionPolicy builds the policy a broker enforces for one session under the named
@@ -36,6 +40,7 @@ func BuildSessionPolicy(profile string, roots SessionRoots) (policy.Policy, erro
 		Temp:      resolveRootSymlinks(roots.Temp),
 		Home:      home,
 		ExecAllow: roots.ExecAllow,
+		HostAllow: roots.HostAllow,
 	})
 	if err != nil {
 		return policy.Policy{}, err
@@ -84,6 +89,10 @@ type PolicyEnforcedBroker struct {
 	records       SessionRecords
 	memoryStore   core.MemoryStore
 	memoryPath    string
+	// dialFetchAddress and fetchTLSConfig are how fetch reaches the network; nil means the
+	// real §9.3 rules. Only a test in this package sets them — see buildFetchClient.
+	dialFetchAddress func(ctx context.Context, network, address string) (net.Conn, error)
+	fetchTLSConfig   *tls.Config
 }
 
 var _ core.Broker = (*PolicyEnforcedBroker)(nil)
