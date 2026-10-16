@@ -390,7 +390,7 @@ func (r *grepResults) addMatch(match grepMatch) bool {
 // files mode returns names only.
 func (t *GrepTool) reportHasUntrustedLines(results grepResults) bool {
 	for _, match := range results.matches {
-		if match.line > 0 && checkPath(t.isUntrustedPath, match.path) {
+		if match.line > 0 && t.isUntrustedPath != nil && t.isUntrustedPath(match.path) {
 			return true
 		}
 	}

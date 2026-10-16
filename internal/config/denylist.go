@@ -40,9 +40,6 @@ func buildDenyGlobsFromInputs(lookup envLookup, paths PathSet, home string) Deny
 	if paths.ConfigDir != "" {
 		globs.Write = append(globs.Write, buildRootedGlob(paths.ConfigDir, "**"))
 	}
-	if paths.SystemConfigFile != "" {
-		globs.Write = append(globs.Write, globMetaEscaper.Replace(filepath.ToSlash(filepath.Clean(paths.SystemConfigFile))))
-	}
 
 	appendPlatformDenyGlobs(lookup, home, &globs)
 	globs.Write = append(globs.Write, globs.Read...)

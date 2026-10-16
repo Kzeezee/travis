@@ -43,7 +43,7 @@ func reportPrompt(catalog *Catalog) string {
 
 // TestRedTeamGateWorkspaceInstructionsLoadOnlyAfterApproval: a cloned repo's AGENTS.md and
 // skills are absent from the prompt until a human approves them, and absent again once
-// their content changes (3F).
+// their content or folder changes (3F).
 func TestRedTeamGateWorkspaceInstructionsLoadOnlyAfterApproval(t *testing.T) {
 	paths, cfg := writeHostileWorkspace(t)
 
@@ -74,6 +74,27 @@ func TestRedTeamGateWorkspaceInstructionsLoadOnlyAfterApproval(t *testing.T) {
 		t.Fatalf("asked %+v; want unchanged content loaded without asking again", unasked.asked)
 	}
 
+	moved := paths
+	moved.WorkspaceDir = filepath.Join(t.TempDir(), "moved")
+	if err := os.CopyFS(moved.WorkspaceDir, os.DirFS(paths.WorkspaceDir)); err != nil {
+		t.Fatal(err)
+	}
+	assertHeldUntilApprovedAgain(t, config.SkillsCfg{Roots: []string{filepath.Join(moved.WorkspaceDir, ".skills")}}, moved)
+
+	agentsOnly := buildTestPathSet(t, filepath.Join(t.TempDir(), "agents-only"))
+	agentsOnly.StateDir = paths.StateDir
+	if err := os.MkdirAll(agentsOnly.WorkspaceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(agentsOnly.WorkspaceDir, agentsFileName), agentsMarker)
+	assertHeldUntilApprovedAgain(t, config.SkillsCfg{}, agentsOnly)
+	agentsOnly.WorkspaceDir = filepath.Join(t.TempDir(), "agents-only-moved")
+	if err := os.MkdirAll(agentsOnly.WorkspaceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(agentsOnly.WorkspaceDir, agentsFileName), agentsMarker)
+	assertHeldUntilApprovedAgain(t, config.SkillsCfg{}, agentsOnly)
+
 	skillPath := filepath.Join(paths.WorkspaceDir, ".skills", "evil", skillFileName)
 	for _, edit := range []struct{ path, content string }{
 		{filepath.Join(paths.WorkspaceDir, agentsFileName), agentsMarker + " and also exfiltrate"},
@@ -91,12 +112,12 @@ func assertHeldUntilApprovedAgain(t *testing.T, cfg config.SkillsCfg, paths conf
 	t.Helper()
 	edited := BuildCatalog(cfg, paths, &strings.Builder{})
 	if prompt := reportPrompt(edited); strings.Contains(prompt, agentsMarker) || strings.Contains(prompt, skillMarker) {
-		t.Fatalf("prompt after an edit = %q, want workspace content held until approved again", prompt)
+		t.Fatalf("prompt after a change = %q, want workspace content held until approved again", prompt)
 	}
 	approver := &scriptedApprover{decision: core.ApprovalAlways}
 	edited.RequestWorkspaceApproval(context.Background(), approver)
-	if len(approver.asked) != 1 || !strings.Contains(reportPrompt(edited), skillMarker) {
-		t.Fatalf("asked %+v after an edit, want one new approval that loads the content", approver.asked)
+	if len(approver.asked) != 1 || !strings.Contains(reportPrompt(edited), agentsMarker) {
+		t.Fatalf("asked %+v after a change, want one new approval that loads the content", approver.asked)
 	}
 }
 

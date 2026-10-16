@@ -54,13 +54,11 @@ func (t *adaptedTool) Invoke(ctx context.Context, arguments json.RawMessage) (co
 		return core.ToolOutput{}, err
 	}
 
-	if core.ReportIsFromUntrustedStep(ctx) {
-		if err := t.requestUntrustedCallApproval(ctx); err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return core.ToolOutput{}, ctxErr
-			}
-			return core.ToolOutput{IsError: true, Content: `{"error":"mcp_call_denied"}`, Display: "mcp call denied"}, nil
+	if core.ReportIsFromUntrustedStep(ctx) && !t.requestUntrustedCallApproval(ctx) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return core.ToolOutput{}, ctxErr
 		}
+		return core.ToolOutput{IsError: true, Content: `{"error":"mcp_call_denied"}`, Display: "mcp call denied"}, nil
 	}
 
 	session, err := t.process.currentSession()
@@ -92,11 +90,11 @@ func (t *adaptedTool) Invoke(ctx context.Context, arguments json.RawMessage) (co
 	}, nil
 }
 
-// requestUntrustedCallApproval asks before an MCP call in a step with untrusted intake: the
-// server's effects never pass the broker, so this is the only place the step mark can bite.
-func (t *adaptedTool) requestUntrustedCallApproval(ctx context.Context) error {
+// requestUntrustedCallApproval reports whether a human allowed an MCP call in a step with
+// untrusted intake: the server's effects never pass the broker, so this is the only check.
+func (t *adaptedTool) requestUntrustedCallApproval(ctx context.Context) bool {
 	if t.process.approver == nil {
-		return core.ErrDenied
+		return false
 	}
 	decision, err := t.process.approver.RequestApproval(ctx, core.Operation{
 		Kind:           core.CapabilityExec,
@@ -104,13 +102,7 @@ func (t *adaptedTool) requestUntrustedCallApproval(ctx context.Context) error {
 		Explanation:    "call an MCP tool in a step with untrusted intake (§5.12.4)",
 		IsIrreversible: true,
 	})
-	if err != nil {
-		return err
-	}
-	if decision == core.ApprovalDenied {
-		return core.ErrDenied
-	}
-	return nil
+	return err == nil && decision != core.ApprovalDenied
 }
 
 // extractText concatenates every text part of an MCP result; non-text content (images,

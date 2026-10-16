@@ -1,15 +1,16 @@
 package skills
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -49,7 +50,7 @@ func readInstructionFile(path string) ([]byte, error) {
 const workspaceTrustFileName = "workspace-trust"
 
 // workspaceContent is every workspace-authored text travis would add to the prompt, exactly
-// as it would be added, so approving it approves those bytes and not whatever is on disk later.
+// as it would be added, and where it came from: approval covers those bytes in that folder.
 type workspaceContent struct {
 	dir         string
 	skills      map[string]skill
@@ -61,28 +62,15 @@ func (w workspaceContent) isEmpty() bool {
 	return len(w.skills) == 0 && w.agentsBlock == ""
 }
 
-func (w workspaceContent) reportSortedSkillNames() []string {
-	names := make([]string, 0, len(w.skills))
-	for name := range w.skills {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// reportHash is a SHA-256 over every field the prompt would carry, length-prefixed so no two
-// different contents can serialize alike.
+// reportHash covers the workspace folder, each skill's folder and every byte the prompt would
+// carry, so an edit or the same text at another path asks again. JSON sorts the map keys.
 func (w workspaceContent) reportHash() string {
-	digest := sha256.New()
-	write := func(field string) { fmt.Fprintf(digest, "%d:%s", len(field), field) }
-	write(w.agentsBlock)
-	for _, name := range w.reportSortedSkillNames() {
-		s := w.skills[name]
-		write(s.Name)
-		write(s.Description)
-		write(s.Body)
-	}
-	return hex.EncodeToString(digest.Sum(nil))
+	data, _ := json.Marshal(struct {
+		Dir, AgentsBlock string
+		Skills           map[string]skill
+	}{w.dir, w.agentsBlock, w.skills})
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:])
 }
 
 // describe names what approval would load, for the human deciding.
@@ -92,7 +80,7 @@ func (w workspaceContent) describe() string {
 		parts = append(parts, agentsFileName)
 	}
 	if len(w.skills) > 0 {
-		parts = append(parts, "workspace skills "+strings.Join(w.reportSortedSkillNames(), ", "))
+		parts = append(parts, "workspace skills "+strings.Join(slices.Sorted(maps.Keys(w.skills)), ", "))
 	}
 	return strings.Join(parts, " and ")
 }
@@ -100,18 +88,8 @@ func (w workspaceContent) describe() string {
 // isWorkspaceContentTrusted reports whether hash was approved "always"; an unreadable file
 // fails safe toward asking again.
 func isWorkspaceContentTrusted(path, hash string) bool {
-	file, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	defer file.Close()
-	lines := bufio.NewScanner(file)
-	for lines.Scan() {
-		if strings.TrimSpace(lines.Text()) == hash {
-			return true
-		}
-	}
-	return false
+	data, _ := os.ReadFile(path)
+	return slices.Contains(strings.Fields(string(data)), hash)
 }
 
 // trustWorkspaceContent appends hash as one short O_APPEND write, which concurrent sessions

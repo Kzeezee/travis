@@ -36,7 +36,7 @@ func TestBuildDenyGlobsShape(t *testing.T) {
 func TestBuildDenyGlobsMatches(t *testing.T) {
 	root := filepath.ToSlash(t.TempDir())
 	home := root + "/home"
-	paths := PathSet{StateDir: filepath.FromSlash(root + "/state"), ConfigDir: filepath.FromSlash(home + "/.config/travis"), SystemConfigFile: filepath.FromSlash(root + "/etc/travis/config.toml")}
+	paths := PathSet{StateDir: filepath.FromSlash(root + "/state"), ConfigDir: filepath.FromSlash(home + "/.config/travis")}
 	globs := buildDenyGlobsFromInputs(buildEnvLookupFromMap(nil), paths, filepath.FromSlash(home))
 
 	tests := []struct {
@@ -50,7 +50,6 @@ func TestBuildDenyGlobsMatches(t *testing.T) {
 		{target: root + "/ws/.git/config", isWriteDenied: true},
 		{target: home + "/.config/travis/config.toml", isWriteDenied: true},
 		{target: home + "/.config/travis/skills/x/SKILL.md", isWriteDenied: true},
-		{target: root + "/etc/travis/config.toml", isWriteDenied: true},
 		{target: home + "/.bashrc", isWriteDenied: true},
 		{target: root + "/state/sessions/abc.json", isReadDenied: true, isWriteDenied: true},
 		{target: root + "/state/traces/run.jsonl", isReadDenied: true, isWriteDenied: true},

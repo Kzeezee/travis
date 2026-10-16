@@ -113,7 +113,7 @@ func (t *FileReadTool) Invoke(ctx context.Context, arguments json.RawMessage) (c
 		content += fmt.Sprintf("\n[truncated at line %d: output exceeds %d bytes; continue with start_line=%d]",
 			result.truncatedAtLine, t.maxBytes, result.truncatedAtLine)
 	}
-	return core.ToolOutput{Content: content, Display: describeRead(file.Info, args), IsUntrusted: checkPath(t.isUntrustedPath, file.Info.WorkspacePath)}, nil
+	return core.ToolOutput{Content: content, Display: describeRead(file.Info, args), IsUntrusted: t.isUntrustedPath != nil && t.isUntrustedPath(file.Info.WorkspacePath)}, nil
 }
 
 // empty output is explained so the model can correct its range instead of guessing

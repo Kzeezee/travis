@@ -110,8 +110,8 @@ func BuildCatalog(cfg config.SkillsCfg, paths config.PathSet, diagnostics io.Wri
 }
 
 // RequestWorkspaceApproval asks approver once whether to load the pending workspace skills
-// and AGENTS.md, and loads them if allowed; "always" remembers their content hash, so an
-// edit asks again. It blocks until answered, so callers run it beside the frontend.
+// and AGENTS.md, and loads them if allowed; "always" remembers a hash of their content and
+// folders, so an edit or the same repo at another path asks again. It blocks until answered, so callers run it beside the frontend.
 func (c *Catalog) RequestWorkspaceApproval(ctx context.Context, approver core.Approver) {
 	c.mu.RLock()
 	pending := c.pending
