@@ -39,6 +39,8 @@ type FileReadTool struct {
 	// workspaceRoot is the scope this tool declares; the broker enforces it.
 	workspaceRoot string
 	maxBytes      int64
+	// isUntrustedPath reports workspace paths whose text is untrusted instructions; nil means none.
+	isUntrustedPath func(workspacePath string) bool
 }
 
 type fileReadArgs struct {
@@ -56,8 +58,8 @@ type lineRangeResult struct {
 	totalLines int
 }
 
-func BuildFileReadTool(broker core.Broker, workspaceRoot string, maxBytes int64) *FileReadTool {
-	return &FileReadTool{broker: broker, workspaceRoot: workspaceRoot, maxBytes: maxBytes}
+func BuildFileReadTool(broker core.Broker, workspaceRoot string, maxBytes int64, isUntrustedPath func(workspacePath string) bool) *FileReadTool {
+	return &FileReadTool{broker: broker, workspaceRoot: workspaceRoot, maxBytes: maxBytes, isUntrustedPath: isUntrustedPath}
 }
 
 func (t *FileReadTool) Name() string {
@@ -111,7 +113,7 @@ func (t *FileReadTool) Invoke(ctx context.Context, arguments json.RawMessage) (c
 		content += fmt.Sprintf("\n[truncated at line %d: output exceeds %d bytes; continue with start_line=%d]",
 			result.truncatedAtLine, t.maxBytes, result.truncatedAtLine)
 	}
-	return core.ToolOutput{Content: content, Display: describeRead(file.Info, args)}, nil
+	return core.ToolOutput{Content: content, Display: describeRead(file.Info, args), IsUntrusted: checkPath(t.isUntrustedPath, file.Info.WorkspacePath)}, nil
 }
 
 // empty output is explained so the model can correct its range instead of guessing

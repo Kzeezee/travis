@@ -45,8 +45,12 @@ func TestOnlyTheManagedMemoryOperationCanReachThePrivateMemoryFile(t *testing.T)
 				}
 				if want == policy.Allow {
 					request.IsFromUntrustedStep = true
-					if got := p.Evaluate(context.Background(), request).Verdict; got != policy.Ask {
-						t.Fatalf("untrusted managed %s = %v, want Ask", kind, got)
+					wantUntrusted := policy.Ask
+					if kind == core.CapabilityFSRead {
+						wantUntrusted = policy.Allow
+					}
+					if got := p.Evaluate(context.Background(), request).Verdict; got != wantUntrusted {
+						t.Fatalf("untrusted managed %s = %v, want %v", kind, got, wantUntrusted)
 					}
 				}
 			}

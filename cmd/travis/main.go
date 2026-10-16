@@ -250,9 +250,12 @@ func startSessionBroker(paths config.PathSet, sessionID core.ID, sessionCfg conf
 func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID core.ID, provider core.Provider, fileBroker core.Broker, sessionLog core.SessionLog, memoryStore core.MemoryStore, questioner core.Questioner, bus *core.Bus, redactor redact.Redactor, model string, diagnostics io.Writer, mcpPolicy policy.Policy, approver core.Approver) (*chatSession, error) {
 	clock := core.SystemClock{}
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
+	// Discovery is synchronous; the workspace approval waits for the frontend like MCP's does.
+	skillsCatalog := skills.BuildCatalog(cfg.Skills, paths, diagnostics)
+	isInstructionPath := skillsCatalog.ReportIsWorkspaceInstructionPath
 	for _, tool := range []core.Tool{
-		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes),
-		builtin.BuildGrepTool(fileBroker, paths.WorkspaceDir),
+		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes, isInstructionPath),
+		builtin.BuildGrepTool(fileBroker, paths.WorkspaceDir, isInstructionPath),
 		builtin.BuildFileWriteTool(fileBroker, paths.WorkspaceDir, defaultMaxWriteBytes, config.ReportNativeLineEnding()),
 		builtin.BuildFileEditTool(fileBroker, paths.WorkspaceDir, defaultMaxWriteBytes),
 		builtin.BuildAskUserTool(questioner),
@@ -263,8 +266,6 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 		}
 	}
 
-	// Discovery is synchronous; the workspace approval waits for the frontend like MCP's does.
-	skillsCatalog := skills.BuildCatalog(cfg.Skills, paths, diagnostics)
 	if err := toolRegistry.Register(registry.SourceSkill, skills.BuildOpenTool(skillsCatalog)); err != nil {
 		return nil, err
 	}

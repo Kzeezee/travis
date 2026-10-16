@@ -273,24 +273,21 @@ func TestPolicyEnforcedBrokerApprovesAnUntrustedStepsAsk(t *testing.T) {
 	enforced, workspace, _ := buildSessionBroker(t, "default")
 	writeWorkspaceFile(t, workspace, "notes.md", "hi")
 	writeWorkspaceFile(t, workspace, ".env", "TOKEN=secret")
-	untrusted := core.MarkUntrustedStep(context.Background())
+	untrusted := core.MarkUntrustedStep(core.WithTurnID(context.Background(), "turn-1"))
 	openNotes := func() error {
-		opened, err := enforced.OpenFile(untrusted, "notes.md")
-		if err == nil {
-			_ = opened.Content.Close()
-		}
+		_, err := enforced.WriteFile(untrusted, "notes.md", []byte("rewritten"))
 		return err
 	}
 
 	var required *core.ApprovalRequiredError
 	if err := openNotes(); !errors.As(err, &required) {
-		t.Fatalf("untrusted OpenFile = %v, want an approval request", err)
+		t.Fatalf("untrusted WriteFile = %v, want an approval request", err)
 	}
 	asked := core.Capability{Kind: required.Operation.Kind, Scope: required.Operation.Target}
 	if err := enforced.ApproveOnce(context.Background(), asked); !errors.Is(err, core.ErrDenied) {
 		t.Fatalf("ApproveOnce outside the untrusted step = %v, want ErrDenied: policy allows it there, so nothing asks", err)
 	}
-	secret := core.Capability{Kind: core.CapabilityFSRead, Scope: filepath.Join(filepath.Dir(asked.Scope), ".env")}
+	secret := core.Capability{Kind: core.CapabilityFSWrite, Scope: filepath.Join(filepath.Dir(asked.Scope), ".env")}
 	if err := enforced.ApproveOnce(untrusted, secret); !errors.Is(err, core.ErrDenied) {
 		t.Fatalf("ApproveOnce(deny-listed) = %v, want ErrDenied", err)
 	}
@@ -299,10 +296,10 @@ func TestPolicyEnforcedBrokerApprovesAnUntrustedStepsAsk(t *testing.T) {
 		t.Fatalf("ApproveOnce = %v", err)
 	}
 	if err := openNotes(); err != nil {
-		t.Fatalf("OpenFile after ApproveOnce = %v", err)
+		t.Fatalf("WriteFile after ApproveOnce = %v", err)
 	}
 	if err := openNotes(); !errors.As(err, &required) {
-		t.Fatalf("second OpenFile = %v, want it to ask again: once is spent", err)
+		t.Fatalf("second WriteFile = %v, want it to ask again: once is spent", err)
 	}
 
 	rule := core.DecisionRule{Kind: asked.Kind, Scope: asked.Scope, Decision: core.DecisionAllow, Source: "test"}

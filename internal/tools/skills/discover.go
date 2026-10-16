@@ -22,9 +22,9 @@ const skillFileName = "SKILL.md"
 // control characters and markup.
 var skillNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
-// discoverSkills resolves every configured root, classifies its tier by workspace
-// containment, and walks it for skills, reporting each tier separately.
-func discoverSkills(cfg config.SkillsCfg, paths config.PathSet, diagnostics io.Writer) (workspaceSkills, userSkills []skill) {
+// classifySkillRoots resolves every configured root and sorts it by trust tier, by where it
+// actually lives rather than how it was spelled (R-02).
+func classifySkillRoots(cfg config.SkillsCfg, paths config.PathSet, diagnostics io.Writer) (workspaceRoots, userRoots []string) {
 	for _, root := range cfg.Roots {
 		resolved, err := paths.Resolve(root)
 		if err != nil {
@@ -32,12 +32,12 @@ func discoverSkills(cfg config.SkillsCfg, paths config.PathSet, diagnostics io.W
 			continue
 		}
 		if isWithinWorkspace(resolved, paths.WorkspaceDir) {
-			workspaceSkills = append(workspaceSkills, discoverSkillsUnderRoot(resolved, TierWorkspace, diagnostics)...)
+			workspaceRoots = append(workspaceRoots, resolved)
 		} else {
-			userSkills = append(userSkills, discoverSkillsUnderRoot(resolved, TierUser, diagnostics)...)
+			userRoots = append(userRoots, resolved)
 		}
 	}
-	return workspaceSkills, userSkills
+	return workspaceRoots, userRoots
 }
 
 // isWithinWorkspace decides trust tier by where a root actually lives, not by which

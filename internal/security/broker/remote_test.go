@@ -461,13 +461,11 @@ func TestRemoteBrokerApprovesAnUntrustedStepThroughTheRealPolicy(t *testing.T) {
 	approver := &scriptedApprover{decision: core.ApprovalOnce}
 	remote, _ := startPipedBrokerWith(t, enforced, broker.RemoteOptions{Approver: approver})
 
-	opened, err := remote.OpenFile(core.MarkUntrustedStep(context.Background()), "notes.md")
-	if err != nil {
-		t.Fatalf("untrusted OpenFile after approval = %v", err)
+	if _, err := remote.WriteFile(core.MarkUntrustedStep(core.WithTurnID(context.Background(), "turn-1")), "notes.md", []byte("rewritten")); err != nil {
+		t.Fatalf("untrusted WriteFile after approval = %v", err)
 	}
-	_ = opened.Content.Close()
-	if len(approver.asked) != 1 || approver.asked[0].Kind != core.CapabilityFSRead {
-		t.Fatalf("asked %+v, want one fs_read question", approver.asked)
+	if len(approver.asked) != 1 || approver.asked[0].Kind != core.CapabilityFSWrite {
+		t.Fatalf("asked %+v, want one fs_write question", approver.asked)
 	}
 
 	if _, err := remote.DescribePath(context.Background(), "notes.md"); err != nil || len(approver.asked) != 1 {

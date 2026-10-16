@@ -54,6 +54,9 @@ type skill struct {
 type Catalog struct {
 	diagnostics io.Writer
 	trustPath   string
+	// instructionPaths are workspace-relative, lower-cased, slash-separated paths whose text is
+	// workspace instructions: AGENTS.md and every workspace skill root.
+	instructionPaths []string
 
 	mu          sync.RWMutex
 	byName      map[string]skill
@@ -76,14 +79,22 @@ func BuildCatalog(cfg config.SkillsCfg, paths config.PathSet, diagnostics io.Wri
 		trustPath:   filepath.Join(paths.StateDir, workspaceTrustFileName),
 		byName:      make(map[string]skill),
 	}
-	workspaceSkills, userSkills := discoverSkills(cfg, paths, diagnostics)
-	for _, discovered := range userSkills {
-		addResolvingDuplicates(catalog.byName, discovered, diagnostics)
+	workspaceRoots, userRoots := classifySkillRoots(cfg, paths, diagnostics)
+	for _, root := range userRoots {
+		for _, discovered := range discoverSkillsUnderRoot(root, TierUser, diagnostics) {
+			addResolvingDuplicates(catalog.byName, discovered, diagnostics)
+		}
 	}
 
 	content := workspaceContent{dir: paths.WorkspaceDir, skills: make(map[string]skill)}
-	for _, discovered := range workspaceSkills {
-		addResolvingDuplicates(content.skills, discovered, diagnostics)
+	catalog.instructionPaths = []string{strings.ToLower(agentsFileName)}
+	for _, root := range workspaceRoots {
+		if rel, err := filepath.Rel(paths.WorkspaceDir, root); err == nil {
+			catalog.instructionPaths = append(catalog.instructionPaths, strings.ToLower(filepath.ToSlash(rel)))
+		}
+		for _, discovered := range discoverSkillsUnderRoot(root, TierWorkspace, diagnostics) {
+			addResolvingDuplicates(content.skills, discovered, diagnostics)
+		}
 	}
 	content.agentsBlock = loadWorkspaceAgentsBlock(paths, diagnostics)
 	if content.isEmpty() {
@@ -138,6 +149,19 @@ func (c *Catalog) install(content workspaceContent) {
 	}
 	c.agentsBlock = content.agentsBlock
 	c.pending = nil
+}
+
+// ReportIsWorkspaceInstructionPath reports whether workspacePath (relative, slash-separated)
+// holds workspace instructions, so a tool reading it can mark its output untrusted even when
+// the human never approved loading it. Case-insensitive, which only ever over-marks.
+func (c *Catalog) ReportIsWorkspaceInstructionPath(workspacePath string) bool {
+	path := strings.ToLower(workspacePath)
+	for _, instruction := range c.instructionPaths {
+		if instruction == "." || path == instruction || strings.HasPrefix(path, instruction+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // addResolvingDuplicates keeps the first entry claimed for a name and warns about every later one.

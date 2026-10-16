@@ -71,3 +71,8 @@ func buildBrokerErrorOutput(requested, workspaceRoot, fallbackCode string, err e
 		return buildErrorOutput(fallbackCode, map[string]any{"path": requested, "detail": err.Error()})
 	}
 }
+
+// checkPath applies an optional path predicate; nil holds for no path.
+func checkPath(predicate func(workspacePath string) bool, workspacePath string) bool {
+	return predicate != nil && predicate(workspacePath)
+}

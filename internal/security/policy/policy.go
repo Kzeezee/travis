@@ -101,7 +101,9 @@ func (p Policy) Evaluate(_ context.Context, req Request) Decision {
 	if req.Kind == core.CapabilityExec {
 		return decide(Ask, "exec is irreversible and always asks (D-27)")
 	}
-	if req.IsFromUntrustedStep {
+	// A read changes nothing, and the model already holds the untrusted text; asking for it only
+	// spends the human's attention that the effect after it needs.
+	if req.IsFromUntrustedStep && req.Kind != core.CapabilityFSRead {
 		return decide(Ask, "request originates in a step with untrusted intake (§5.12.4)")
 	}
 	return decide(Allow, "%s %q", req.Kind, req.Target)
