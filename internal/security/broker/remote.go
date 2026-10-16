@@ -40,6 +40,12 @@ type RemoteOptions struct {
 // connection is declared broken.
 const brokerExchangeTimeout = 30 * time.Second
 
+// commandExchangeTimeout is brokerExchangeTimeout for run_command, whose answer waits on a
+// child process the broker caps at commandTimeout rather than on bounded local IO. It leaves
+// the broker room to kill a timed-out command and still report it, instead of the connection
+// breaking and the command's fate being unknown.
+const commandExchangeTimeout = commandTimeout + commandWaitDelay + 10*time.Second
+
 // maxApprovalsPerEffect covers a write whose as-written and resolved paths each Ask and which
 // then turns out too large to back up.
 const maxApprovalsPerEffect = 3
@@ -51,9 +57,10 @@ var errBrokerUnavailable = errors.New("broker unavailable")
 var errBrokerKnownDown = errors.New("broker was already unavailable before the request")
 
 var (
-	_ core.Broker      = (*RemoteBroker)(nil)
-	_ core.SessionLog  = (*RemoteBroker)(nil)
-	_ core.MemoryStore = (*RemoteBroker)(nil)
+	_ core.Broker        = (*RemoteBroker)(nil)
+	_ core.SessionLog    = (*RemoteBroker)(nil)
+	_ core.MemoryStore   = (*RemoteBroker)(nil)
+	_ core.CommandRunner = (*RemoteBroker)(nil)
 )
 
 func BuildRemoteBroker(conn net.Conn, options RemoteOptions) *RemoteBroker {
@@ -100,7 +107,7 @@ func (r *RemoteBroker) publishUnavailableLocked(ctx context.Context) {
 }
 
 func (r *RemoteBroker) DescribePath(ctx context.Context, path string) (core.PathInfo, error) {
-	resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, Request{Op: OpDescribePath, Path: path})
+	resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, path, Request{Op: OpDescribePath, Path: path})
 	if err != nil {
 		return core.PathInfo{}, err
 	}
@@ -111,7 +118,7 @@ func (r *RemoteBroker) DescribePath(ctx context.Context, path string) (core.Path
 func (r *RemoteBroker) ListDirectory(ctx context.Context, path string) ([]core.PathInfo, error) {
 	entries := []core.PathInfo{}
 	for offset := uint32(0); ; {
-		resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, Request{Op: OpListDirectory, Path: path, Offset: offset})
+		resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, path, Request{Op: OpListDirectory, Path: path, Offset: offset})
 		if err != nil {
 			return nil, err
 		}
@@ -133,7 +140,7 @@ func (r *RemoteBroker) ListDirectory(ctx context.Context, path string) ([]core.P
 }
 
 func (r *RemoteBroker) OpenFile(ctx context.Context, path string) (core.OpenedFile, error) {
-	resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, Request{Op: OpOpenFile, Path: path})
+	resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, path, Request{Op: OpOpenFile, Path: path})
 	if err != nil {
 		return core.OpenedFile{}, err
 	}
@@ -151,7 +158,7 @@ func (r *RemoteBroker) WriteFile(ctx context.Context, path string, content []byt
 	if len(content) > MaxWriteFileBytes {
 		return core.PathInfo{}, fmt.Errorf("%q: %d bytes exceeds the broker's %d-byte write limit: %w", path, len(content), MaxWriteFileBytes, core.ErrInvalid)
 	}
-	resp, err := r.exchangeEffect(ctx, core.CapabilityFSWrite, Request{Op: OpWriteFile, Path: path, Data: content})
+	resp, err := r.exchangeEffect(ctx, core.CapabilityFSWrite, path, Request{Op: OpWriteFile, Path: path, Data: content})
 	if err != nil {
 		return core.PathInfo{}, err
 	}
@@ -171,7 +178,7 @@ func (r *RemoteBroker) AddDecisionRule(ctx context.Context, rule core.DecisionRu
 }
 
 func (r *RemoteBroker) ReadMemory(ctx context.Context) (string, error) {
-	resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, Request{Op: OpReadMemory, Path: "memory"})
+	resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, "memory", Request{Op: OpReadMemory, Path: "memory"})
 	if err != nil {
 		return "", err
 	}
@@ -182,8 +189,24 @@ func (r *RemoteBroker) ReplaceMemory(ctx context.Context, content string) error 
 	if len(content) > 8<<10 {
 		return fmt.Errorf("memory exceeds 8 KB: %w", core.ErrInvalid)
 	}
-	_, err := r.exchangeEffect(ctx, core.CapabilityFSWrite, Request{Op: OpReplaceMemory, Path: "memory", Data: []byte(content)})
+	_, err := r.exchangeEffect(ctx, core.CapabilityFSWrite, "memory", Request{Op: OpReplaceMemory, Path: "memory", Data: []byte(content)})
 	return err
+}
+
+// RunCommand asks the broker to run argv; the broker is the only side that decides whether it
+// may, where it runs and what it may see.
+func (r *RemoteBroker) RunCommand(ctx context.Context, argv []string) (core.CommandResult, error) {
+	if err := validateCommandArgv(argv); err != nil {
+		return core.CommandResult{}, err
+	}
+	resp, err := r.exchangeEffect(ctx, core.CapabilityExec, argv[0], Request{Op: OpRunCommand, Argv: argv})
+	if err != nil {
+		return core.CommandResult{}, err
+	}
+	if resp.Command == nil {
+		return core.CommandResult{}, fmt.Errorf("broker answered run_command without a result: %w", core.ErrInvalid)
+	}
+	return ConvertCommandResultMessage(*resp.Command)
 }
 
 // AppendEntries logs completed messages in the broker's session log and returns once they are durable.
@@ -216,8 +239,9 @@ func (r *RemoteBroker) Rewind(ctx context.Context, fromTurn core.ID, mode core.R
 }
 
 // exchangeEffect is exchange for a request policy decides: an Ask goes to the human and the
-// request is retried on approval, and a refusal is published as PolicyDenied (D-29).
-func (r *RemoteBroker) exchangeEffect(ctx context.Context, kind core.CapabilityKind, req Request) (Response, error) {
+// request is retried on approval, and a refusal is published as PolicyDenied (D-29). scope is
+// what the capability names — a path, or the program an exec request runs.
+func (r *RemoteBroker) exchangeEffect(ctx context.Context, kind core.CapabilityKind, scope string, req Request) (Response, error) {
 	resp, err := r.exchange(ctx, req)
 	for approvals := 0; ; approvals++ {
 		var required *core.ApprovalRequiredError
@@ -225,7 +249,7 @@ func (r *RemoteBroker) exchangeEffect(ctx context.Context, kind core.CapabilityK
 			break
 		}
 		if approvals == maxApprovalsPerEffect {
-			err = fmt.Errorf("%s still needs approval after %d answers: %w", req.Path, approvals, core.ErrDenied)
+			err = fmt.Errorf("%s still needs approval after %d answers: %w", scope, approvals, core.ErrDenied)
 			break
 		}
 		if err = r.putToHuman(ctx, required.Operation); err != nil {
@@ -234,7 +258,7 @@ func (r *RemoteBroker) exchangeEffect(ctx context.Context, kind core.CapabilityK
 		resp, err = r.exchange(ctx, req)
 	}
 	if errors.Is(err, core.ErrDenied) || (errors.Is(err, errBrokerKnownDown) && !r.isClosing.Load()) {
-		r.publish(ctx, core.PolicyDenied{EventHeader: r.buildEventHeader(), CallID: core.ReportToolCallID(ctx), Capability: core.Capability{Kind: kind, Scope: req.Path}, Rule: err.Error()})
+		r.publish(ctx, core.PolicyDenied{EventHeader: r.buildEventHeader(), CallID: core.ReportToolCallID(ctx), Capability: core.Capability{Kind: kind, Scope: scope}, Rule: err.Error()})
 	}
 	return resp, err
 }
@@ -288,7 +312,7 @@ func (r *RemoteBroker) exchange(ctx context.Context, req Request) (Response, err
 		return Response{}, errors.Join(r.brokenErr, errBrokerKnownDown)
 	}
 
-	_ = r.conn.SetDeadline(r.options.Clock.ReportCurrentTime().Add(brokerExchangeTimeout))
+	_ = r.conn.SetDeadline(r.options.Clock.ReportCurrentTime().Add(selectExchangeTimeout(req.Op)))
 	r.nextID++
 	req.Version, req.ID = ProtocolVersion, r.nextID
 	req.IsFromUntrustedStep = core.ReportIsFromUntrustedStep(ctx)
@@ -306,6 +330,15 @@ func (r *RemoteBroker) exchange(ctx context.Context, req Request) (Response, err
 		return Response{}, ConvertErrorBody(*resp.Error)
 	}
 	return resp, nil
+}
+
+// selectExchangeTimeout is how long this op may take to answer: bounded local IO for every op
+// but run_command, which waits on a child process.
+func selectExchangeTimeout(op Op) time.Duration {
+	if op == OpRunCommand {
+		return commandExchangeTimeout
+	}
+	return brokerExchangeTimeout
 }
 
 func (r *RemoteBroker) sendAndReceive(req Request) (Response, error) {

@@ -13,9 +13,7 @@ import (
 
 const agentsFileName = "AGENTS.md"
 
-// loadWorkspaceAgentsBlock reads <workspace>/AGENTS.md and wraps it as untrusted (D-23:
-// "takes the same treatment as a workspace SKILL.md", §5.8/R-02); the catalog holds it until
-// approved. A missing file or a read error is a diagnostic, never fatal.
+// loadWorkspaceAgentsBlock reads a candidate snapshot; the catalog gates its exposure on approval.
 func loadWorkspaceAgentsBlock(paths config.PathSet, diagnostics io.Writer) string {
 	path := filepath.Join(paths.WorkspaceDir, agentsFileName)
 	data, err := readInstructionFile(path)

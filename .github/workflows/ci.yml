@@ -153,7 +153,7 @@ jobs:
           go-version-file: go.mod
           check-latest: true
       - name: Assert policy denials and absent effects
-        run: go test -race -timeout 5m -shuffle=on ./... -run '^TestRedTeamGate'
+        run: go test -race -timeout 5m -shuffle=on ./internal/security/broker ./internal/agent/loop ./internal/config ./internal/tools/mcp ./internal/tools/skills ./internal/tools/builtin ./cmd/travis -run '^TestRedTeamGate'
 
   # The single required check. Branch protection names this job and nothing else, so
   # editing the matrix above cannot silently rename a required check away.

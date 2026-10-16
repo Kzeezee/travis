@@ -62,7 +62,19 @@ func run(ctx context.Context, args []string, readiness, diagnostics io.Writer) e
 	if err != nil {
 		return fmt.Errorf("home directory: %w", err)
 	}
-	sessionPolicy, err := broker.BuildSessionPolicy(*profile, broker.SessionRoots{Paths: paths, Home: home, Temp: os.TempDir()})
+	// The exec grants this session holds. config.Load refuses a [security] table in the
+	// workspace layer outright, so these come only from the user's own config, never from the
+	// repo travis happens to be pointed at (R-27).
+	cfg, diags, err := config.Load()
+	if err != nil {
+		return err
+	}
+	for _, diag := range diags {
+		fmt.Fprintf(diagnostics, "travis-broker: config: %s\n", diag.Message)
+	}
+	sessionPolicy, err := broker.BuildSessionPolicy(*profile, broker.SessionRoots{
+		Paths: paths, Home: home, Temp: os.TempDir(), ExecAllow: cfg.Security.ExecAllow,
+	})
 	if err != nil {
 		return err
 	}

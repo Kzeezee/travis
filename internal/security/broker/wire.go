@@ -21,8 +21,8 @@ import (
 // ProtocolVersion is carried on every request; a broker refuses any version it does not speak.
 // Version 2 added write_file, approve_once, add_decision_rule, the needs_approval error and
 // list_directory paging. Version 3 added session entries and irreversible approvals; version 4
-// added rewind; version 5 adds managed memory operations.
-const ProtocolVersion uint16 = 5
+// added rewind; version 5 added managed memory operations; version 6 adds run_command.
+const ProtocolVersion uint16 = 6
 
 const (
 	// MaxFrameBytes bounds what either side allocates for one message.
@@ -31,7 +31,14 @@ const (
 	MaxReadChunkBytes = 256 << 10
 	// MaxWriteFileBytes bounds one write_file's content, leaving the rest of a frame for the envelope.
 	MaxWriteFileBytes = 512 << 10
-	frameHeaderBytes  = 4
+	// MaxCommandOutputBytes bounds the output one run_command response carries (DESIGN §5.6
+	// max_output), well inside a frame.
+	MaxCommandOutputBytes = 256 << 10
+	// MaxCommandArgs and MaxCommandArgBytes bound an argv before anything looks at it; a model
+	// cannot make the broker allocate an unbounded command line.
+	MaxCommandArgs     = 256
+	MaxCommandArgBytes = 32 << 10
+	frameHeaderBytes   = 4
 )
 
 type Op string
@@ -55,6 +62,8 @@ const (
 	OpRewind        Op = "rewind"
 	OpReadMemory    Op = "read_memory"
 	OpReplaceMemory Op = "replace_memory"
+	// OpRunCommand runs Argv with no shell; it always needs approval (D-27).
+	OpRunCommand Op = "run_command"
 )
 
 type Request struct {
@@ -83,6 +92,8 @@ type Request struct {
 	// FromTurn and Mode are what rewind takes back.
 	FromTurn string `msgpack:"from_turn,omitempty"`
 	Mode     string `msgpack:"mode,omitempty"`
+	// Argv is the program and its arguments run_command runs, passed to the program directly.
+	Argv []string `msgpack:"argv,omitempty"`
 }
 
 // EntryMessage is one conversation message travis reports. Message is core.Message's JSON, which
@@ -128,6 +139,15 @@ type Response struct {
 	Turns []TurnSummaryMessage `msgpack:"turns,omitempty"`
 	// Rewind answers rewind: what happened to each file.
 	Rewind *RewindReportMessage `msgpack:"rewind,omitempty"`
+	// Command answers run_command: how the command ended.
+	Command *CommandResultMessage `msgpack:"command,omitempty"`
+}
+
+type CommandResultMessage struct {
+	ExitCode          int    `msgpack:"exit_code"`
+	Output            string `msgpack:"output,omitempty"`
+	IsOutputTruncated bool   `msgpack:"truncated,omitempty"`
+	IsTimedOut        bool   `msgpack:"timed_out,omitempty"`
 }
 
 type RewindReportMessage struct {
@@ -256,10 +276,49 @@ func validateRequest(req Request) error {
 		if req.Path != "memory" || len(req.Data) > 8<<10 {
 			return fmt.Errorf("%s needs the fixed memory target and at most 8 KB: %w", req.Op, core.ErrInvalid)
 		}
+	case OpRunCommand:
+		return validateCommandArgv(req.Argv)
 	default:
 		return fmt.Errorf("unknown op %q: %w", req.Op, core.ErrInvalid)
 	}
 	return nil
+}
+
+// validateCommandArgv is run_command's trust boundary: an argv must name a program and stay
+// within bounds before the broker evaluates policy on it, let alone runs it.
+func validateCommandArgv(argv []string) error {
+	switch {
+	case len(argv) == 0 || argv[0] == "":
+		return fmt.Errorf("%s needs a program as its first argument: %w", OpRunCommand, core.ErrInvalid)
+	case len(argv) > MaxCommandArgs:
+		return fmt.Errorf("%s takes at most %d arguments: %w", OpRunCommand, MaxCommandArgs, core.ErrInvalid)
+	}
+	for _, arg := range argv {
+		if len(arg) > MaxCommandArgBytes {
+			return fmt.Errorf("%s takes arguments of at most %d bytes: %w", OpRunCommand, MaxCommandArgBytes, core.ErrInvalid)
+		}
+	}
+	return nil
+}
+
+// BuildCommandResultMessage converts a finished command for the wire.
+func BuildCommandResultMessage(result core.CommandResult) *CommandResultMessage {
+	return &CommandResultMessage{
+		ExitCode: result.ExitCode, Output: result.Output,
+		IsOutputTruncated: result.IsOutputTruncated, IsTimedOut: result.IsTimedOut,
+	}
+}
+
+// ConvertCommandResultMessage validates the broker's answer; output past the cap it promised
+// to apply means the broker is not one travis can believe about anything else either.
+func ConvertCommandResultMessage(msg CommandResultMessage) (core.CommandResult, error) {
+	if len(msg.Output) > MaxCommandOutputBytes {
+		return core.CommandResult{}, fmt.Errorf("command output of %d bytes exceeds the %d-byte cap: %w", len(msg.Output), MaxCommandOutputBytes, core.ErrInvalid)
+	}
+	return core.CommandResult{
+		ExitCode: msg.ExitCode, Output: msg.Output,
+		IsOutputTruncated: msg.IsOutputTruncated, IsTimedOut: msg.IsTimedOut,
+	}, nil
 }
 
 // BuildPathInfoMessage converts a core path description for the wire.

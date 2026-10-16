@@ -49,7 +49,7 @@ func (t *openTool) Invoke(ctx context.Context, arguments json.RawMessage) (core.
 		return core.ToolOutput{IsError: true, Content: `{"error":"invalid_arguments"}`, Display: "skill_open: invalid arguments"}, nil
 	}
 
-	found, ok := t.catalog.open(args.Name)
+	found, ok := t.catalog.selectSkill(args.Name)
 	if !ok {
 		return core.ToolOutput{
 			IsError: true,

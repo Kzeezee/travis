@@ -148,7 +148,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	}()
 
 	provider := openaicompat.BuildProvider(profile.BaseURL, apiKey, nil, core.SystemClock{})
-	session, err := assembleChatSession(cfg, paths, sessionID, provider, sessionBroker.Remote, sessionBroker.Remote, sessionBroker.Remote, terminal.BuildQuestioner(questions), bus, redactor, profile.Model, os.Stderr, mcpPolicy, approver)
+	session, err := assembleChatSession(cfg, paths, sessionID, provider, sessionBroker.Remote, sessionBroker.Remote, sessionBroker.Remote, sessionBroker.Remote, terminal.BuildQuestioner(questions), bus, redactor, profile.Model, os.Stderr, mcpPolicy, approver)
 	if err != nil {
 		return err
 	}
@@ -182,7 +182,7 @@ func buildMCPPolicy(cfg *config.Config, paths config.PathSet, home string) (poli
 type chatSession struct {
 	conversation  *loop.AssistantConversation
 	bus           *core.Bus
-	stopWorkers   func() // ends MCP supervision and the workspace approval wait
+	closeMCP      func()
 	toolRegistry  *registry.Registry
 	skillsCatalog *skills.Catalog
 	memoryStore   core.MemoryStore
@@ -228,7 +228,7 @@ func startSessionBroker(paths config.PathSet, sessionID core.ID, sessionCfg conf
 		WorkspaceDir:   paths.WorkspaceDir,
 		RuntimeDir:     paths.RuntimeDir,
 		// Not cfg.Profile: the workspace config layer can set that, and a cloned repo must not
-		// choose its own security profile.
+		// choose its own security profile. Selectable once [security] config exists.
 		Profile:          "default",
 		SessionID:        sessionID,
 		SnapshotMaxBytes: sessionCfg.SnapshotMaxBytes,
@@ -247,11 +247,10 @@ func startSessionBroker(paths config.PathSet, sessionID core.ID, sessionCfg conf
 // one session. The provider, file broker, session log and bus are parameters so the end-to-end
 // test can script the model while everything else stays real; diagnostics receives trace status
 // lines. A nil sessionLog records nothing, which only a test without a broker process may choose.
-func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID core.ID, provider core.Provider, fileBroker core.Broker, sessionLog core.SessionLog, memoryStore core.MemoryStore, questioner core.Questioner, bus *core.Bus, redactor redact.Redactor, model string, diagnostics io.Writer, mcpPolicy policy.Policy, approver core.Approver) (*chatSession, error) {
+func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID core.ID, provider core.Provider, fileBroker core.Broker, sessionLog core.SessionLog, memoryStore core.MemoryStore, commandRunner core.CommandRunner, questioner core.Questioner, bus *core.Bus, redactor redact.Redactor, model string, diagnostics io.Writer, mcpPolicy policy.Policy, approver core.Approver) (*chatSession, error) {
 	clock := core.SystemClock{}
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
-	// Discovery is synchronous; the workspace approval waits for the frontend like MCP's does.
-	skillsCatalog := skills.BuildCatalog(cfg.Skills, paths, diagnostics)
+	skillsCatalog := skills.BuildCatalog(cfg.Skills, paths, diagnostics, approver)
 	isInstructionPath := skillsCatalog.ReportIsWorkspaceInstructionPath
 	for _, tool := range []core.Tool{
 		builtin.BuildFileReadTool(fileBroker, paths.WorkspaceDir, defaultMaxReadBytes, isInstructionPath),
@@ -259,6 +258,7 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 		builtin.BuildFileWriteTool(fileBroker, paths.WorkspaceDir, defaultMaxWriteBytes, config.ReportNativeLineEnding()),
 		builtin.BuildFileEditTool(fileBroker, paths.WorkspaceDir, defaultMaxWriteBytes),
 		builtin.BuildAskUserTool(questioner),
+		builtin.BuildExecTool(commandRunner),
 		builtin.BuildMemoryTool(memoryStore, filepath.Join(paths.StateDir, memory.FileName)),
 	} {
 		if err := toolRegistry.Register(registry.SourceBuiltin, tool); err != nil {
@@ -269,8 +269,6 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 	if err := toolRegistry.Register(registry.SourceSkill, skills.BuildOpenTool(skillsCatalog)); err != nil {
 		return nil, err
 	}
-	approvalCtx, cancelApproval := context.WithCancel(context.Background())
-	go skillsCatalog.RequestWorkspaceApproval(approvalCtx, approver)
 
 	// Async by design (BuildManager's own doc comment): connecting here, before the TUI's
 	// event loop starts reading approvals, would deadlock any server that needs Ask.
@@ -286,7 +284,7 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 	session := &chatSession{
 		conversation:  loop.BuildAssistantConversation(deps, model, cfg.Brain.MaxSteps),
 		bus:           bus,
-		stopWorkers:   func() { cancelApproval(); mcpManager.Close() },
+		closeMCP:      mcpManager.Close,
 		toolRegistry:  toolRegistry,
 		skillsCatalog: skillsCatalog,
 		memoryStore:   memoryStore,
@@ -298,10 +296,10 @@ func assembleChatSession(cfg *config.Config, paths config.PathSet, sessionID cor
 	return session, nil
 }
 
-// close stops background workers first, so no late event from a dying server tries to
-// publish after the bus closes, then ends the session's event stream and waits for the trace.
+// close stops MCP supervision first, so no late event from a dying server tries to publish
+// after the bus closes, then ends the session's event stream and waits for the trace to flush.
 func (s *chatSession) close() {
-	s.stopWorkers()
+	s.closeMCP()
 	s.bus.Close()
 	s.waitForTrace()
 }

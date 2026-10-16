@@ -119,7 +119,7 @@ func TestEditRejectsAPathOutsideTheWorkspace(t *testing.T) {
 	}
 	outside := writeFixture(t, parent, "outside.txt", "secret\n")
 
-	assertErrorCode(t, invokeEdit(t, buildConfinedFileEditTool(root), "../outside.txt", "secret", "x"), "path_outside_workspace")
+	assertErrorCode(t, invokeEdit(t, buildConfinedFileEditTool(root), "../outside.txt", "secret", "x"), "permission_denied")
 	if got := readDisk(t, outside); got != "secret\n" {
 		t.Fatalf("outside file = %q, want unchanged", got)
 	}

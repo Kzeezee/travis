@@ -34,6 +34,9 @@ func TestOpenToolReturnsTheBodyForAKnownSkill(t *testing.T) {
 	if output.Content != "demo body text" {
 		t.Fatalf("Invoke() content = %q, want the skill's body", output.Content)
 	}
+	if output.IsUntrusted {
+		t.Fatal("user skill was marked as workspace content")
+	}
 }
 
 func TestOpenToolReportsAnUnknownSkillAsAValueNotAGoError(t *testing.T) {

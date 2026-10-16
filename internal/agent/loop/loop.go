@@ -22,11 +22,9 @@ type ToolLookup interface {
 	Lookup(name string) (core.Tool, bool)
 }
 
-// SkillsIndex is the loop's view of loaded skills and workspace instructions:
-// pre-rendered sections (already trust-tiered and delimited by whoever built them) to
-// append to the system prompt. A nil SkillsIndex contributes nothing.
+// SkillsIndex prepares approved, trust-tiered instructions before each provider request.
 type SkillsIndex interface {
-	ReportSystemPromptSections() []string
+	BuildSystemPromptSections(context.Context) ([]string, error)
 }
 
 // Dependencies are the ports a conversation runs against; the caller picks the adapters. Log
@@ -75,8 +73,8 @@ type AssistantConversation struct {
 	entries []core.SessionEntry
 	// turnID is minted when a turn starts and stamped on every event it publishes.
 	turnID core.ID
-	// isNextStepUntrusted carries untrusted intake to the next step, even across a turn
-	// boundary, because that next step is the first to act on it (§5.12.4).
+	// isNextStepUntrusted carries untrusted intake into the next turn's first step when the turn
+	// ended (budget, error) before any step could follow it (§5.12.4).
 	isNextStepUntrusted bool
 }
 
@@ -120,8 +118,13 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 	}
 
 	var usage core.Usage
+	hasUntrustedIntake := c.isNextStepUntrusted
 	for step := 0; step < c.maxSteps; step++ {
-		reply, err := c.runStep(ctx, prompt)
+		stepContext := ctx
+		if hasUntrustedIntake {
+			stepContext = core.MarkUntrustedStep(ctx)
+		}
+		reply, err := c.runStep(stepContext, prompt)
 		if err != nil {
 			c.completeTurn(ctx, core.StopError, usage)
 			return err
@@ -134,17 +137,13 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 			return err
 		}
 		if len(reply.calls) == 0 {
+			c.isNextStepUntrusted = false
 			c.completeTurn(ctx, reply.reason, usage)
 			return nil
 		}
 
-		toolCtx := ctx
-		if c.isNextStepUntrusted {
-			toolCtx = core.MarkUntrustedStep(ctx)
-		}
-		// Only the step right after intake is marked: escalation is step-scoped (D-26).
-		results, hasUntrustedResult, err := c.runToolCalls(toolCtx, reply.calls)
-		c.isNextStepUntrusted = hasUntrustedResult
+		results, hasUntrustedOutput, err := c.runToolCalls(stepContext, reply.calls)
+		hasUntrustedIntake, c.isNextStepUntrusted = hasUntrustedOutput, hasUntrustedOutput
 		err = errors.Join(err, c.recordToolResults(ctx, results))
 		if err != nil {
 			c.completeTurn(ctx, core.StopError, usage)
@@ -211,10 +210,18 @@ func (c *AssistantConversation) SelectModel(name string) {
 
 // runStep makes exactly one provider call; it exists so the stream closes every step.
 func (c *AssistantConversation) runStep(ctx context.Context, hint string) (stepReply, error) {
+	var sections []string
+	if c.skills != nil {
+		var err error
+		sections, err = c.skills.BuildSystemPromptSections(ctx)
+		if err != nil {
+			return stepReply{}, fmt.Errorf("load instructions: %w", err)
+		}
+	}
 	tools := c.buildToolSpecs(ctx, hint)
 	request := core.ProviderRequest{
 		Model:    c.model,
-		System:   buildSystemPrompt(c.clock.ReportCurrentTime(), c.skills),
+		System:   buildSystemPrompt(c.clock.ReportCurrentTime(), sections),
 		Messages: session.BuildHistory(c.entries),
 		Tools:    tools,
 	}
@@ -291,20 +298,21 @@ func buildAssistantMessage(reply stepReply) core.Message {
 	return core.Message{Role: core.RoleAssistant, Parts: parts}
 }
 
-// runToolCalls dispatches sequentially: every Phase 1 tool is read-only, so parallelism
-// buys little yet, and order stays deterministic. Every call gets a result, even after a
-// failure, because the provider rejects a history with unanswered calls. hasUntrustedResult
-// reports whether any output carried untrusted text.
-func (c *AssistantConversation) runToolCalls(ctx context.Context, calls []core.ToolCall) (parts []core.Part, hasUntrustedResult bool, err error) {
-	parts = make([]core.Part, 0, len(calls))
+// runToolCalls preserves order and escalates remaining effects after any untrusted result.
+func (c *AssistantConversation) runToolCalls(ctx context.Context, calls []core.ToolCall) ([]core.Part, bool, error) {
+	parts := make([]core.Part, 0, len(calls))
+	hasUntrustedOutput := false
 	for i, call := range calls {
 		c.events.Publish(ctx, core.ToolCallStarted{EventHeader: c.buildEventHeader(), Call: call})
 
 		output, err := c.invokeTool(ctx, call)
+		if output.IsUntrusted {
+			hasUntrustedOutput = true
+			ctx = core.MarkUntrustedStep(ctx)
+		}
 		if err != nil {
 			output = core.ToolOutput{Content: toolAbortedResult, Display: err.Error(), IsError: true}
 		}
-		hasUntrustedResult = hasUntrustedResult || output.IsUntrusted
 		result := core.ToolResult{CallID: call.ID, Name: call.Name, Content: output.Content, IsError: output.IsError}
 		c.events.Publish(ctx, core.ToolCallFinished{EventHeader: c.buildEventHeader(), Result: result, Display: output.Display})
 		parts = append(parts, core.ToolResultPart{ToolResult: result})
@@ -315,10 +323,10 @@ func (c *AssistantConversation) runToolCalls(ctx context.Context, calls []core.T
 					CallID: skipped.ID, Name: skipped.Name, Content: toolAbortedResult, IsError: true,
 				}})
 			}
-			return parts, hasUntrustedResult, fmt.Errorf("run tool %q: %w", call.Name, err)
+			return parts, hasUntrustedOutput, fmt.Errorf("run tool %q: %w", call.Name, err)
 		}
 	}
-	return parts, hasUntrustedResult, nil
+	return parts, hasUntrustedOutput, nil
 }
 
 // invokeTool turns an unknown name or a panicking tool into an error result for the

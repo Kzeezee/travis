@@ -640,7 +640,9 @@ type fakeSkillsIndex struct {
 	sections []string
 }
 
-func (f *fakeSkillsIndex) ReportSystemPromptSections() []string { return f.sections }
+func (f *fakeSkillsIndex) BuildSystemPromptSections(context.Context) ([]string, error) {
+	return f.sections, nil
+}
 
 func TestRunAppendsSkillsSectionsToTheSystemPrompt(t *testing.T) {
 	provider := &fakeProvider{streams: []*fakeStream{buildTextStream(core.Chunk{Text: "done"})}}
@@ -689,53 +691,31 @@ func (p *untrustedStepProbe) Invoke(ctx context.Context, arguments json.RawMessa
 	return core.ToolOutput{Content: "ok", IsUntrusted: string(arguments) == `"untrusted"`}, nil
 }
 
-// The step right after untrusted output runs marked, so policy asks before its effects; the
-// mark does not spread to the step after that (§5.12.4, D-26).
-func TestRunMarksOnlyTheStepAfterUntrustedOutput(t *testing.T) {
-	probe := &untrustedStepProbe{}
-	call := func(id core.ID, arguments string) *fakeStream {
-		return buildToolCallStream(core.ToolCall{ID: id, Name: "probe", Arguments: json.RawMessage(arguments)})
-	}
-	provider := &fakeProvider{streams: []*fakeStream{
-		call("intake", `"untrusted"`),
-		call("acts-on-it", `"trusted"`),
-		call("later", `"trusted"`),
-		buildTextStream(core.Chunk{Text: "done"}),
-	}}
-	conversation := buildAssistantConversation(t, provider, &fakeToolLookup{tools: []core.Tool{probe}}, &recordingSink{})
-
-	if err := conversation.RunAssistantTurn(context.Background(), "go"); err != nil {
-		t.Fatal(err)
-	}
-	if want := []bool{false, true, false}; !slices.Equal(probe.seenUntrusted, want) {
-		t.Fatalf("untrusted per step = %v, want %v", probe.seenUntrusted, want)
-	}
-}
-
-// Untrusted output in a turn's last step still marks the next turn's first step, which is the
-// first to act on it; a reset history forgets it.
-func TestRunCarriesTheUntrustedMarkIntoTheNextTurn(t *testing.T) {
+// Untrusted output in a turn that runs out of steps still marks the next turn's first step,
+// the first that can act on it; a text reply right after intake spends the mark.
+func TestRunCarriesTheUntrustedMarkOnlyPastAnEarlyTurnEnd(t *testing.T) {
 	probe := &untrustedStepProbe{}
 	call := func(arguments string) *fakeStream {
 		return buildToolCallStream(core.ToolCall{ID: "c", Name: "probe", Arguments: json.RawMessage(arguments)})
 	}
-	provider := &fakeProvider{streams: []*fakeStream{
-		call(`"untrusted"`), buildTextStream(core.Chunk{Text: "read it"}),
+	var streams []*fakeStream
+	for range testMaxSteps {
+		streams = append(streams, call(`"untrusted"`))
+	}
+	streams = append(streams,
 		call(`"trusted"`), buildTextStream(core.Chunk{Text: "done"}),
 		call(`"untrusted"`), buildTextStream(core.Chunk{Text: "read it"}),
 		call(`"trusted"`), buildTextStream(core.Chunk{Text: "done"}),
-	}}
-	conversation := buildAssistantConversation(t, provider, &fakeToolLookup{tools: []core.Tool{probe}}, &recordingSink{})
+	)
+	conversation := buildAssistantConversation(t, &fakeProvider{streams: streams}, &fakeToolLookup{tools: []core.Tool{probe}}, &recordingSink{})
 
-	for i, prompt := range []string{"fetch", "continue", "fetch", "fresh start"} {
-		if i == 3 {
-			conversation.ResetHistory()
-		}
+	for _, prompt := range []string{"loop", "continue", "fetch", "continue"} {
 		if err := conversation.RunAssistantTurn(context.Background(), prompt); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if want := []bool{false, true, false, false}; !slices.Equal(probe.seenUntrusted, want) {
-		t.Fatalf("untrusted per tool step = %v, want %v", probe.seenUntrusted, want)
+	probe.seenUntrusted = probe.seenUntrusted[testMaxSteps-1:]
+	if want := []bool{true, true, false, false}; !slices.Equal(probe.seenUntrusted, want) {
+		t.Fatalf("untrusted per tool step from the budget's last step on = %v, want %v", probe.seenUntrusted, want)
 	}
 }

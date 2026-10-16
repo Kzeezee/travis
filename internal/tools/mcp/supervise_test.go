@@ -60,8 +60,8 @@ func TestConnectAsksThenConnectsOnApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools() error = %v", err)
 	}
-	if len(listed.Tools) != 3 {
-		t.Fatalf("ListTools() returned %d tools, want 3 (echo, crash, env)", len(listed.Tools))
+	if len(listed.Tools) != 2 {
+		t.Fatalf("ListTools() returned %d tools, want 2 (echo, crash)", len(listed.Tools))
 	}
 }
 
@@ -71,6 +71,33 @@ func TestConnectDeniedByApprover(t *testing.T) {
 
 	if _, err := process.connect(context.Background()); !errors.Is(err, core.ErrDenied) {
 		t.Fatalf("connect() error = %v, want ErrDenied", err)
+	}
+}
+
+func TestRedTeamGateMCPDoesNotInheritProviderCredential(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "canary-provider-key-never-forward")
+	process, _ := buildTestProcess(t, buildTestServerConfig("-require-no-provider-key"), grantedExecPolicy(), &fakeApprover{decision: core.ApprovalOnce})
+	session, err := process.connect(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if _, err := session.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: "echo", Arguments: map[string]any{"message": "alive"}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRedTeamGateRememberedMCPTrustCannotBypassRemovedExecGrant(t *testing.T) {
+	approver := &fakeApprover{decision: core.ApprovalOnce}
+	process, clock := buildTestProcess(t, buildTestServerConfig(), deniedExecPolicy(), approver)
+	if err := process.trust.add(process.cfg.Command, process.cfg.Args, "previously approved", clock); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := process.connect(t.Context()); !errors.Is(err, core.ErrDenied) {
+		t.Fatalf("trusted server without an exec grant: %v", err)
+	}
+	if len(approver.askedOps()) != 0 {
+		t.Fatal("a removed grant must deny without asking")
 	}
 }
 

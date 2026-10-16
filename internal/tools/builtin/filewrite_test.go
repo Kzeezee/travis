@@ -97,7 +97,7 @@ func TestWriteRejectsAPathOutsideTheWorkspace(t *testing.T) {
 
 	output := invokeWrite(t, buildConfinedFileWriteTool(root, "\n"), "../outside.txt", "x")
 
-	assertErrorCode(t, output, "path_outside_workspace")
+	assertErrorCode(t, output, "permission_denied")
 	if _, err := os.Stat(filepath.Join(parent, "outside.txt")); !os.IsNotExist(err) {
 		t.Fatalf("outside file exists or stat failed: %v", err)
 	}

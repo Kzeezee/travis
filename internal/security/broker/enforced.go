@@ -242,7 +242,12 @@ func (b *PolicyEnforcedBroker) authorizeRequest(ctx context.Context, request pol
 			return nil
 		}
 		explanation := strings.Join(decision.Trace, "\n")
-		required := &core.ApprovalRequiredError{Operation: core.Operation{Kind: kind, Target: path, Explanation: explanation}}
+		// exec is irreversible by classification, not by default (D-27), so its question is
+		// asked as one: the modal then offers only once-or-deny, and no keypress can reach the
+		// always rule AddDecisionRule would refuse anyway.
+		required := &core.ApprovalRequiredError{Operation: core.Operation{
+			Kind: kind, Target: path, Explanation: explanation, IsIrreversible: kind == core.CapabilityExec,
+		}}
 		if err := b.appendBrokerFact(ctx, core.SessionEntry{Kind: core.EntryApprovalAsked, Capability: &asked, Detail: explanation}); err != nil {
 			return err
 		}

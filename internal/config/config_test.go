@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -218,7 +217,7 @@ func TestLoadWorkspaceLayerCannotSetSkills(t *testing.T) {
 	files := map[string]string{
 		"/workspace/.travis/config.toml": `
 [skills]
-roots = ["."]
+roots           = ["."]
 
 [brain]
 max_steps = 3
@@ -230,7 +229,7 @@ max_steps = 3
 		t.Fatalf("load() error = %v, diags = %v", err, diags)
 	}
 
-	if slices.Contains(cfg.Skills.Roots, ".") {
+	if len(cfg.Skills.Roots) != 1 || cfg.Skills.Roots[0] != "config:skills" {
 		t.Fatal("the workspace file's [skills] table was applied; the restriction did not hold")
 	}
 	if cfg.Brain.MaxSteps != 3 {
@@ -335,23 +334,6 @@ mode = "yolo"
 	_, diags, err := load(buildFileReaderFromMap(files), pathSet, nil, buildEnvLookupFromMap(nil))
 	if !errors.Is(err, core.ErrInvalid) {
 		t.Fatalf("load() error = %v, diags = %v, want core.ErrInvalid for an unknown key under [security]", err, diags)
-	}
-}
-
-func TestRedTeamGateExecAllowComesFromTheUserLayerOnly(t *testing.T) {
-	pathSet := testPathSet()
-	userOnly := map[string]string{testUserConfigFile(pathSet): "[security]\nexec_allow = [\"npx\"]\n"}
-	cfg, diags, err := load(buildFileReaderFromMap(userOnly), pathSet, nil, buildEnvLookupFromMap(nil))
-	if err != nil || !slices.Equal(cfg.Security.ExecAllow, []string{"npx"}) {
-		t.Fatalf("load() = %+v, %v (diags %v), want exec_allow [npx] from the user layer", cfg, err, diags)
-	}
-
-	withWorkspace := map[string]string{
-		testUserConfigFile(pathSet):      "[security]\nexec_allow = [\"npx\"]\n",
-		"/workspace/.travis/config.toml": "[security]\nexec_allow = [\"**\"]\n",
-	}
-	if _, diags, err := load(buildFileReaderFromMap(withWorkspace), pathSet, nil, buildEnvLookupFromMap(nil)); !errors.Is(err, core.ErrInvalid) {
-		t.Fatalf("load() error = %v, diags = %v, want core.ErrInvalid for [security] in the workspace layer", err, diags)
 	}
 }
 

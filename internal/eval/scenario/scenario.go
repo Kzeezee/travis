@@ -12,11 +12,13 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-// AssertFile checks that a file under the scenario's workspace contains a substring once the
-// scripted turns finish.
+// AssertFile checks a file under the scenario's workspace once the scripted turns finish:
+// that it contains a substring, or that it is absent, which is how a scenario states that a
+// refused effect left nothing behind.
 type AssertFile struct {
 	Path     string `toml:"path"`
 	Contains string `toml:"contains"`
+	IsAbsent bool   `toml:"absent"`
 }
 
 // ScriptedStep is one deterministic model turn for a scenario with no recorded cassette:
@@ -112,6 +114,11 @@ func validateScenario(sc Scenario) error {
 	for i, step := range sc.Steps {
 		if (step.Tool != "") == (step.FinalText != "") {
 			return fmt.Errorf("%q: step %d must set exactly one of tool or final_text", sc.Name, i)
+		}
+	}
+	for _, assertFile := range sc.AssertFiles {
+		if assertFile.IsAbsent == (assertFile.Contains != "") {
+			return fmt.Errorf("%q: assert_files %q must set exactly one of contains or absent", sc.Name, assertFile.Path)
 		}
 	}
 	return nil

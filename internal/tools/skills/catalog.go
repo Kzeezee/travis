@@ -4,6 +4,8 @@ package skills
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -46,109 +48,85 @@ type skill struct {
 	Body        string
 	Tier        Tier
 	Root        string
+	ContentHash [sha256.Size]byte
 }
 
-// Catalog is every skill discovered at startup, plus the workspace AGENTS.md. Workspace
-// content is held back until a human approves it once (RequestWorkspaceApproval), so a
-// cloned repo's text never reaches the system prompt on `cd` alone (R-02, D-23).
+// Catalog exposes approved snapshots, rechecking workspace instructions before each model request.
 type Catalog struct {
-	diagnostics io.Writer
-	trustPath   string
+	mu           sync.RWMutex
+	byName       map[string]skill
+	agentsBlock  string
+	cfg          config.SkillsCfg
+	paths        config.PathSet
+	diagnostics  io.Writer
+	approver     core.Approver
+	decisionHash [sha256.Size]byte
+	hasDecision  bool
+	isApproved   bool
 	// instructionPaths are workspace-relative, lower-cased, slash-separated paths whose text is
 	// workspace instructions: AGENTS.md and every workspace skill root.
 	instructionPaths []string
-
-	mu          sync.RWMutex
-	byName      map[string]skill
-	agentsBlock string
-	// pending is workspace content awaiting approval; nil when there is none or it loaded.
-	pending *workspaceContent
 }
 
-// BuildCatalog discovers every skill under cfg's roots, classifying each root's trust
-// tier by whether it resolves inside paths.WorkspaceDir (R-02), and reads the workspace
-// AGENTS.md (D-23). User-tier skills load now; workspace content loads now only if its
-// exact content was approved "always" before. Every failure, from a malformed SKILL.md to
-// an unreadable AGENTS.md, is a line written to diagnostics, never fatal.
-func BuildCatalog(cfg config.SkillsCfg, paths config.PathSet, diagnostics io.Writer) *Catalog {
+// BuildCatalog loads user skills; workspace approval waits until the frontend can answer it.
+func BuildCatalog(cfg config.SkillsCfg, paths config.PathSet, diagnostics io.Writer, approver core.Approver) *Catalog {
 	if diagnostics == nil {
 		diagnostics = io.Discard
 	}
-	catalog := &Catalog{
-		diagnostics: diagnostics,
-		trustPath:   filepath.Join(paths.StateDir, workspaceTrustFileName),
-		byName:      make(map[string]skill),
-	}
-	workspaceRoots, userRoots := classifySkillRoots(cfg, paths, diagnostics)
-	for _, root := range userRoots {
-		for _, discovered := range discoverSkillsUnderRoot(root, TierUser, diagnostics) {
-			addResolvingDuplicates(catalog.byName, discovered, diagnostics)
+	catalog := &Catalog{cfg: cfg, paths: paths, diagnostics: diagnostics, approver: approver, instructionPaths: []string{strings.ToLower(agentsFileName)}}
+	for _, root := range cfg.Roots {
+		resolved, err := paths.Resolve(root)
+		if err != nil || !isWithinWorkspace(resolved, paths.WorkspaceDir) {
+			continue
 		}
-	}
-
-	content := workspaceContent{dir: paths.WorkspaceDir, skills: make(map[string]skill)}
-	catalog.instructionPaths = []string{strings.ToLower(agentsFileName)}
-	for _, root := range workspaceRoots {
-		if rel, err := filepath.Rel(paths.WorkspaceDir, root); err == nil {
+		if rel, err := filepath.Rel(paths.WorkspaceDir, resolved); err == nil && isPathWithinRoot(resolved, paths.WorkspaceDir) {
 			catalog.instructionPaths = append(catalog.instructionPaths, strings.ToLower(filepath.ToSlash(rel)))
 		}
-		for _, discovered := range discoverSkillsUnderRoot(root, TierWorkspace, diagnostics) {
-			addResolvingDuplicates(content.skills, discovered, diagnostics)
-		}
 	}
-	content.agentsBlock = loadWorkspaceAgentsBlock(paths, diagnostics)
-	if content.isEmpty() {
-		return catalog
-	}
-	content.hash = content.reportHash()
-	if isWorkspaceContentTrusted(catalog.trustPath, content.hash) {
-		catalog.install(content)
-	} else {
-		catalog.pending = &content
-	}
+	catalog.replaceSnapshot(discoverSkills(cfg, paths, diagnostics), "", false)
 	return catalog
 }
 
-// RequestWorkspaceApproval asks approver once whether to load the pending workspace skills
-// and AGENTS.md, and loads them if allowed; "always" remembers a hash of their content and
-// folders, so an edit or the same repo at another path asks again. It blocks until answered, so callers run it beside the frontend.
-func (c *Catalog) RequestWorkspaceApproval(ctx context.Context, approver core.Approver) {
-	c.mu.RLock()
-	pending := c.pending
-	c.mu.RUnlock()
-	if pending == nil || approver == nil {
-		return
+// BuildSystemPromptSections approves the exact workspace snapshot once per session before exposing it.
+func (c *Catalog) BuildSystemPromptSections(ctx context.Context) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	decision, err := approver.RequestApproval(ctx, core.Operation{
-		Kind:        core.CapabilityFSRead,
-		Target:      pending.describe(),
-		Explanation: "add this repo's instructions to every prompt, from " + pending.dir,
-	})
-	if err != nil || decision == core.ApprovalDenied {
-		return
-	}
-	if decision == core.ApprovalAlways {
-		if err := trustWorkspaceContent(c.trustPath, pending.hash); err != nil {
-			fmt.Fprintf(c.diagnostics, "skills: remembering workspace approval: %v\n", err)
+	discovered := discoverSkills(c.cfg, c.paths, c.diagnostics)
+	agentsBlock := loadWorkspaceAgentsBlock(c.paths, c.diagnostics)
+	var workspaceSkills []skill
+	for _, s := range discovered {
+		if s.Tier == TierWorkspace {
+			workspaceSkills = append(workspaceSkills, s)
 		}
 	}
-	c.install(*pending)
-}
-
-// install makes approved workspace content live; a workspace skill shadows a user skill of
-// the same name (workspace > user).
-func (c *Catalog) install(content workspaceContent) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for name, next := range content.skills {
-		if existing, taken := c.byName[name]; taken {
-			fmt.Fprintf(c.diagnostics, "skills: %q from %s shadowed by %q from %s (workspace beats user)\n",
-				existing.Name, existing.Root, next.Name, next.Root)
-		}
-		c.byName[name] = next
+	encoded, err := json.Marshal(struct {
+		Skills []skill
+		Agents string
+	}{workspaceSkills, agentsBlock})
+	if err != nil {
+		return nil, fmt.Errorf("hash workspace instructions: %w", err)
 	}
-	c.agentsBlock = content.agentsBlock
-	c.pending = nil
+	fingerprint := sha256.Sum256(encoded)
+	if !c.hasDecision || c.decisionHash != fingerprint {
+		c.replaceSnapshot(discovered, "", false)
+		c.isApproved = false
+		if (len(workspaceSkills) > 0 || agentsBlock != "") && c.approver != nil {
+			decision, err := c.approver.RequestApproval(ctx, core.Operation{
+				Kind:           core.CapabilityFSRead,
+				Target:         c.paths.WorkspaceDir,
+				Explanation:    fmt.Sprintf("load workspace AGENTS.md and %d skills for this session (SHA-256 %x); changed content asks again", len(workspaceSkills), fingerprint),
+				IsIrreversible: true,
+			})
+			if err != nil {
+				return nil, err
+			}
+			c.isApproved = decision == core.ApprovalOnce
+		}
+		c.decisionHash, c.hasDecision = fingerprint, true
+	}
+	c.replaceSnapshot(discovered, agentsBlock, c.isApproved)
+	return c.ReportSystemPromptSections(), nil
 }
 
 // ReportIsWorkspaceInstructionPath reports whether workspacePath (relative, slash-separated)
@@ -164,18 +142,36 @@ func (c *Catalog) ReportIsWorkspaceInstructionPath(workspacePath string) bool {
 	return false
 }
 
-// addResolvingDuplicates keeps the first entry claimed for a name and warns about every later one.
-func addResolvingDuplicates(byName map[string]skill, next skill, diagnostics io.Writer) {
-	if existing, taken := byName[next.Name]; taken {
-		fmt.Fprintf(diagnostics, "skills: %q from %s shadowed by the earlier %q from %s\n",
+func (c *Catalog) replaceSnapshot(discovered []skill, agentsBlock string, isApproved bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.byName = make(map[string]skill)
+	c.agentsBlock = ""
+	for _, s := range discovered {
+		if s.Tier == TierUser || isApproved {
+			c.addResolvingDuplicates(s, c.diagnostics)
+		}
+	}
+	if isApproved {
+		c.agentsBlock = agentsBlock
+	}
+}
+
+// addResolvingDuplicates keeps the first entry claimed for a name and warns about every
+// later one, so discoverSkills' own ordering (workspace roots before user roots) is what
+// decides precedence — matching the ticket's "workspace > user > system" rule with the
+// system tier dropped (see Tier's doc comment).
+func (c *Catalog) addResolvingDuplicates(next skill, diagnostics io.Writer) {
+	if existing, taken := c.byName[next.Name]; taken {
+		fmt.Fprintf(diagnostics, "skills: %q from %s shadowed by the earlier %q from %s (workspace beats user)\n",
 			next.Name, next.Root, existing.Name, existing.Root)
 		return
 	}
-	byName[next.Name] = next
+	c.byName[next.Name] = next
 }
 
-// open returns a loaded skill on demand (progressive disclosure level 2).
-func (c *Catalog) open(name string) (skill, bool) {
+// selectSkill returns one approved snapshot, including the trust tier of its body.
+func (c *Catalog) selectSkill(name string) (skill, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	found, ok := c.byName[name]
@@ -242,9 +238,7 @@ func (c *Catalog) reportIndex() string {
 	return strings.Join(sections, "\n\n")
 }
 
-// ReportSystemPromptSections implements internal/agent/loop's SkillsIndex port: the
-// loop appends whatever this returns to its own fixed sections, never inspecting trust
-// tiers or delimiters itself.
+// ReportSystemPromptSections reports only the most recently approved snapshot.
 func (c *Catalog) ReportSystemPromptSections() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

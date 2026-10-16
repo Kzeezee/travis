@@ -106,3 +106,21 @@ target = "workspace:owned.txt"
 fixture = "broker_unreachable"
 assert_event = "PolicyDenied"
 assert_no_effect = "workspace:owned.txt"
+
+[[case]]
+name = "run a program with no exec grant"
+profile = "default"
+operation = "exec"
+target = "helper:write_marker"
+assert_event = "PolicyDenied"
+assert_no_effect = "workspace:exec-marker.txt"
+
+[[case]]
+name = "untrusted step cannot run a granted program after denied approval"
+profile = "default"
+operation = "exec"
+target = "helper:write_marker"
+exec_allow = ["**"]
+untrusted = true
+assert_event = "PolicyDenied"
+assert_no_effect = "workspace:exec-marker.txt"

@@ -41,14 +41,7 @@ func resolveServerCommand(command string) string {
 	}
 }
 
-// serverProcess owns one configured server's connection lifecycle: the exec-capability
-// gate, the subprocess, and restart-with-backoff after a crash. Policy itself still
-// treats exec as irreversible and always escalates to Ask (policy.go: "exec is
-// irreversible and always asks (D-27)") — that stays untouched for genuine exec
-// requests. trust is the narrow, MCP-specific exception: once policy has granted the
-// command and asks, a server the user already approved "always" for its exact (command,
-// args) skips the modal, so configured servers stop re-asking every session without
-// weakening D-27 for anything else.
+// serverProcess owns launches and restarts; remembered MCP trust never overrides a denied grant.
 type serverProcess struct {
 	name        string
 	cfg         config.MCPServerCfg
@@ -119,8 +112,7 @@ func (p *serverProcess) connect(ctx context.Context) (*mcpsdk.ClientSession, err
 	return session, nil
 }
 
-// authorizeExec never starts anything policy says Deny, so a command must be in
-// [security] exec_allow even when trusted; the trust store only answers policy's Ask.
+// authorizeExec checks current grants before remembered approval, so revoked grants always deny.
 func (p *serverProcess) authorizeExec(ctx context.Context, command string) error {
 	decision := p.policy.Evaluate(ctx, policy.Request{Kind: core.CapabilityExec, Target: command})
 	switch decision.Verdict {
@@ -170,8 +162,8 @@ func (p *serverProcess) requestApproval(ctx context.Context, command string) err
 	}
 }
 
-// buildServerEnv layers the server's configured env over travis's own minus the provider
-// credential, so a server still finds its runner (node, python, …) on PATH.
+// buildServerEnv layers the server's configured env over travis's own, so a server still
+// finds its runner (node, python, …) on PATH without the config needing to repeat it.
 func buildServerEnv(configured map[string]string) []string {
 	env := config.BuildEnvironmentWithoutSecrets()
 	for key, value := range configured {

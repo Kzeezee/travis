@@ -63,7 +63,7 @@ func (t *adaptedTool) Invoke(ctx context.Context, arguments json.RawMessage) (co
 
 	session, err := t.process.currentSession()
 	if err != nil {
-		return core.ToolOutput{IsError: true, Content: err.Error(), Display: "mcp server unavailable"}, nil
+		return core.ToolOutput{IsError: true, IsUntrusted: true, Content: core.WrapUntrustedContent(sourceName(t.server), err.Error()), Display: "mcp server unavailable"}, nil
 	}
 
 	result, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: t.remoteName, Arguments: arguments})
@@ -71,7 +71,7 @@ func (t *adaptedTool) Invoke(ctx context.Context, arguments json.RawMessage) (co
 		return core.ToolOutput{}, ctxErr
 	}
 	if err != nil {
-		return core.ToolOutput{IsError: true, Content: translateCallError(t.server, err).Error(), Display: "mcp call failed"}, nil
+		return core.ToolOutput{IsError: true, IsUntrusted: true, Content: core.WrapUntrustedContent(sourceName(t.server), translateCallError(t.server, err).Error()), Display: "mcp call failed"}, nil
 	}
 
 	// Display is the human summary shown in the transcript card (transcript.go: "Content is

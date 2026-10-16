@@ -12,16 +12,16 @@ import (
 
 // Error codes shared by the built-in tools; they are model-facing, so they stay stable.
 const (
-	errorInvalidArguments     = "invalid_arguments"
-	errorPathOutsideWorkspace = "path_outside_workspace"
-	errorFileNotFound         = "file_not_found"
-	errorPathIsDirectory      = "path_is_directory"
-	errorBinaryFile           = "binary_file"
-	errorReadFailed           = "read_failed"
-	errorWriteFailed          = "write_failed"
-	errorContentTooLarge      = "content_too_large"
-	errorEditAnchorNotFound   = "edit_anchor_not_found"
-	errorEditAnchorAmbiguous  = "edit_anchor_ambiguous"
+	errorInvalidArguments    = "invalid_arguments"
+	errorPermissionDenied    = "permission_denied"
+	errorFileNotFound        = "file_not_found"
+	errorPathIsDirectory     = "path_is_directory"
+	errorBinaryFile          = "binary_file"
+	errorReadFailed          = "read_failed"
+	errorWriteFailed         = "write_failed"
+	errorContentTooLarge     = "content_too_large"
+	errorEditAnchorNotFound  = "edit_anchor_not_found"
+	errorEditAnchorAmbiguous = "edit_anchor_ambiguous"
 )
 
 // decodeStrictArgs rejects unknown fields and trailing data, so a malformed call errors instead of half-running.
@@ -56,7 +56,7 @@ func buildErrorOutput(code string, fields map[string]any) core.ToolOutput {
 func buildBrokerErrorOutput(requested, workspaceRoot, fallbackCode string, err error) core.ToolOutput {
 	switch {
 	case errors.Is(err, core.ErrDenied):
-		return buildErrorOutput(errorPathOutsideWorkspace, map[string]any{"path": requested, "workspace": workspaceRoot})
+		return buildErrorOutput(errorPermissionDenied, map[string]any{"path": requested, "workspace": workspaceRoot, "detail": err.Error()})
 	case errors.Is(err, core.ErrNotFound):
 		return buildErrorOutput(errorFileNotFound, map[string]any{"path": requested})
 	case errors.Is(err, core.ErrIsDirectory):

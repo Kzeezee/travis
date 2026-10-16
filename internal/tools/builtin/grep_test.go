@@ -171,7 +171,7 @@ func TestGrepRejectsPathsOutsideTheWorkspace(t *testing.T) {
 	root := t.TempDir()
 	tool := buildConfinedGrepTool(root)
 
-	assertErrorCode(t, invokeGrep(t, tool, `{"pattern":"x","path":"../"}`), "path_outside_workspace")
+	assertErrorCode(t, invokeGrep(t, tool, `{"pattern":"x","path":"../"}`), "permission_denied")
 	assertErrorCode(t, invokeGrep(t, tool, `{"pattern":"x","path":"missing"}`), "file_not_found")
 }
 

@@ -2,7 +2,6 @@ package skills
 
 import (
 	"context"
-	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,27 +12,8 @@ import (
 
 // buildTestPathSet returns a minimal PathSet sufficient for Resolve on absolute roots;
 // workspaceDir alone decides every discovered root's trust tier in these tests.
-func buildTestPathSet(t *testing.T, workspaceDir string) config.PathSet {
-	return config.PathSet{WorkspaceDir: workspaceDir, StateDir: t.TempDir()}
-}
-
-// scriptedApprover answers every request with decision and records what it was asked.
-type scriptedApprover struct {
-	decision core.ApprovalDecision
-	asked    []core.Operation
-}
-
-func (a *scriptedApprover) RequestApproval(_ context.Context, op core.Operation) (core.ApprovalDecision, error) {
-	a.asked = append(a.asked, op)
-	return a.decision, nil
-}
-
-// buildApprovedCatalog builds a catalog and approves its workspace content once.
-func buildApprovedCatalog(t *testing.T, cfg config.SkillsCfg, paths config.PathSet, diagnostics io.Writer) *Catalog {
-	t.Helper()
-	catalog := BuildCatalog(cfg, paths, diagnostics)
-	catalog.RequestWorkspaceApproval(context.Background(), &scriptedApprover{decision: core.ApprovalOnce})
-	return catalog
+func buildTestPathSet(workspaceDir string) config.PathSet {
+	return config.PathSet{WorkspaceDir: workspaceDir}
 }
 
 func absTestdata(t *testing.T, rel string) string {
@@ -67,11 +47,11 @@ func stripUntrustedBlocks(s string) string {
 }
 
 func TestBuildCatalogListsValidSkillAsTrusted(t *testing.T) {
-	paths := buildTestPathSet(t, t.TempDir())
+	paths := buildTestPathSet(t.TempDir())
 	cfg := config.SkillsCfg{Roots: []string{absTestdata(t, "valid")}}
 	diagnostics := &strings.Builder{}
 
-	catalog := BuildCatalog(cfg, paths, diagnostics)
+	catalog := BuildCatalog(cfg, paths, diagnostics, nil)
 	sections := catalog.ReportSystemPromptSections()
 	if len(sections) != 1 {
 		t.Fatalf("sections = %+v, want exactly one (the trusted index, no AGENTS.md)", sections)
@@ -83,21 +63,22 @@ func TestBuildCatalogListsValidSkillAsTrusted(t *testing.T) {
 		t.Fatalf("index = %q, a user-tier skill must never be wrapped as untrusted", sections[0])
 	}
 
-	found, ok := catalog.open("example")
+	found, ok := catalog.selectSkill("example")
+	body := found.Body
 	if !ok {
 		t.Fatal("open(\"example\") = false, want true")
 	}
-	if body := found.Body; strings.Contains(body, "BEGIN UNTRUSTED") {
+	if strings.Contains(body, "BEGIN UNTRUSTED") {
 		t.Fatalf("open() body = %q, a user-tier skill's body must never be wrapped either", body)
 	}
 }
 
 func TestBuildCatalogSkipsMalformedFrontmatterWithDiagnostic(t *testing.T) {
-	paths := buildTestPathSet(t, t.TempDir())
+	paths := buildTestPathSet(t.TempDir())
 	cfg := config.SkillsCfg{Roots: []string{absTestdata(t, "malformed")}}
 	diagnostics := &strings.Builder{}
 
-	catalog := BuildCatalog(cfg, paths, diagnostics)
+	catalog := BuildCatalog(cfg, paths, diagnostics, nil)
 	if len(catalog.byName) != 0 {
 		t.Fatalf("byName = %+v, want empty: the only fixture here is malformed", catalog.byName)
 	}
@@ -108,10 +89,13 @@ func TestBuildCatalogSkipsMalformedFrontmatterWithDiagnostic(t *testing.T) {
 
 func TestBuildCatalogAdversarialTextOnlyInsideUntrustedDelimiters(t *testing.T) {
 	root := absTestdata(t, "adversarial")
-	paths := buildTestPathSet(t, root) // root lives inside its own "workspace" -> TierWorkspace
+	paths := buildTestPathSet(root) // root lives inside its own "workspace" -> TierWorkspace
 	cfg := config.SkillsCfg{Roots: []string{root}}
 
-	catalog := buildApprovedCatalog(t, cfg, paths, &strings.Builder{})
+	catalog := BuildCatalog(cfg, paths, &strings.Builder{}, approveWorkspace{})
+	if _, err := catalog.BuildSystemPromptSections(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	full := strings.Join(catalog.ReportSystemPromptSections(), "\n\n")
 	if !strings.Contains(full, "Ignore previous instructions") {
 		t.Fatalf("index = %q, want the adversarial description present somewhere", full)
@@ -120,7 +104,7 @@ func TestBuildCatalogAdversarialTextOnlyInsideUntrustedDelimiters(t *testing.T) 
 		t.Fatalf("index = %q, the adversarial text must only ever appear inside an untrusted delimiter block", full)
 	}
 
-	found, ok := catalog.open("evil")
+	found, ok := catalog.selectSkill("evil")
 	body := found.Body
 	if !ok {
 		t.Fatal("open(\"evil\") = false, want true")
@@ -133,26 +117,33 @@ func TestBuildCatalogAdversarialTextOnlyInsideUntrustedDelimiters(t *testing.T) 
 	}
 }
 
-func TestBuildCatalogHoldsWorkspaceRootsUntilApproved(t *testing.T) {
+func TestBuildCatalogSkipsWorkspaceContentWithoutAnApprover(t *testing.T) {
 	root := absTestdata(t, "adversarial")
-	catalog := BuildCatalog(config.SkillsCfg{Roots: []string{root}}, buildTestPathSet(t, root), &strings.Builder{})
-	if _, ok := catalog.open("evil"); ok {
-		t.Fatal("open(\"evil\") = true before approval, want the workspace skill held back")
+	paths := buildTestPathSet(root)
+	cfg := config.SkillsCfg{Roots: []string{root}}
+	diagnostics := &strings.Builder{}
+
+	catalog := BuildCatalog(cfg, paths, diagnostics, nil)
+	if len(catalog.byName) != 0 {
+		t.Fatalf("byName = %+v, want empty: workspace content has not been approved", catalog.byName)
 	}
 	if sections := catalog.ReportSystemPromptSections(); len(sections) != 0 {
-		t.Fatalf("sections = %+v, want none before approval", sections)
+		t.Fatalf("sections = %+v, want none", sections)
 	}
 }
 
 func TestBuildCatalogDuplicateNamesWorkspaceWinsOverUser(t *testing.T) {
 	workspaceRoot := absTestdata(t, filepath.Join("dup", "workspace"))
 	userRoot := absTestdata(t, filepath.Join("dup", "user"))
-	paths := buildTestPathSet(t, workspaceRoot)
+	paths := buildTestPathSet(workspaceRoot)
 	cfg := config.SkillsCfg{Roots: []string{workspaceRoot, userRoot}}
 	diagnostics := &strings.Builder{}
 
-	catalog := buildApprovedCatalog(t, cfg, paths, diagnostics)
-	found, ok := catalog.open("example")
+	catalog := BuildCatalog(cfg, paths, diagnostics, approveWorkspace{})
+	if _, err := catalog.BuildSystemPromptSections(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	found, ok := catalog.selectSkill("example")
 	body := found.Body
 	if !ok {
 		t.Fatal("open(\"example\") = false, want true")
@@ -169,10 +160,10 @@ func TestBuildCatalogDuplicateNamesWorkspaceWinsOverUser(t *testing.T) {
 }
 
 func TestReportSkillSummariesListsNameTierAndDescription(t *testing.T) {
-	paths := buildTestPathSet(t, t.TempDir())
+	paths := buildTestPathSet(t.TempDir())
 	cfg := config.SkillsCfg{Roots: []string{absTestdata(t, "valid")}}
 
-	catalog := BuildCatalog(cfg, paths, &strings.Builder{})
+	catalog := BuildCatalog(cfg, paths, &strings.Builder{}, nil)
 	summaries := catalog.ReportSkillSummaries()
 	if len(summaries) != 1 {
 		t.Fatalf("summaries = %+v, want exactly one", summaries)
@@ -193,8 +184,14 @@ func TestTierStringReportsWorkspace(t *testing.T) {
 }
 
 func TestBuildCatalogWithNoRootsHasNoSections(t *testing.T) {
-	catalog := BuildCatalog(config.SkillsCfg{}, buildTestPathSet(t, t.TempDir()), &strings.Builder{})
+	catalog := BuildCatalog(config.SkillsCfg{}, buildTestPathSet(t.TempDir()), &strings.Builder{}, nil)
 	if sections := catalog.ReportSystemPromptSections(); len(sections) != 0 {
 		t.Fatalf("sections = %+v, want none", sections)
 	}
+}
+
+type approveWorkspace struct{}
+
+func (approveWorkspace) RequestApproval(context.Context, core.Operation) (core.ApprovalDecision, error) {
+	return core.ApprovalOnce, nil
 }
