@@ -54,6 +54,17 @@ func TestSeatbeltProfileGrantsTheAllowlist(t *testing.T) {
 		spec.AllowNetwork = true
 		assertProbeEscaped(t, spec)
 	})
+
+	// localhost resolves from the hosts file, so only a real name proves lookups reach mDNSResponder.
+	t.Run("hostname lookup with AllowNetwork", func(t *testing.T) {
+		const hostname = "example.com"
+		if _, err := net.DefaultResolver.LookupHost(t.Context(), hostname); err != nil {
+			t.Skipf("no DNS outside the sandbox: %v", err)
+		}
+		spec := buildProbeSpec(t, self, "resolve", hostname)
+		spec.AllowNetwork = true
+		assertProbeEscaped(t, spec)
+	})
 }
 
 // AllowNetwork means IP only; a Unix socket would reach local services such as docker.sock or ssh-agent.

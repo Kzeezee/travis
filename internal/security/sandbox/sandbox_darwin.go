@@ -36,9 +36,10 @@ const baseSeatbeltProfile = `(version 1)
 `
 
 // networkSeatbeltProfile adds IP sockets plus the resolver and trust services that DNS and TLS go through.
-// Unix sockets stay denied: an unfiltered network* would reach local services such as docker.sock or ssh-agent.
+// Unix sockets stay denied except mDNSResponder, which every hostname lookup goes through: an unfiltered
+// network* would reach local services such as docker.sock or ssh-agent.
 const networkSeatbeltProfile = `(allow system-socket)
-(allow network-outbound (remote ip))
+(allow network-outbound (remote ip) (literal "/private/var/run/mDNSResponder"))
 (allow network-bind network-inbound (local ip))
 (allow mach-lookup
   (global-name "com.apple.dnssd.service") (global-name "com.apple.trustd") (global-name "com.apple.trustd.agent")

@@ -60,6 +60,8 @@ func runEscapeProbe(probe string, args []string) int {
 		if conn, err = dialer.DialContext(context.Background(), network, target); err == nil {
 			_ = conn.Close()
 		}
+	case "resolve":
+		_, err = net.DefaultResolver.LookupHost(context.Background(), target)
 	case "spawn-heartbeat":
 		return spawnHeartbeatAndWait(target)
 	case "heartbeat":
