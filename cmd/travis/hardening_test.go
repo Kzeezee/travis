@@ -34,12 +34,40 @@ func (a *hardeningApprover) RequestApproval(_ context.Context, op core.Operation
 	return core.ApprovalOnce, nil
 }
 
-func TestRedTeamGateInjectedMCPResultCannotWriteWithoutApproval(t *testing.T) {
+// testMCPSandboxing launches through the travis-broker TestMain built beside this binary, the real sandbox launcher.
+var testMCPSandboxing = mcp.Sandboxing{ResolveLauncher: broker.ResolveBrokerExecutable, IsRequired: true}
+
+func buildFakeMCPServer(t *testing.T) string {
+	t.Helper()
 	serverPath := filepath.Join(t.TempDir(), "fake-mcp.exe")
 	build := exec.CommandContext(t.Context(), "go", "build", "-o", serverPath, "github.com/Kzeezee/travis/internal/tools/mcp/testdata/fakeserver")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build fake MCP: %v\n%s", err, output)
 	}
+	return serverPath
+}
+
+// waitForRegisteredTool waits for an MCP server's tool, which registers once its sandboxed process answers tools/list.
+func waitForRegisteredTool(t *testing.T, session *chatSession, name string) {
+	t.Helper()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	ticks := time.NewTicker(10 * time.Millisecond)
+	defer ticks.Stop()
+	for {
+		if _, hasTool := session.toolRegistry.Lookup(name); hasTool {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("MCP tool %s never registered", name)
+		case <-ticks.C:
+		}
+	}
+}
+
+func TestRedTeamGateInjectedMCPResultCannotWriteWithoutApproval(t *testing.T) {
+	serverPath := buildFakeMCPServer(t)
 	t.Setenv("OPENAI_API_KEY", "canary-provider-key-never-forward")
 	paths := config.PathSet{WorkspaceDir: t.TempDir(), StateDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t)}
 	var diagnostics strings.Builder
@@ -76,28 +104,13 @@ func TestRedTeamGateInjectedMCPResultCannotWriteWithoutApproval(t *testing.T) {
 		Cfg: cfg, Paths: paths, Session: testSessionID, Provider: provider, Model: "scripted-model",
 		Files: remote, Log: remote, Memory: remote, Commands: remote, Pages: remote,
 		Bus: bus, Diagnostics: io.Discard, Redactor: redact.New(),
-		Approver: approver, MCPPolicy: mcpPolicy,
-		// The travis-broker TestMain built beside this binary is the real sandbox launcher.
-		MCPSandboxing: mcp.Sandboxing{ResolveLauncher: broker.ResolveBrokerExecutable, IsRequired: true},
+		Approver: approver, MCPPolicy: mcpPolicy, MCPSandboxing: testMCPSandboxing,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer session.close()
-	deadline := time.NewTimer(10 * time.Second)
-	defer deadline.Stop()
-	ticks := time.NewTicker(10 * time.Millisecond)
-	defer ticks.Stop()
-	for {
-		if _, hasTool := session.toolRegistry.Lookup("mcp_fake_echo"); hasTool {
-			break
-		}
-		select {
-		case <-deadline.C:
-			t.Fatal("fake MCP server never registered")
-		case <-ticks.C:
-		}
-	}
+	waitForRegisteredTool(t, session, "mcp_fake_echo")
 	if err := session.conversation.RunAssistantTurn(t.Context(), "use the MCP tool"); err != nil {
 		t.Fatal(err)
 	}

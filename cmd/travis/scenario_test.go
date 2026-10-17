@@ -14,6 +14,7 @@ import (
 	"github.com/Kzeezee/travis/internal/providers/cassette"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
 	"github.com/Kzeezee/travis/internal/security/broker"
+	"github.com/Kzeezee/travis/internal/security/policy"
 	"github.com/Kzeezee/travis/internal/security/redact"
 )
 
@@ -86,7 +87,19 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 	cfg := &config.Config{Brain: config.BrainCfg{MaxSteps: maxSteps}, Tools: config.ToolsCfg{MaxExposed: maxExposed}}
 	var diagnostics strings.Builder
 	bus := buildSessionBus(&diagnostics)
-	remote, _ := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus})
+	// Only an MCP scenario has someone to approve its server's launch; the rest keep nobody, the fail-closed reading.
+	var approver core.Approver
+	var mcpPolicy policy.Policy
+	if sc.MCPFakeServer {
+		approver = &hardeningApprover{}
+		serverPath := buildFakeMCPServer(t)
+		cfg.Security = config.SecurityCfg{ExecAllow: []string{filepath.ToSlash(serverPath)}, RequireSandbox: true}
+		cfg.MCP = config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": {Command: serverPath}}}
+		if mcpPolicy, err = broker.BuildSessionPolicy("default", broker.SessionRoots{Paths: paths, Home: t.TempDir(), Temp: t.TempDir(), ExecAllow: cfg.Security.ExecAllow}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	remote, _ := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus, Approver: approver})
 
 	model := sc.Model
 	if model == "" {
@@ -106,9 +119,13 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 		Cfg: cfg, Paths: paths, Session: testSessionID, Provider: provider, Model: model,
 		Files: remote, Log: remote, Memory: remote, Commands: remote, Pages: remote,
 		Bus: bus, Diagnostics: &diagnostics, Redactor: redact.New(),
+		Approver: approver, MCPPolicy: mcpPolicy, MCPSandboxing: testMCPSandboxing,
 	})
 	if err != nil {
 		return scenario.Result{}, err
+	}
+	if sc.MCPFakeServer {
+		waitForRegisteredTool(t, session, "mcp_fake_echo")
 	}
 	events, _ := session.bus.Subscribe(nil)
 
