@@ -88,7 +88,7 @@ func TestStartedServerReportsItsSandboxTier(t *testing.T) {
 		t.Fatalf("started tiers = %v, want one real sandbox tier", tiers)
 	}
 	// The tier leads the approval line, so a narrow terminal truncates the server name, not the sandbox.
-	if asked := approver.askedOps(); len(asked) != 1 || !strings.HasPrefix(asked[0].Explanation, tiers[0]+" sandbox, no network · ") {
+	if asked := approver.askedOps(); len(asked) != 1 || !strings.HasPrefix(asked[0].Explanation, reportSandboxSummary(launchGrant{Tier: sandbox.Tier(tiers[0])})+" · ") {
 		t.Fatalf("approval %+v does not lead with the sandbox tier and network", asked)
 	}
 }
@@ -223,5 +223,26 @@ func TestRedTeamGatePlantedStderrLogLinkIsNotFollowed(t *testing.T) {
 	}
 	if content, err := os.ReadFile(victim); err != nil || string(content) != "keep me" {
 		t.Fatalf("the link target now holds %q (%v), want it untouched", content, err)
+	}
+}
+
+// The approval line must never claim "no network" for a tier that cannot block it (DESIGN §9.2.1).
+func TestSandboxSummaryNeverClaimsNetworkContainmentATierLacks(t *testing.T) {
+	cases := []struct {
+		grant launchGrant
+		want  string
+	}{
+		{launchGrant{Tier: sandbox.TierSeatbelt}, "seatbelt sandbox, no network"},
+		{launchGrant{Tier: sandbox.TierLandlock}, "landlock sandbox, no network"},
+		{launchGrant{Tier: sandbox.TierLandlockNoNet}, "landlock-no-net sandbox, network not blocked"},
+		{launchGrant{Tier: sandbox.TierRestrictedToken}, "restricted-token sandbox, network not blocked"},
+		{launchGrant{Tier: sandbox.TierSeatbelt, AllowNetwork: true}, "seatbelt sandbox, network on"},
+		{launchGrant{Tier: sandbox.TierRestrictedToken, AllowNetwork: true}, "restricted-token sandbox, network on"},
+		{launchGrant{Tier: sandbox.TierNone}, "no sandbox"},
+	}
+	for _, c := range cases {
+		if got := reportSandboxSummary(c.grant); got != c.want {
+			t.Errorf("reportSandboxSummary(%+v) = %q, want %q", c.grant, got, c.want)
+		}
 	}
 }

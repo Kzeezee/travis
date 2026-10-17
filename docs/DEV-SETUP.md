@@ -298,7 +298,9 @@ MCP servers run inside the OS sandbox. A server can read its runner's install fo
 (for example `/opt/homebrew` for npx, minus its `var` folder, where Homebrew keeps
 local databases) and write only its own scratch folder,
 `<state dir>/mcp/<name>`, where its home, temp and npm/uv caches live. The network is
-off unless the server allows it:
+off unless the server allows it, except under `restricted-token` (Windows) and
+`landlock-no-net` (Linux before 6.15), which cannot block it; the approval prompt says
+`network not blocked` there:
 
 ```toml
 [mcp.servers.everything]

@@ -22,6 +22,12 @@ const (
 	TierRestrictedToken Tier = "restricted-token" // low-integrity restricted token + job object; no network containment (DESIGN §9.2.1)
 )
 
+// CanContainNetwork reports whether this tier blocks network access when AllowNetwork is false; the UI must not
+// claim "no network" for a tier that cannot deliver it (DESIGN §9.2.1).
+func (t Tier) CanContainNetwork() bool {
+	return t == TierLandlock || t == TierSeatbelt
+}
+
 // LauncherArg is the hidden first argument that switches a launcher binary into RunLauncher.
 const LauncherArg = "__sandbox-launch"
 

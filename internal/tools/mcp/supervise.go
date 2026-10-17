@@ -185,6 +185,8 @@ func reportSandboxSummary(grant launchGrant) string {
 		return "no sandbox"
 	case grant.AllowNetwork:
 		return string(grant.Tier) + " sandbox, network on"
+	case !grant.Tier.CanContainNetwork():
+		return string(grant.Tier) + " sandbox, network not blocked"
 	default:
 		return string(grant.Tier) + " sandbox, no network"
 	}
