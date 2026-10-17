@@ -17,6 +17,7 @@ type Tier string
 const (
 	TierNone            Tier = "none"
 	TierLandlock        Tier = "landlock"
+	TierLandlockNoNet   Tier = "landlock-no-net" // kernel older than Landlock ABI v4 (Linux 6.7): files only, no network containment
 	TierSeatbelt        Tier = "seatbelt"
 	TierRestrictedToken Tier = "restricted-token" // low-integrity restricted token + job object; no network containment (DESIGN §9.2.1)
 )

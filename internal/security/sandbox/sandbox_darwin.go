@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -51,15 +50,7 @@ func prepareCommandForOS(cmd *exec.Cmd, _ Spec) (Tier, error) {
 	if _, err := os.Stat(sandboxExecPath); err != nil {
 		return TierNone, fmt.Errorf("find %s: %w", sandboxExecPath, core.ErrUnsupported)
 	}
-	// macOS has no job object, so the launcher leads a process group that the target and its descendants inherit,
-	// and cancellation kills the whole group. A descendant that calls setsid leaves the group and outlives it.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-			return fmt.Errorf("kill sandboxed process group: %w", err)
-		}
-		return nil
-	}
+	killGroupOnCancel(cmd)
 	return TierSeatbelt, nil
 }
 

@@ -138,8 +138,8 @@ func TestSandboxEscape(t *testing.T) {
 	})
 
 	t.Run("network connect is denied without AllowNetwork", func(t *testing.T) {
-		if tier == sandbox.TierRestrictedToken {
-			t.Skip("restricted-token tier has no network containment (DESIGN §9.2.1)")
+		if tier == sandbox.TierRestrictedToken || tier == sandbox.TierLandlockNoNet {
+			t.Skipf("%s tier has no network containment (DESIGN §9.2.1)", tier)
 		}
 		var listenConfig net.ListenConfig
 		listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
