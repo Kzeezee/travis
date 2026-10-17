@@ -11,6 +11,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/charmbracelet/x/exp/teatest/v2 v2.0.0-20260924144451-d676b019604b
 	github.com/charmbracelet/x/term v0.2.2
+	github.com/landlock-lsm/go-landlock v0.10.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/pelletier/go-toml/v2 v2.4.3
@@ -42,4 +43,5 @@ require (
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
+	kernel.org/pub/linux/libs/security/libcap/psx v1.2.77 // indirect
 )

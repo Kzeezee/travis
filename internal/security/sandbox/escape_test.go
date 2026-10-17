@@ -121,6 +121,8 @@ func TestSandboxEscape(t *testing.T) {
 		t.Fatalf("BuildCommand: %v", err)
 	}
 
+	canContainNetwork := tier != sandbox.TierRestrictedToken && tier != sandbox.TierLandlockNoNet
+
 	t.Run("write outside scratch is denied", func(t *testing.T) {
 		outside := filepath.Join(t.TempDir(), "escaped.txt")
 		assertProbeDenied(t, buildProbeSpec(t, self, "write", outside))
@@ -138,16 +140,17 @@ func TestSandboxEscape(t *testing.T) {
 	})
 
 	t.Run("network connect is denied without AllowNetwork", func(t *testing.T) {
-		if tier == sandbox.TierRestrictedToken {
-			t.Skip("restricted-token tier has no network containment (DESIGN §9.2.1)")
+		if !canContainNetwork {
+			t.Skipf("%s tier has no network containment (DESIGN §9.2.1)", tier)
 		}
-		var listenConfig net.ListenConfig
-		listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
+		assertProbeDenied(t, buildProbeSpec(t, self, "connect", listenOnLoopbackTCP(t)))
+	})
+
+	t.Run("unix socket connect is denied without AllowNetwork", func(t *testing.T) {
+		if !canContainNetwork {
+			t.Skipf("%s tier has no network containment (DESIGN §9.2.1)", tier)
 		}
-		t.Cleanup(func() { _ = listener.Close() })
-		assertProbeDenied(t, buildProbeSpec(t, self, "connect", listener.Addr().String()))
+		assertProbeDenied(t, buildProbeSpec(t, self, "connect-unix", listenOnUnixSocket(t)))
 	})
 
 	t.Run("no process in the tree survives cancellation", func(t *testing.T) {
@@ -156,6 +159,35 @@ func TestSandboxEscape(t *testing.T) {
 		spec.Argv[1] = heartbeatPath
 		assertTreeDiesOnCancel(t, spec, heartbeatPath)
 	})
+}
+
+func listenOnLoopbackTCP(t *testing.T) string {
+	t.Helper()
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	return listener.Addr().String()
+}
+
+// listenOnUnixSocket returns the path of a socket that local services such as docker.sock stand in for.
+func listenOnUnixSocket(t *testing.T) string {
+	t.Helper()
+	// t.TempDir paths can pass the ~104-byte Unix socket path limit, so the socket gets a shorter directory.
+	socketDir, err := os.MkdirTemp("", "sb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "unix", filepath.Join(socketDir, "s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	return listener.Addr().String()
 }
 
 // buildProbeSpec confines a probe to a fresh scratch directory, with read access only to the probe binary.
