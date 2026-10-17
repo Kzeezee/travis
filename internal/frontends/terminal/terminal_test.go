@@ -143,6 +143,32 @@ func TestBrokerUnavailableReplacesTheStatusBarWithAFailureBar(t *testing.T) {
 	}
 }
 
+func TestStatusBarShowsTheMCPSandboxTier(t *testing.T) {
+	cases := map[string]struct {
+		tiers []string
+		want  string
+	}{
+		"no mcp server":                   {nil, ""},
+		"sandboxed server":                {[]string{"seatbelt"}, "sandbox: seatbelt"},
+		"unconfined server":               {[]string{"none"}, "⚠ sandbox: none"},
+		"unconfined then sandboxed stays": {[]string{"none", "landlock"}, "⚠ sandbox: none"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "test-model"})
+			var events []core.Event
+			for _, tier := range c.tiers {
+				events = append(events, core.MCPServerStarted{Server: "notes", Tier: tier})
+			}
+			updated, _ := m.Update(eventBatchMsg{events: events})
+			view := renderPlainView(updated.(chatModel))
+			if c.want == "" && strings.Contains(view, "sandbox:") || c.want != "" && !strings.Contains(view, c.want) {
+				t.Fatalf("got view\n%s\nwant status bar to show %q", view, c.want)
+			}
+		})
+	}
+}
+
 func TestCancelKeysInterruptTheRunningTurn(t *testing.T) {
 	for _, cancelKey := range []tea.KeyPressMsg{escKey, ctrlKey('c')} {
 		t.Run(cancelKey.String(), func(t *testing.T) {

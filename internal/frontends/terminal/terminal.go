@@ -232,6 +232,8 @@ type chatModel struct {
 	// brokerFailure is set once the broker connection breaks; it never clears, since every
 	// later effect fails closed until travis restarts.
 	brokerFailure string
+	// sandboxTier is the tier MCP servers run under, empty until one starts (DESIGN §9.2.1: always shown).
+	sandboxTier string
 
 	cancelTurn        context.CancelFunc // set only while a turn runs
 	isCancelRequested bool
@@ -284,6 +286,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, event := range msg.events {
 			if unavailable, isUnavailable := event.(core.BrokerUnavailable); isUnavailable {
 				m.brokerFailure = unavailable.Reason
+			}
+			if started, isStarted := event.(core.MCPServerStarted); isStarted {
+				m.sandboxTier = recordSandboxTier(m.sandboxTier, started.Tier)
 			}
 			m.transcript.applyEvent(event)
 		}
