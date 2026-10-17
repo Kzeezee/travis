@@ -15,7 +15,7 @@ Scope per D-14: the `strict` tier, applied to MCP servers, on all three OSes.
 | | |
 |---|---|
 | Changes | Throwaway branch. Run a real `npx` MCP server under Landlock, `sandbox-exec`, and a low-integrity restricted token. Record what breaks (npm cache writes are the expected failure). |
-| Output | A short note in this folder closing OQ-16 and OQ-24, and fixing `allow_net` as a boolean for v1. |
+| Output | A short note in this folder closing OQ-16 and OQ-24, and fixing `allow_net` as a boolean for v1: [phase-4-spike.md](phase-4-spike.md). |
 | Depends on | Nothing. Informs 4B–4D. |
 
 ### 4A Interface and launcher (new)
