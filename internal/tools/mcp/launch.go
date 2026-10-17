@@ -61,7 +61,8 @@ func (p *serverProcess) buildLaunchCommand(ctx context.Context) (*exec.Cmd, laun
 		grant.Tier = tier
 		return cmd, grant, nil
 	case errors.Is(err, core.ErrUnsupported) && !p.sandboxing.IsRequired:
-		cmd = exec.CommandContext(ctx, executable, p.cfg.Args...) //nolint:gosec // the user turned off require_sandbox; command and args come from their own config
+		// The user turned off require_sandbox; command and args come from their own config.
+		cmd = exec.CommandContext(ctx, executable, p.cfg.Args...)
 		cmd.Env = buildServerEnv(p.cfg.Env)
 		return cmd, grant, nil
 	case errors.Is(err, core.ErrUnsupported):
