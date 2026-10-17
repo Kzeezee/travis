@@ -150,12 +150,37 @@ func TestSandboxEscape(t *testing.T) {
 		assertProbeDenied(t, buildProbeSpec(t, self, "connect", listener.Addr().String()))
 	})
 
+	t.Run("unix socket connect is denied without AllowNetwork", func(t *testing.T) {
+		if tier == sandbox.TierRestrictedToken || tier == sandbox.TierLandlockNoNet {
+			t.Skipf("%s tier has no network containment (DESIGN §9.2.1)", tier)
+		}
+		assertProbeDenied(t, buildProbeSpec(t, self, "connect-unix", listenOnUnixSocket(t)))
+	})
+
 	t.Run("no process in the tree survives cancellation", func(t *testing.T) {
 		spec := buildProbeSpec(t, self, "spawn-heartbeat", "")
 		heartbeatPath := filepath.Join(spec.WritePaths[0], "heartbeat")
 		spec.Argv[1] = heartbeatPath
 		assertTreeDiesOnCancel(t, spec, heartbeatPath)
 	})
+}
+
+// listenOnUnixSocket returns the path of a socket that local services such as docker.sock stand in for.
+func listenOnUnixSocket(t *testing.T) string {
+	t.Helper()
+	// t.TempDir paths can pass the ~104-byte Unix socket path limit, so the socket gets a shorter directory.
+	socketDir, err := os.MkdirTemp("", "sb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "unix", filepath.Join(socketDir, "s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	return listener.Addr().String()
 }
 
 // buildProbeSpec confines a probe to a fresh scratch directory, with read access only to the probe binary.

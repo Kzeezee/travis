@@ -8,11 +8,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
-
-	llsyscall "github.com/landlock-lsm/go-landlock/landlock/syscall"
 
 	"github.com/Kzeezee/travis/internal/security/sandbox"
 )
@@ -67,26 +64,14 @@ func TestSandboxGrantsTheAllowlist(t *testing.T) {
 
 // AllowNetwork means IP only; a Unix socket would reach local services such as docker.sock or ssh-agent.
 func TestSandboxDeniesUnixSocketsWithAllowNetwork(t *testing.T) {
-	if abi, _ := llsyscall.LandlockGetABIVersion(); runtime.GOOS == "linux" && abi < 9 {
-		t.Skipf("landlock abi %d cannot deny pathname Unix sockets; v9 can", abi)
-	}
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// t.TempDir paths can pass the ~104-byte Unix socket path limit, so the socket gets a shorter directory.
-	socketDir, err := os.MkdirTemp("", "sb")
-	if err != nil {
-		t.Fatal(err)
+	spec := buildProbeSpec(t, self, "connect-unix", listenOnUnixSocket(t))
+	if _, tier, _ := sandbox.BuildCommand(t.Context(), spec); tier == sandbox.TierLandlockNoNet {
+		t.Skipf("%s tier cannot deny Unix sockets", tier)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
-	var listenConfig net.ListenConfig
-	listener, err := listenConfig.Listen(t.Context(), "unix", filepath.Join(socketDir, "s"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
-	spec := buildProbeSpec(t, self, "connect-unix", listener.Addr().String())
 	spec.AllowNetwork = true
 	assertProbeDenied(t, spec)
 }

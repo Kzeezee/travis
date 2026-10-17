@@ -14,7 +14,7 @@ func TestSandboxReportsTheTierTheKernelSupports(t *testing.T) {
 	switch {
 	case err != nil || abi < 1:
 		want = sandbox.TierNone
-	case abi < 4:
+	case abi < 9:
 		want = sandbox.TierLandlockNoNet
 	}
 	_, tier, _ := sandbox.BuildCommand(t.Context(), buildValidSpec(t))

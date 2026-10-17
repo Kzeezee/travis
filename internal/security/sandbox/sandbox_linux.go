@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"syscall"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
@@ -14,8 +15,9 @@ import (
 
 // Linux backend: the launcher restricts itself with Landlock, which every descendant inherits, then execs the target.
 
-// landlockNetworkABI is the first Landlock ABI that can deny TCP connect and bind.
-const landlockNetworkABI = 4
+// landlockNetworkABI is the first Landlock ABI that denies Unix socket connects as well as TCP; earlier ones
+// leave docker.sock and ssh-agent reachable, so they do not count as network containment.
+const landlockNetworkABI = 9
 
 // systemReadPaths are what a dynamically linked target needs to start; missing ones are skipped.
 var systemReadPaths = []string{
@@ -61,7 +63,7 @@ func applyToSelf(spec Spec) error {
 		return err
 	}
 	config := landlock.V10.BestEffort()
-	readPaths := append(append([]string{}, systemReadPaths...), spec.ReadPaths...)
+	readPaths := slices.Concat(systemReadPaths, spec.ReadPaths)
 	if spec.AllowNetwork {
 		config.HandledAccessNet = 0
 		readPaths = append(readPaths, networkReadPaths...)
