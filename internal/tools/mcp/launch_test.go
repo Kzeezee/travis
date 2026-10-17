@@ -178,3 +178,17 @@ func TestBuildSandboxSpecConfinesWritesToScratchAndConfiguredPaths(t *testing.T)
 		t.Fatalf("write paths = %v, want only scratch and the configured path", spec.WritePaths)
 	}
 }
+
+// The only explanation a server gives for dying at startup is on its stderr, so it must reach diagnostics.
+func TestServerStartupErrorReachesDiagnostics(t *testing.T) {
+	approver := &fakeApprover{decision: core.ApprovalOnce}
+	process, _ := buildTestProcess(t, buildTestServerConfig("-require-home", "/nowhere"), grantedExecPolicy(), approver)
+	diagnostics := &syncBuffer{}
+	process.diagnostics = diagnostics
+	if err := connectAndClose(t, process); err == nil {
+		t.Fatal("a server that exits at startup connected")
+	}
+	if !strings.Contains(diagnostics.String(), `want "/nowhere"`) {
+		t.Fatalf("diagnostics = %q, want the server's own stderr", diagnostics.String())
+	}
+}

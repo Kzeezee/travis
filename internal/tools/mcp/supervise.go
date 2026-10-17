@@ -109,6 +109,8 @@ func (p *serverProcess) connect(ctx context.Context) (*mcpsdk.ClientSession, err
 	if err := p.authorizeExec(ctx, p.cfg.Command, grant); err != nil {
 		return nil, err
 	}
+	// A server that dies at startup says why only on stderr: an npm network error, a sandbox denial.
+	cmd.Stderr = p.diagnostics
 
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "travis", Version: clientVersion}, nil)
 	session, err := client.Connect(ctx, &mcpsdk.CommandTransport{Command: cmd}, nil)
