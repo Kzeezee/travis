@@ -157,7 +157,7 @@ func (p *serverProcess) requestApproval(ctx context.Context, command string, gra
 	op := core.Operation{
 		Kind:        core.CapabilityExec,
 		Target:      command,
-		Explanation: fmt.Sprintf("start local MCP server %q (%s), sandbox: %s, network: %s", p.name, command, grant.Tier, reportNetworkAccess(grant.AllowNetwork)),
+		Explanation: fmt.Sprintf("%s · start MCP server %q", reportSandboxSummary(grant), p.name),
 	}
 	decision, err := p.approver.RequestApproval(ctx, op)
 	if err != nil {
@@ -178,11 +178,16 @@ func (p *serverProcess) requestApproval(ctx context.Context, command string, gra
 	}
 }
 
-func reportNetworkAccess(isAllowed bool) string {
-	if isAllowed {
-		return "allowed"
+// reportSandboxSummary leads the approval line, so the tier and network survive truncation in a narrow terminal.
+func reportSandboxSummary(grant launchGrant) string {
+	switch {
+	case grant.Tier == sandbox.TierNone:
+		return "no sandbox"
+	case grant.AllowNetwork:
+		return string(grant.Tier) + " sandbox, network on"
+	default:
+		return string(grant.Tier) + " sandbox, no network"
 	}
-	return "blocked"
 }
 
 // superviseRestarts reconnects after an unexpected exit, with backoff, up to

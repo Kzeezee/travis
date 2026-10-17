@@ -87,8 +87,9 @@ func TestStartedServerReportsItsSandboxTier(t *testing.T) {
 	if len(tiers) != 1 || tiers[0] == string(sandbox.TierNone) {
 		t.Fatalf("started tiers = %v, want one real sandbox tier", tiers)
 	}
-	if asked := approver.askedOps(); len(asked) != 1 || !strings.Contains(asked[0].Explanation, "sandbox: "+tiers[0]) {
-		t.Fatalf("approval %+v does not name the sandbox tier", asked)
+	// The tier leads the approval line, so a narrow terminal truncates the server name, not the sandbox.
+	if asked := approver.askedOps(); len(asked) != 1 || !strings.HasPrefix(asked[0].Explanation, tiers[0]+" sandbox, no network · ") {
+		t.Fatalf("approval %+v does not lead with the sandbox tier and network", asked)
 	}
 }
 
@@ -117,6 +118,9 @@ func TestUnrequiredSandboxRunsTheServerUnconfinedAtTierNone(t *testing.T) {
 	}
 	if tiers := sink.reportStartedTiers(); !slices.Equal(tiers, []string{string(sandbox.TierNone)}) {
 		t.Fatalf("started tiers = %v, want [none]", tiers)
+	}
+	if asked := approver.askedOps(); len(asked) != 1 || !strings.HasPrefix(asked[0].Explanation, "no sandbox · ") {
+		t.Fatalf("approval %+v does not say the server runs unsandboxed", asked)
 	}
 }
 
