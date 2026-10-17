@@ -324,7 +324,8 @@ keeps the workspace instructions out of the prompt and `skill_open`.
 | --- | --- |
 | `command not found: go` in a new terminal | PATH not picked up — restart the terminal, or check the install location |
 | A newly approved MCP server's tools are absent from the first reply | Discovery runs asynchronously; wait for the server's tools to appear in `/tools` before sending the request |
-| An npx MCP server exits at launch with an npm `network` or `EAI_AGAIN` error | Its first launch downloads the package but `allow_net` is off; set `allow_net = true` for that server |
+| An MCP server did not start | Its own errors are in `<state dir>/mcp/<name>/stderr.log`, which the startup line names |
+| That log shows an npm `network`, `ENOTFOUND` or `EAI_AGAIN` error | Its first launch downloads the package but `allow_net` is off; set `allow_net = true` for that server |
 | `gopls` not found, but it is installed | `$(go env GOPATH)/bin` missing from PATH (§2) |
 | Golden-file tests fail only on Windows | line endings. Goldens normalise before comparing (§8.1) — the test is wrong, not your machine |
 | Tests pass locally, fail in CI | CI runs `-race` natively on three OSes. Run `go test -race ./...` before pushing |

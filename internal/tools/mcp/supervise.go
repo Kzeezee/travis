@@ -109,12 +109,19 @@ func (p *serverProcess) connect(ctx context.Context) (*mcpsdk.ClientSession, err
 	if err := p.authorizeExec(ctx, p.cfg.Command, grant); err != nil {
 		return nil, err
 	}
-	// A server that dies at startup says why only on stderr: an npm network error, a sandbox denial.
-	cmd.Stderr = p.diagnostics
+	// A server that dies at startup says why only on stderr (an npm network error, a sandbox denial). It goes to a
+	// file, not the terminal, where a chatty server's log lines would draw over the chat screen.
+	stderrLog, err := createStderrLog(p.scratchDir)
+	if err != nil {
+		return nil, fmt.Errorf("mcp server %q: %w", p.name, err)
+	}
+	defer stderrLog.Close() // the child holds its own copy once started
+	cmd.Stderr = stderrLog
 
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "travis", Version: clientVersion}, nil)
 	session, err := client.Connect(ctx, &mcpsdk.CommandTransport{Command: cmd}, nil)
 	if err != nil {
+		fmt.Fprintf(p.diagnostics, "travis: mcp server %q wrote its startup errors to %s\n", p.name, stderrLog.Name())
 		return nil, translateConnectError(p.name, err)
 	}
 	p.publish(ctx, core.MCPServerStarted{EventHeader: core.EventHeader{At: p.clock.ReportCurrentTime()}, Server: p.name, Tier: string(grant.Tier)})

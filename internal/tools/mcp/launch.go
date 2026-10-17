@@ -15,7 +15,11 @@ import (
 	"github.com/Kzeezee/travis/internal/security/sandbox"
 )
 
-const scratchDirMode = 0o700
+const (
+	scratchDirMode = 0o700
+	stderrLogName  = "stderr.log"
+	stderrLogMode  = 0o600
+)
 
 // Sandboxing is how one session confines its MCP servers (DESIGN.md §9.2, strict tier).
 type Sandboxing struct {
@@ -70,6 +74,21 @@ func (p *serverProcess) buildLaunchCommand(ctx context.Context) (*exec.Cmd, laun
 	default:
 		return nil, grant, fmt.Errorf("mcp server %q: %w", p.name, err)
 	}
+}
+
+// createStderrLog starts a fresh log for one launch. The sandboxed server can write its scratch folder, so it could
+// plant a symlink at this name; removing it and then creating with O_EXCL never follows one out of scratch.
+// shortcut: each launch replaces the log, so a restart loses the crash's output; keep one per launch if that matters.
+func createStderrLog(scratchDir string) (*os.File, error) {
+	path := filepath.Join(scratchDir, stderrLogName)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("replace stderr log: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, stderrLogMode)
+	if err != nil {
+		return nil, fmt.Errorf("create stderr log: %w", err)
+	}
+	return file, nil
 }
 
 // buildSandboxSpec gives the server its runner's install folder to read and only its own scratch folder to write.

@@ -83,10 +83,11 @@ func TestStartedServerReportsItsSandboxTier(t *testing.T) {
 	if err := connectAndClose(t, process); err != nil {
 		t.Fatal(err)
 	}
-	if tiers := sink.reportStartedTiers(); len(tiers) != 1 || tiers[0] == string(sandbox.TierNone) {
+	tiers := sink.reportStartedTiers()
+	if len(tiers) != 1 || tiers[0] == string(sandbox.TierNone) {
 		t.Fatalf("started tiers = %v, want one real sandbox tier", tiers)
 	}
-	if asked := approver.askedOps(); len(asked) != 1 || !strings.Contains(asked[0].Explanation, "sandbox: ") {
+	if asked := approver.askedOps(); len(asked) != 1 || !strings.Contains(asked[0].Explanation, "sandbox: "+tiers[0]) {
 		t.Fatalf("approval %+v does not name the sandbox tier", asked)
 	}
 }
@@ -179,8 +180,9 @@ func TestBuildSandboxSpecConfinesWritesToScratchAndConfiguredPaths(t *testing.T)
 	}
 }
 
-// The only explanation a server gives for dying at startup is on its stderr, so it must reach diagnostics.
-func TestServerStartupErrorReachesDiagnostics(t *testing.T) {
+// The only explanation a server gives for dying at startup is on its stderr: it is kept in a log that diagnostics
+// names, and never written to the terminal, where it would draw over the chat screen.
+func TestServerStartupErrorIsKeptInItsStderrLog(t *testing.T) {
 	approver := &fakeApprover{decision: core.ApprovalOnce}
 	process, _ := buildTestProcess(t, buildTestServerConfig("-require-home", "/nowhere"), grantedExecPolicy(), approver)
 	diagnostics := &syncBuffer{}
@@ -188,7 +190,34 @@ func TestServerStartupErrorReachesDiagnostics(t *testing.T) {
 	if err := connectAndClose(t, process); err == nil {
 		t.Fatal("a server that exits at startup connected")
 	}
-	if !strings.Contains(diagnostics.String(), `want "/nowhere"`) {
-		t.Fatalf("diagnostics = %q, want the server's own stderr", diagnostics.String())
+	logPath := filepath.Join(process.scratchDir, stderrLogName)
+	logged, err := os.ReadFile(logPath)
+	if err != nil || !strings.Contains(string(logged), `want "/nowhere"`) {
+		t.Fatalf("stderr log = %q, %v; want the server's own stderr", logged, err)
+	}
+	if !strings.Contains(diagnostics.String(), logPath) || strings.Contains(diagnostics.String(), `want "/nowhere"`) {
+		t.Fatalf("diagnostics = %q, want it to name %s and not repeat the server's stderr", diagnostics.String(), logPath)
+	}
+}
+
+// The server can write its scratch folder, so it can plant a symlink where travis, unsandboxed, writes its log.
+func TestRedTeamGatePlantedStderrLogLinkIsNotFollowed(t *testing.T) {
+	approver := &fakeApprover{decision: core.ApprovalOnce}
+	process, _ := buildTestProcess(t, buildTestServerConfig(), grantedExecPolicy(), approver)
+	victim := filepath.Join(t.TempDir(), "victim.txt")
+	if err := os.WriteFile(victim, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(process.scratchDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(process.scratchDir, stderrLogName)); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	if err := connectAndClose(t, process); err != nil {
+		t.Fatal(err)
+	}
+	if content, err := os.ReadFile(victim); err != nil || string(content) != "keep me" {
+		t.Fatalf("the link target now holds %q (%v), want it untouched", content, err)
 	}
 }
