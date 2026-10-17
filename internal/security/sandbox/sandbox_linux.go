@@ -93,7 +93,8 @@ func buildPathRule(path string, canWrite bool) landlock.FSRule {
 	isDir := err != nil || info.IsDir()
 	switch {
 	case canWrite && isDir:
-		return landlock.RWDirs(path)
+		// Refer only moves files between places already writable; without it a rename across two folders is EXDEV.
+		return landlock.RWDirs(path).WithRefer()
 	case canWrite:
 		return landlock.RWFiles(path)
 	case isDir:

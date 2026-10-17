@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,6 +61,9 @@ func runEscapeProbe(probe string, args []string) int {
 		if conn, err = dialer.DialContext(context.Background(), network, target); err == nil {
 			_ = conn.Close()
 		}
+	case "rename":
+		from, to, _ := strings.Cut(target, string(os.PathListSeparator))
+		err = os.Rename(from, to)
 	case "resolve":
 		_, err = net.DefaultResolver.LookupHost(context.Background(), target)
 	case "spawn-heartbeat":
