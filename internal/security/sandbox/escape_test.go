@@ -121,6 +121,8 @@ func TestSandboxEscape(t *testing.T) {
 		t.Fatalf("BuildCommand: %v", err)
 	}
 
+	canContainNetwork := tier != sandbox.TierRestrictedToken && tier != sandbox.TierLandlockNoNet
+
 	t.Run("write outside scratch is denied", func(t *testing.T) {
 		outside := filepath.Join(t.TempDir(), "escaped.txt")
 		assertProbeDenied(t, buildProbeSpec(t, self, "write", outside))
@@ -138,20 +140,14 @@ func TestSandboxEscape(t *testing.T) {
 	})
 
 	t.Run("network connect is denied without AllowNetwork", func(t *testing.T) {
-		if tier == sandbox.TierRestrictedToken || tier == sandbox.TierLandlockNoNet {
+		if !canContainNetwork {
 			t.Skipf("%s tier has no network containment (DESIGN §9.2.1)", tier)
 		}
-		var listenConfig net.ListenConfig
-		listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = listener.Close() })
-		assertProbeDenied(t, buildProbeSpec(t, self, "connect", listener.Addr().String()))
+		assertProbeDenied(t, buildProbeSpec(t, self, "connect", listenOnLoopbackTCP(t)))
 	})
 
 	t.Run("unix socket connect is denied without AllowNetwork", func(t *testing.T) {
-		if tier == sandbox.TierRestrictedToken || tier == sandbox.TierLandlockNoNet {
+		if !canContainNetwork {
 			t.Skipf("%s tier has no network containment (DESIGN §9.2.1)", tier)
 		}
 		assertProbeDenied(t, buildProbeSpec(t, self, "connect-unix", listenOnUnixSocket(t)))
@@ -163,6 +159,17 @@ func TestSandboxEscape(t *testing.T) {
 		spec.Argv[1] = heartbeatPath
 		assertTreeDiesOnCancel(t, spec, heartbeatPath)
 	})
+}
+
+func listenOnLoopbackTCP(t *testing.T) string {
+	t.Helper()
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	return listener.Addr().String()
 }
 
 // listenOnUnixSocket returns the path of a socket that local services such as docker.sock stand in for.

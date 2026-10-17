@@ -39,13 +39,7 @@ func TestSandboxGrantsTheAllowlist(t *testing.T) {
 	})
 
 	t.Run("network connect with AllowNetwork", func(t *testing.T) {
-		var listenConfig net.ListenConfig
-		listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = listener.Close() })
-		spec := buildProbeSpec(t, self, "connect", listener.Addr().String())
+		spec := buildProbeSpec(t, self, "connect", listenOnLoopbackTCP(t))
 		spec.AllowNetwork = true
 		assertProbeEscaped(t, spec)
 	})
