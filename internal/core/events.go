@@ -18,6 +18,7 @@ const (
 	EventPolicyDenied          EventType = "policy.denied"
 	EventBrokerUnavailable     EventType = "broker.unavailable"
 	EventMCPServerUnavailable  EventType = "mcp_server.unavailable"
+	EventMCPServerStarted      EventType = "mcp_server.started"
 	EventFileChanged           EventType = "file.changed"
 	EventFilesReverted         EventType = "files.reverted"
 	EventConversationRewound   EventType = "conversation.rewound"
@@ -139,6 +140,18 @@ type MCPServerUnavailable struct {
 
 func (MCPServerUnavailable) ReportEventType() EventType {
 	return EventMCPServerUnavailable
+}
+
+// MCPServerStarted records that a configured MCP server came up, and under which sandbox tier.
+// Tier is the sandbox package's tier name as-is; "none" means the server runs unconfined.
+type MCPServerStarted struct {
+	EventHeader
+	Server string `json:"server"`
+	Tier   string `json:"tier"`
+}
+
+func (MCPServerStarted) ReportEventType() EventType {
+	return EventMCPServerStarted
 }
 
 // FileChanged records that the broker wrote a file for a tool call. Path is workspace-relative

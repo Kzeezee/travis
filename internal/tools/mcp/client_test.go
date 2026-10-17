@@ -22,7 +22,7 @@ func TestBuildManagerConnectsAndRegistersAdaptedTools(t *testing.T) {
 
 	returned := make(chan *Manager, 1)
 	go func() {
-		returned <- BuildManager(servers, grantedExecPolicy(), approver, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir())
+		returned <- BuildManager(servers, grantedExecPolicy(), approver, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir(), testSandboxing())
 	}()
 
 	var manager *Manager
@@ -97,7 +97,7 @@ func TestBuildManagerDoesNotBlockOnAPendingApproval(t *testing.T) {
 
 	returned := make(chan *Manager, 1)
 	go func() {
-		returned <- BuildManager(servers, grantedExecPolicy(), approver, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir())
+		returned <- BuildManager(servers, grantedExecPolicy(), approver, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir(), testSandboxing())
 	}()
 
 	select {
@@ -117,7 +117,7 @@ func TestTrustPersistsAcrossManagersSharingAStateDir(t *testing.T) {
 	servers := config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": buildTestServerConfig()}}
 
 	firstApprover := &fakeApprover{decision: core.ApprovalAlways}
-	first := BuildManager(servers, grantedExecPolicy(), firstApprover, core.FixedClock{}, nil, &syncBuffer{}, registry.BuildRegistry(100), stateDir)
+	first := BuildManager(servers, grantedExecPolicy(), firstApprover, core.FixedClock{}, nil, &syncBuffer{}, registry.BuildRegistry(100), stateDir, testSandboxing())
 	pollUntil(t, 10*time.Second, func() bool { return len(firstApprover.askedOps()) == 1 })
 	first.Close()
 	if asked := firstApprover.askedOps(); len(asked) != 1 {
@@ -126,7 +126,7 @@ func TestTrustPersistsAcrossManagersSharingAStateDir(t *testing.T) {
 
 	secondApprover := &fakeApprover{decision: core.ApprovalOnce} // must never be reached
 	reg := registry.BuildRegistry(100)
-	second := BuildManager(servers, grantedExecPolicy(), secondApprover, core.FixedClock{}, nil, &syncBuffer{}, reg, stateDir)
+	second := BuildManager(servers, grantedExecPolicy(), secondApprover, core.FixedClock{}, nil, &syncBuffer{}, reg, stateDir, testSandboxing())
 	t.Cleanup(second.Close)
 
 	pollUntil(t, 10*time.Second, func() bool {
@@ -142,7 +142,7 @@ func TestBuildManagerSkipsAServerDeniedByPolicy(t *testing.T) {
 	servers := config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": buildTestServerConfig()}}
 	diagnostics := &syncBuffer{}
 	reg := registry.BuildRegistry(100)
-	manager := BuildManager(servers, deniedExecPolicy(), nil, core.FixedClock{}, nil, diagnostics, reg, t.TempDir())
+	manager := BuildManager(servers, deniedExecPolicy(), nil, core.FixedClock{}, nil, diagnostics, reg, t.TempDir(), testSandboxing())
 	t.Cleanup(manager.Close)
 
 	pollUntil(t, 2*time.Second, func() bool {

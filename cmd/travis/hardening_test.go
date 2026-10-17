@@ -16,6 +16,7 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/security/broker"
 	"github.com/Kzeezee/travis/internal/security/redact"
+	"github.com/Kzeezee/travis/internal/tools/mcp"
 )
 
 type hardeningApprover struct {
@@ -76,6 +77,8 @@ func TestRedTeamGateInjectedMCPResultCannotWriteWithoutApproval(t *testing.T) {
 		Files: remote, Log: remote, Memory: remote, Commands: remote, Pages: remote,
 		Bus: bus, Diagnostics: io.Discard, Redactor: redact.New(),
 		Approver: approver, MCPPolicy: mcpPolicy,
+		// The travis-broker TestMain built beside this binary is the real sandbox launcher.
+		MCPSandboxing: mcp.Sandboxing{ResolveLauncher: broker.ResolveBrokerExecutable, IsRequired: true},
 	})
 	if err != nil {
 		t.Fatal(err)

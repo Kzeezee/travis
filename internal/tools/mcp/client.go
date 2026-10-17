@@ -32,14 +32,15 @@ type Manager struct {
 // here would deadlock the whole session before the TUI ever draws a frame — it did, until
 // this was made async. A server that fails to connect, list its tools, or register one is
 // skipped with a diagnostic rather than failing the session. stateDir is where the shared
-// trust store (mcp-trust.toml) lives — user-scoped, like the [mcp.servers] config itself.
-func BuildManager(servers config.MCPCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, reg *registry.Registry, stateDir string) *Manager {
+// trust store (mcp-trust.toml) lives — user-scoped, like the [mcp.servers] config itself —
+// and where each server's scratch folder (mcp/<name>) is created.
+func BuildManager(servers config.MCPCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, reg *registry.Registry, stateDir string, sandboxing Sandboxing) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &Manager{cancel: cancel}
 
 	trust := buildTrustStore(filepath.Join(stateDir, trustFileName))
 	for name, serverCfg := range servers.Servers {
-		process := buildServerProcess(name, serverCfg, pol, approver, clock, events, diagnostics, trust, buildUnregisterTools(reg, name))
+		process := buildServerProcess(name, serverCfg, pol, approver, clock, events, diagnostics, trust, sandboxing, filepath.Join(stateDir, "mcp", name), buildUnregisterTools(reg, name))
 		manager.done.Add(1)
 		go func(name string, process *serverProcess) {
 			defer manager.done.Done()

@@ -1,7 +1,7 @@
 // Package mcp is the generic MCP stdio client (D-02): one implementation, zero per-server
 // Go code. Every configured server becomes a core.Tool per tool it exposes, through the
-// same tools/registry path builtin tools use. Trusted/local servers only — the public MCP
-// ecosystem and its sandboxing wait for a later phase.
+// same tools/registry path builtin tools use. Every server launches inside the OS sandbox
+// (internal/security/sandbox), confined to its runner and its own scratch folder.
 package mcp
 
 import (
@@ -18,6 +18,7 @@ import (
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/security/policy"
+	"github.com/Kzeezee/travis/internal/security/sandbox"
 )
 
 const (
@@ -51,6 +52,11 @@ type serverProcess struct {
 	events      core.EventSink
 	diagnostics io.Writer
 	trust       *trustStore
+	sandboxing  Sandboxing
+	// buildSandboxedCommand is sandbox.BuildCommand; tests replace it to stand in for an OS without a sandbox.
+	buildSandboxedCommand func(context.Context, sandbox.Spec) (*exec.Cmd, sandbox.Tier, error)
+	// scratchDir is this server's only writable folder by default; its home, temp and caches live there.
+	scratchDir string
 	// unregisterTools removes this server's own tools from the registry once restart
 	// attempts are exhausted; nil in tests that never reach exhaustion.
 	unregisterTools func()
@@ -60,8 +66,8 @@ type serverProcess struct {
 	unavailable error
 }
 
-func buildServerProcess(name string, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, trust *trustStore, unregisterTools func()) *serverProcess {
-	return &serverProcess{name: name, cfg: cfg, policy: pol, approver: approver, clock: clock, events: events, diagnostics: diagnostics, trust: trust, unregisterTools: unregisterTools}
+func buildServerProcess(name string, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, trust *trustStore, sandboxing Sandboxing, scratchDir string, unregisterTools func()) *serverProcess {
+	return &serverProcess{name: name, cfg: cfg, policy: pol, approver: approver, clock: clock, events: events, diagnostics: diagnostics, trust: trust, sandboxing: sandboxing, buildSandboxedCommand: sandbox.BuildCommand, scratchDir: scratchDir, unregisterTools: unregisterTools}
 }
 
 // connectAndSupervise performs the first connect (so tools/list has something to report)
@@ -90,39 +96,40 @@ func (p *serverProcess) currentSession() (*mcpsdk.ClientSession, error) {
 	return p.session, nil
 }
 
-// connect authorizes and starts one subprocess, then completes the MCP handshake over it.
+// connect builds the sandboxed command, authorizes it, then completes the MCP handshake over it.
+// The tier is known before approval, so the human approves the launch as it will actually run.
 // Policy is evaluated against the configured command name, not its OS-resolved variant:
 // the user wrote "npx" in their config, so their grant should match "npx", not a
 // platform-specific "npx.cmd" or an absolute path that happens to vary by machine.
 func (p *serverProcess) connect(ctx context.Context) (*mcpsdk.ClientSession, error) {
-	if err := p.authorizeExec(ctx, p.cfg.Command); err != nil {
+	cmd, grant, err := p.buildLaunchCommand(ctx)
+	if err != nil {
 		return nil, err
 	}
-
-	// resolved and Args come only from the user's own trusted config, never from model output.
-	resolved := resolveServerCommand(p.cfg.Command)
-	cmd := exec.CommandContext(ctx, resolved, p.cfg.Args...)
-	cmd.Env = buildServerEnv(p.cfg.Env)
+	if err := p.authorizeExec(ctx, p.cfg.Command, grant); err != nil {
+		return nil, err
+	}
 
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "travis", Version: clientVersion}, nil)
 	session, err := client.Connect(ctx, &mcpsdk.CommandTransport{Command: cmd}, nil)
 	if err != nil {
 		return nil, translateConnectError(p.name, err)
 	}
+	p.publish(ctx, core.MCPServerStarted{EventHeader: core.EventHeader{At: p.clock.ReportCurrentTime()}, Server: p.name, Tier: string(grant.Tier)})
 	return session, nil
 }
 
 // authorizeExec checks current grants before remembered approval, so revoked grants always deny.
-func (p *serverProcess) authorizeExec(ctx context.Context, command string) error {
+func (p *serverProcess) authorizeExec(ctx context.Context, command string, grant launchGrant) error {
 	decision := p.policy.Evaluate(ctx, policy.Request{Kind: core.CapabilityExec, Target: command})
 	switch decision.Verdict {
 	case policy.Allow:
 		return nil
 	case policy.Ask:
-		if p.trust != nil && p.trust.isTrusted(command, p.cfg.Args) {
+		if p.trust != nil && p.trust.isTrusted(command, p.cfg.Args, grant) {
 			return nil
 		}
-		return p.requestApproval(ctx, command)
+		return p.requestApproval(ctx, command, grant)
 	case policy.Deny:
 		return fmt.Errorf("mcp server %q is not permitted to run %q; add it to [security] exec_allow in your user config: %w", p.name, command, core.ErrDenied)
 	default:
@@ -130,7 +137,7 @@ func (p *serverProcess) authorizeExec(ctx context.Context, command string) error
 	}
 }
 
-func (p *serverProcess) requestApproval(ctx context.Context, command string) error {
+func (p *serverProcess) requestApproval(ctx context.Context, command string, grant launchGrant) error {
 	if p.approver == nil {
 		return fmt.Errorf("starting mcp server %q needs approval, but none is available: %w", p.name, core.ErrDenied)
 	}
@@ -141,7 +148,7 @@ func (p *serverProcess) requestApproval(ctx context.Context, command string) err
 	op := core.Operation{
 		Kind:        core.CapabilityExec,
 		Target:      command,
-		Explanation: fmt.Sprintf("start local MCP server %q (%s)", p.name, command),
+		Explanation: fmt.Sprintf("start local MCP server %q (%s), sandbox: %s, network: %s", p.name, command, grant.Tier, reportNetworkAccess(grant.AllowNetwork)),
 	}
 	decision, err := p.approver.RequestApproval(ctx, op)
 	if err != nil {
@@ -154,7 +161,7 @@ func (p *serverProcess) requestApproval(ctx context.Context, command string) err
 		if p.trust == nil {
 			return nil
 		}
-		return p.trust.add(command, p.cfg.Args, "approval modal", p.clock)
+		return p.trust.add(command, p.cfg.Args, grant, "approval modal", p.clock)
 	case core.ApprovalDenied:
 		return fmt.Errorf("starting mcp server %q was denied by the user: %w", p.name, core.ErrDenied)
 	default:
@@ -162,14 +169,11 @@ func (p *serverProcess) requestApproval(ctx context.Context, command string) err
 	}
 }
 
-// buildServerEnv layers the server's configured env over travis's own, so a server still
-// finds its runner (node, python, …) on PATH without the config needing to repeat it.
-func buildServerEnv(configured map[string]string) []string {
-	env := config.BuildEnvironmentWithoutSecrets()
-	for key, value := range configured {
-		env = append(env, key+"="+value)
+func reportNetworkAccess(isAllowed bool) string {
+	if isAllowed {
+		return "allowed"
 	}
-	return env
+	return "blocked"
 }
 
 // superviseRestarts reconnects after an unexpected exit, with backoff, up to
@@ -216,12 +220,15 @@ func (p *serverProcess) reportUnavailable(ctx context.Context, reason string) {
 	if p.unregisterTools != nil {
 		p.unregisterTools()
 	}
-	if p.events == nil {
-		return
-	}
-	p.events.Publish(ctx, core.MCPServerUnavailable{
+	p.publish(ctx, core.MCPServerUnavailable{
 		EventHeader: core.EventHeader{At: p.clock.ReportCurrentTime()},
 		Server:      p.name,
 		Reason:      reason,
 	})
+}
+
+func (p *serverProcess) publish(ctx context.Context, event core.Event) {
+	if p.events != nil {
+		p.events.Publish(ctx, event)
+	}
 }

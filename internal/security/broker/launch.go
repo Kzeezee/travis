@@ -49,6 +49,19 @@ func ResolveBrokerExecutable() (string, error) {
 	return brokerExecutable, nil
 }
 
+// ResolveVerifiedBrokerExecutable is ResolveBrokerExecutable plus the hash check, for every sandboxed
+// MCP launch that execs travis-broker as its launcher long after the session's own broker started.
+func ResolveVerifiedBrokerExecutable(wantSHA256 string) (string, error) {
+	brokerExecutable, err := ResolveBrokerExecutable()
+	if err != nil {
+		return "", err
+	}
+	if err := verifyBrokerBinary(brokerExecutable, wantSHA256); err != nil {
+		return "", err
+	}
+	return brokerExecutable, nil
+}
+
 // SessionLaunch is what one session's broker is started with.
 type SessionLaunch struct {
 	Executable string

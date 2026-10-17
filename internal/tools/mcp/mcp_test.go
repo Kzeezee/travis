@@ -17,7 +17,13 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/security/capabilities"
 	"github.com/Kzeezee/travis/internal/security/policy"
+	"github.com/Kzeezee/travis/internal/security/sandbox"
 )
+
+// testSandboxing requires the sandbox, so every test that connects proves the fake server works confined on this OS.
+func testSandboxing() Sandboxing {
+	return Sandboxing{ResolveLauncher: os.Executable, IsRequired: true}
+}
 
 // fakeServerPath is set once by TestMain to a real fakeserver binary built beside this test
 // binary, mirroring cmd/travis/broker_test.go's pattern of compiling a real sibling process
@@ -25,6 +31,14 @@ import (
 var fakeServerPath string
 
 func TestMain(m *testing.M) {
+	// testSandboxing launches every fake server through this test binary, as travis does through travis-broker.
+	if len(os.Args) > 1 && os.Args[1] == sandbox.LauncherArg {
+		if err := sandbox.RunLauncher(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "sandbox launcher:", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	path, err := buildFakeServerBesideTestBinary()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "internal/tools/mcp tests:", err)
@@ -148,6 +162,6 @@ func buildTestProcessWithUnregister(t *testing.T, cfg config.MCPServerCfg, pol p
 	})
 	clock := core.FixedClock{Time: time.Now()}
 	trust := buildTrustStore(filepath.Join(t.TempDir(), trustFileName))
-	process := buildServerProcess("test-server", cfg, pol, approver, clock, nil, diagnostics, trust, unregisterTools)
+	process := buildServerProcess("test-server", cfg, pol, approver, clock, nil, diagnostics, trust, testSandboxing(), filepath.Join(t.TempDir(), "scratch"), unregisterTools)
 	return process, clock
 }
