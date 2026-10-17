@@ -4,7 +4,8 @@
 
 Run 2026-10-17 on macOS (Darwin 25.3, Apple Silicon, Homebrew node 26.5 / uv), after 4B–4D
 merged, so it measures the shipped backends rather than prototypes. The harness is
-`cmd/sandboxspike` on this branch: it launches a real server through
+`cmd/sandboxspike` on the throwaway branch
+`feat/tra-45-phase-4-spike-sandbox-feasibility` (never merged): it launches a real server through
 `sandbox.BuildCommand` and completes `initialize` + `tools/list`. Linux ran in Docker (see
 below). Windows is **not run yet**; rerun the harness there before 4E closes.
 
@@ -65,8 +66,8 @@ backend grants `/etc/ssl` only with `AllowNetwork`. Fix: add that one file to
 
 **4B gap 2:** `RWDirs` lacks Landlock's `REFER` right, so a rename between two
 directories, even inside scratch, fails with `EXDEV`. uv renames from a temp dir into
-its cache. Fix: `RWDirs(path).WithRefer()` on write paths. Both fixes ship in 4E, each
-with a regression test.
+its cache. Fix: `RWDirs(path).WithRefer()` on write paths. Tracked as TRA-61 (gap 1) and
+TRA-62 (gap 2), each with a regression test; both block 4E.
 
 ## Findings
 
@@ -94,7 +95,8 @@ with a regression test.
 - **`allow_net` is a boolean for v1**, per server in `[mcp.servers.<name>]`, default
   `false`. Host-level allowlisting is not possible on any of the three backends (Seatbelt
   and Landlock only see IP sockets), so a host list would promise something nothing
-  enforces.
+  enforces. This cuts the `allow_net = ["api.github.com"]` host list in DESIGN.md §5.7's
+  example config.
 - **The read set is the derived runner prefix plus the OS base set in each backend.** No
   per-runner profiles in Go (D-02).
 - **The write set is only the per-server scratch dir**, `StateDir/mcp/<name>/`, with the
