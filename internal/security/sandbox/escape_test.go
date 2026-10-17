@@ -53,12 +53,15 @@ func runEscapeProbe(probe string, args []string) int {
 		err = os.WriteFile(target, []byte("escaped"), 0o600)
 	case "read":
 		_, err = os.ReadFile(target)
-	case "connect":
+	case "connect", "connect-unix":
+		network := map[string]string{"connect": "tcp", "connect-unix": "unix"}[probe]
 		dialer := net.Dialer{Timeout: 2 * time.Second}
 		var conn net.Conn
-		if conn, err = dialer.DialContext(context.Background(), "tcp", target); err == nil {
+		if conn, err = dialer.DialContext(context.Background(), network, target); err == nil {
 			_ = conn.Close()
 		}
+	case "resolve":
+		_, err = net.DefaultResolver.LookupHost(context.Background(), target)
 	case "spawn-heartbeat":
 		return spawnHeartbeatAndWait(target)
 	case "heartbeat":

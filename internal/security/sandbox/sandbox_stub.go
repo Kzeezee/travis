@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 package sandbox
 
@@ -9,7 +9,7 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 )
 
-// OSes without a backend fail every sandboxed launch closed (§8.1); 4B and 4C narrow this file's build tag further.
+// OSes without a backend fail every sandboxed launch closed (§8.1); 4B narrows this file's build tag further.
 
 var errSandboxUnsupportedOS = fmt.Errorf("no sandbox backend for this OS: %w", core.ErrUnsupported)
 
