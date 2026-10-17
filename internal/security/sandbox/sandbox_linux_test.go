@@ -35,3 +35,20 @@ func TestLandlockDeniesTCPWithoutAllowNetwork(t *testing.T) {
 	}
 	assertProbeDenied(t, buildProbeSpec(t, self, "connect", listenOnLoopbackTCP(t)))
 }
+
+// Node's OpenSSL reads openssl.cnf at startup even offline, so it is readable without AllowNetwork; the rest of /etc/ssl is not (TRA-61).
+func TestLandlockGrantsOpenSSLConfigWithoutNetwork(t *testing.T) {
+	const opensslConfig, certBundle = "/etc/ssl/openssl.cnf", "/etc/ssl/certs/ca-certificates.crt"
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(opensslConfig); err != nil {
+		t.Skipf("no %s on this host: %v", opensslConfig, err)
+	}
+	assertProbeEscaped(t, buildProbeSpec(t, self, "read", opensslConfig))
+	if _, err := os.Stat(certBundle); err != nil {
+		t.Skipf("no %s on this host: %v", certBundle, err)
+	}
+	assertProbeDenied(t, buildProbeSpec(t, self, "read", certBundle))
+}

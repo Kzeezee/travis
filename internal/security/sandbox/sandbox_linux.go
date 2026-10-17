@@ -23,6 +23,8 @@ const landlockNetworkABI = 9
 var systemReadPaths = []string{
 	"/bin", "/lib", "/lib64", "/usr/bin", "/usr/lib", "/usr/lib64", "/usr/share",
 	"/etc/ld.so.cache", "/etc/localtime",
+	// OpenSSL reads its config at startup whether or not the process ever connects; node exits without it.
+	"/etc/ssl/openssl.cnf",
 }
 
 // networkReadPaths are the resolver and trust files that DNS and TLS read.
