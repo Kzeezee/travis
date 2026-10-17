@@ -295,7 +295,8 @@ approval prompt; it does not approve the server. Removing a grant blocks even a 
 previously approved with “always”. Workspace config cannot set `[security]`.
 
 MCP servers run inside the OS sandbox. A server can read its runner's install folder
-(for example `/opt/homebrew` for npx) and write only its own scratch folder,
+(for example `/opt/homebrew` for npx, minus its `var` folder, where Homebrew keeps
+local databases) and write only its own scratch folder,
 `<state dir>/mcp/<name>`, where its home, temp and npm/uv caches live. The network is
 off unless the server allows it:
 

@@ -124,3 +124,30 @@ func assertProbeEscaped(t *testing.T, spec sandbox.Spec) {
 		t.Fatalf("allowed probe failed (%v):\n%s", err, output.String())
 	}
 }
+
+// The runner's prefix is readable but its var folder, where Homebrew keeps local databases, is not.
+func TestSandboxDeniesTheRunnerPrefixDataFolder(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := t.TempDir()
+	library, database := filepath.Join(prefix, "lib", "libnode.dylib"), filepath.Join(prefix, "var", "postgresql", "base")
+	for _, file := range []string{library, database, filepath.Join(prefix, "bin", "npx")} {
+		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runnerPaths := sandbox.ResolveRunnerReadPaths(filepath.Join(prefix, "bin", "npx"))
+
+	allowed := buildProbeSpec(t, self, "read", library)
+	allowed.ReadPaths = append(allowed.ReadPaths, runnerPaths...)
+	assertProbeEscaped(t, allowed)
+
+	denied := buildProbeSpec(t, self, "read", database)
+	denied.ReadPaths = append(denied.ReadPaths, runnerPaths...)
+	assertProbeDenied(t, denied)
+}
