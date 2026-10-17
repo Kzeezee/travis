@@ -13,6 +13,11 @@ import (
 
 var errSandboxUnsupportedOS = fmt.Errorf("no sandbox backend for this OS: %w", core.ErrUnsupported)
 
+// ResolveRunnerReadPaths has nothing to grant: BuildCommand fails closed on this OS.
+func ResolveRunnerReadPaths(string) []string {
+	return nil
+}
+
 func prepareCommandForOS(*exec.Cmd, Spec) (Tier, error) {
 	return TierNone, errSandboxUnsupportedOS
 }
