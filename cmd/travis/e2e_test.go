@@ -369,17 +369,17 @@ func TestNotesTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
 // stream parser. Re-record: go test ./cmd/travis -run Recorded -record-cassettes
 func TestNotesTaskReplaysARecordedModel(t *testing.T) {
 	path := filepath.Join("..", "..", "testdata", "cassettes", "notes-task.jsonl")
-	baseURL, model := "http://cassette.invalid/v1", "replayed-model"
+	baseURL, model, auth := "http://cassette.invalid/v1", "replayed-model", config.AuthCfg{}
 	if cassette.IsRecording() {
 		cfg, _, err := config.Load()
 		if err != nil {
 			t.Fatal(err)
 		}
 		profile := cfg.Provider.Profiles[cfg.Provider.Active]
-		baseURL, model = profile.BaseURL, profile.Model
+		baseURL, model, auth = profile.BaseURL, profile.Model, profile.Auth
 		t.Logf("recording against %s, model %s (provider profile %q)", baseURL, model, cfg.Provider.Active)
 	}
-	provider := openaicompat.BuildProvider(baseURL, config.ResolveProviderAPIKey(), cassette.BuildClient(t, path), core.SystemClock{})
+	provider := openaicompat.BuildProvider(baseURL, config.ResolveProviderAPIKey(auth), cassette.BuildClient(t, path), core.SystemClock{})
 
 	run := runNotesTask(t, provider, model)
 
