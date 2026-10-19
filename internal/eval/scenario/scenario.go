@@ -57,6 +57,10 @@ type Scenario struct {
 	// AssertPromptLacks checks the first call's system prompt; scripted runner only, like
 	// AssertToolsOffered.
 	AssertPromptLacks []string `toml:"assert_prompt_lacks"`
+
+	// MCPFakeServer starts the test fake MCP server as "fake", sandboxed with require_sandbox on,
+	// and waits for its tools (mcp_fake_echo) to register before the turns run.
+	MCPFakeServer bool `toml:"mcp_fake_server"`
 }
 
 // Suite is every scenario in one TOML file.

@@ -25,9 +25,31 @@ var (
 	selectedRowStyle    = lipgloss.NewStyle().Reverse(true)
 )
 
+// unsandboxedTier is the tier name for an MCP server running unconfined (require_sandbox = false).
+const unsandboxedTier = "none"
+
+// recordSandboxTier keeps the unsandboxed tier once any server ran unconfined, so a later sandboxed one never hides it.
+func recordSandboxTier(current, reported string) string {
+	if current == unsandboxedTier {
+		return current
+	}
+	return reported
+}
+
+func reportSandboxStatus(tier string) string {
+	switch tier {
+	case "":
+		return ""
+	case unsandboxedTier:
+		return " · ⚠ sandbox: none"
+	default:
+		return " · sandbox: " + tier
+	}
+}
+
 func (m chatModel) View() tea.View {
 	separator := dimStyle.Render(strings.Repeat("─", m.width))
-	statusBar := fmt.Sprintf(" %s · %s · last turn: %s", m.modelName, m.reportTurnState(), reportOutcome(m.lastTurnOutcome))
+	statusBar := fmt.Sprintf(" %s · %s · last turn: %s%s", m.modelName, m.reportTurnState(), reportOutcome(m.lastTurnOutcome), reportSandboxStatus(m.sandboxTier))
 
 	inputLine := m.input.View()
 	if m.pendingApproval != nil {

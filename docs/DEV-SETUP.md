@@ -294,6 +294,29 @@ an absolute allowlist entry, written with forward slashes. This grant allows the
 approval prompt; it does not approve the server. Removing a grant blocks even a server
 previously approved with “always”. Workspace config cannot set `[security]`.
 
+MCP servers run inside the OS sandbox. A server can read its runner's install folder
+(for example `/opt/homebrew` for npx, minus its `var` folder, where Homebrew keeps
+local databases) and write only its own scratch folder,
+`<state dir>/mcp/<name>`, where its home, temp and npm/uv caches live. The network is
+off unless the server allows it, except under `restricted-token` (Windows) and
+`landlock-no-net` (Linux before 6.15), which cannot block it; the approval prompt says
+`network not blocked` there:
+
+```toml
+[mcp.servers.everything]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-everything"]
+allow_net = true             # the first launch downloads the package
+read_paths = []              # absolute paths beyond the defaults
+write_paths = []
+```
+
+The status bar shows the tier (`sandbox: seatbelt`, `landlock`, `landlock-no-net`,
+`restricted-token`). Where this OS has no sandbox, `[security] require_sandbox = true`
+(the default) refuses to start the server; setting it to `false` runs it unconfined and
+shows `⚠ sandbox: none`. Changing the tier, `allow_net` or the paths asks for approval
+again.
+
 `[skills] load_workspace` has been removed. Configure workspace skill roots in your
 user `[skills] roots` instead. Workspace skills and `AGENTS.md` require one keyboard
 approval per content snapshot per chat session. Content changes ask again; declining
@@ -303,6 +326,8 @@ keeps the workspace instructions out of the prompt and `skill_open`.
 | --- | --- |
 | `command not found: go` in a new terminal | PATH not picked up — restart the terminal, or check the install location |
 | A newly approved MCP server's tools are absent from the first reply | Discovery runs asynchronously; wait for the server's tools to appear in `/tools` before sending the request |
+| An MCP server did not start | Its own errors are in `<state dir>/mcp/<name>/stderr.log`, which the startup line names |
+| That log shows an npm `network`, `ENOTFOUND` or `EAI_AGAIN` error | Its first launch downloads the package but `allow_net` is off; set `allow_net = true` for that server |
 | `gopls` not found, but it is installed | `$(go env GOPATH)/bin` missing from PATH (§2) |
 | Golden-file tests fail only on Windows | line endings. Goldens normalise before comparing (§8.1) — the test is wrong, not your machine |
 | Tests pass locally, fail in CI | CI runs `-race` natively on three OSes. Run `go test -race ./...` before pushing |

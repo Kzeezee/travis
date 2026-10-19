@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"unsafe"
 
@@ -35,6 +36,12 @@ const (
 )
 
 var procCreateRestrictedToken = windows.NewLazySystemDLL("advapi32.dll").NewProc("CreateRestrictedToken")
+
+// ResolveRunnerReadPaths grants only the executable's own folder: the restricting SID can open nothing it is not
+// granted, and each grant is a persistent ACL edit, so a whole install prefix would be rewritten for good.
+func ResolveRunnerReadPaths(executable string) []string {
+	return []string{filepath.Dir(executable)}
+}
 
 func prepareCommandForOS(*exec.Cmd, Spec) (Tier, error) {
 	return TierRestrictedToken, nil

@@ -11,6 +11,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/Kzeezee/travis/internal/core"
+	"github.com/Kzeezee/travis/internal/security/sandbox"
 )
 
 func createSymlinkOrSkip(t *testing.T, target, link string) {
@@ -47,12 +48,27 @@ func readTrustEntries(t *testing.T, path string) []trustEntry {
 	return file.Entry
 }
 
+// testGrant is a sandboxed launch with no extra grants, the shape most trust entries take.
+var testGrant = launchGrant{Tier: sandbox.TierSeatbelt}
+
+// Entries written before 4E carry no tier, so each server asks once more rather than inheriting trust unsandboxed.
+func TestTrustStoreIgnoresEntriesWithoutATier(t *testing.T) {
+	path := filepath.Join(t.TempDir(), trustFileName)
+	writeFile(t, path, "[[entry]]\nCommand = 'npx'\nArgs = ['x']\nSource = 'approval modal'\n")
+	store := buildTrustStore(path)
+	for _, grant := range []launchGrant{testGrant, {Tier: sandbox.TierNone}} {
+		if store.isTrusted("npx", []string{"x"}, grant) {
+			t.Fatalf("a pre-sandbox entry is trusted for %+v", grant)
+		}
+	}
+}
+
 func TestTrustStoreAddWritesAParseableEntry(t *testing.T) {
 	path := filepath.Join(t.TempDir(), trustFileName)
 	store := buildTrustStore(path)
 	clock := core.FixedClock{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 
-	if err := store.add("npx", []string{"-y", "@modelcontextprotocol/server-filesystem"}, "approval modal", clock); err != nil {
+	if err := store.add("npx", []string{"-y", "@modelcontextprotocol/server-filesystem"}, testGrant, "approval modal", clock); err != nil {
 		t.Fatal(err)
 	}
 
@@ -68,23 +84,30 @@ func TestTrustStoreAddWritesAParseableEntry(t *testing.T) {
 func TestTrustStoreIsTrustedMatchesExactCommandAndArgs(t *testing.T) {
 	store := buildTrustStore(filepath.Join(t.TempDir(), trustFileName))
 	clock := core.FixedClock{Time: time.Now()}
-	if err := store.add("npx", []string{"-y", "server-filesystem"}, "test", clock); err != nil {
+	if err := store.add("npx", []string{"-y", "server-filesystem"}, testGrant, "test", clock); err != nil {
 		t.Fatal(err)
 	}
 
+	args := []string{"-y", "server-filesystem"}
 	cases := map[string]struct {
 		command string
 		args    []string
+		grant   launchGrant
 		want    bool
 	}{
-		"exact match":       {"npx", []string{"-y", "server-filesystem"}, true},
-		"different args":    {"npx", []string{"-y", "server-github"}, false},
-		"different command": {"uvx", []string{"-y", "server-filesystem"}, false},
-		"extra arg":         {"npx", []string{"-y", "server-filesystem", "extra"}, false},
+		"exact match":       {"npx", args, testGrant, true},
+		"different args":    {"npx", []string{"-y", "server-github"}, testGrant, false},
+		"different command": {"uvx", args, testGrant, false},
+		"extra arg":         {"npx", []string{"-y", "server-filesystem", "extra"}, testGrant, false},
+		// A tier change or a widened grant is a different launch, so it asks again (4E).
+		"different tier":     {"npx", args, launchGrant{Tier: sandbox.TierNone}, false},
+		"network widened":    {"npx", args, launchGrant{Tier: testGrant.Tier, AllowNetwork: true}, false},
+		"read path widened":  {"npx", args, launchGrant{Tier: testGrant.Tier, ReadPaths: []string{"/srv"}}, false},
+		"write path widened": {"npx", args, launchGrant{Tier: testGrant.Tier, WritePaths: []string{"/srv"}}, false},
 	}
 	for name, tt := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := store.isTrusted(tt.command, tt.args); got != tt.want {
+			if got := store.isTrusted(tt.command, tt.args, tt.grant); got != tt.want {
 				t.Fatalf("isTrusted(%q, %v) = %v, want %v", tt.command, tt.args, got, tt.want)
 			}
 		})
@@ -96,10 +119,10 @@ func TestTrustStoreAccumulatesAcrossCalls(t *testing.T) {
 	store := buildTrustStore(path)
 	clock := core.FixedClock{Time: time.Now()}
 
-	if err := store.add("npx", []string{"a"}, "", clock); err != nil {
+	if err := store.add("npx", []string{"a"}, testGrant, "", clock); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.add("npx", []string{"b"}, "", clock); err != nil {
+	if err := store.add("npx", []string{"b"}, testGrant, "", clock); err != nil {
 		t.Fatal(err)
 	}
 
@@ -122,7 +145,7 @@ func TestTrustStoreSerializesConcurrentWriters(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			clock := core.FixedClock{Time: time.Now()}
-			if err := store.add("npx", []string{"writer"}, "concurrent", clock); err != nil {
+			if err := store.add("npx", []string{"writer"}, testGrant, "concurrent", clock); err != nil {
 				t.Error(err)
 			}
 		}(i)
@@ -163,7 +186,7 @@ func TestTrustStoreRefusesPlantedSymlinks(t *testing.T) {
 
 			store := buildTrustStore(path)
 			clock := core.FixedClock{Time: time.Now()}
-			err := store.add("npx", []string{"x"}, "test", clock)
+			err := store.add("npx", []string{"x"}, testGrant, "test", clock)
 			if !errors.Is(err, core.ErrDenied) {
 				t.Fatalf("add through a planted link = %v, want ErrDenied", err)
 			}
@@ -182,14 +205,14 @@ func TestBuildTrustStoreTreatsAMalformedFileAsEmpty(t *testing.T) {
 	writeFile(t, path, "this is not valid toml {{{")
 
 	store := buildTrustStore(path)
-	if store.isTrusted("npx", []string{"x"}) {
+	if store.isTrusted("npx", []string{"x"}, testGrant) {
 		t.Fatal("a malformed trust file should never report anything as trusted")
 	}
 }
 
 func TestBuildTrustStoreWithNoFileYetStartsEmpty(t *testing.T) {
 	store := buildTrustStore(filepath.Join(t.TempDir(), trustFileName))
-	if store.isTrusted("npx", []string{"x"}) {
+	if store.isTrusted("npx", []string{"x"}, testGrant) {
 		t.Fatal("a trust store with no file yet should trust nothing")
 	}
 }

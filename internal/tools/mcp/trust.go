@@ -28,8 +28,18 @@ const (
 type trustEntry struct {
 	Command string
 	Args    []string
-	AddedAt time.Time
-	Source  string
+	// The sandbox grant the launch was approved under; entries from before 4E have none and match nothing.
+	Tier         string
+	AllowNetwork bool     `toml:"allow_network"`
+	ReadPaths    []string `toml:"read_paths"`
+	WritePaths   []string `toml:"write_paths"`
+	AddedAt      time.Time
+	Source       string
+}
+
+func (e trustEntry) matches(command string, args []string, grant launchGrant) bool {
+	return e.Command == command && slices.Equal(e.Args, args) && e.Tier == string(grant.Tier) &&
+		e.AllowNetwork == grant.AllowNetwork && slices.Equal(e.ReadPaths, grant.ReadPaths) && slices.Equal(e.WritePaths, grant.WritePaths)
 }
 
 // trustFile is one append-worthy TOML document, same convention as decisions.go's
@@ -67,23 +77,22 @@ func buildTrustStore(path string) *trustStore {
 	return store
 }
 
-// isTrusted reports whether command and args exactly match a previously approved entry.
-func (s *trustStore) isTrusted(command string, args []string) bool {
+// isTrusted reports whether command, args and sandbox grant exactly match a previously approved entry.
+func (s *trustStore) isTrusted(command string, args []string, grant launchGrant) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, entry := range s.entries {
-		if entry.Command == command && slices.Equal(entry.Args, args) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(s.entries, func(entry trustEntry) bool { return entry.matches(command, args, grant) })
 }
 
 // add appends one trusted entry, both in memory and durably on disk under an exclusive
 // lock (same D-32 reasoning as AddDecisionRule), so a concurrent writer never corrupts
 // the file and a crash right after never loses the in-memory half of the picture.
-func (s *trustStore) add(command string, args []string, source string, clock core.Clock) error {
-	entry := trustEntry{Command: command, Args: slices.Clone(args), AddedAt: clock.ReportCurrentTime().UTC(), Source: source}
+func (s *trustStore) add(command string, args []string, grant launchGrant, source string, clock core.Clock) error {
+	entry := trustEntry{
+		Command: command, Args: slices.Clone(args),
+		Tier: string(grant.Tier), AllowNetwork: grant.AllowNetwork, ReadPaths: slices.Clone(grant.ReadPaths), WritePaths: slices.Clone(grant.WritePaths),
+		AddedAt: clock.ReportCurrentTime().UTC(), Source: source,
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

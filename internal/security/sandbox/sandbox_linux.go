@@ -19,10 +19,16 @@ import (
 // leave docker.sock and ssh-agent reachable, so they do not count as network containment.
 const landlockNetworkABI = 9
 
+// landlockReferABI is the first ABI that can grant renames between folders. go-landlock's best effort drops
+// Landlock entirely for a refer rule below it, so asking for refer there would leave the target unconfined.
+const landlockReferABI = 2
+
 // systemReadPaths are what a dynamically linked target needs to start; missing ones are skipped.
 var systemReadPaths = []string{
 	"/bin", "/lib", "/lib64", "/usr/bin", "/usr/lib", "/usr/lib64", "/usr/share",
 	"/etc/ld.so.cache", "/etc/localtime",
+	// OpenSSL reads its config at startup whether or not the process ever connects; node exits without it.
+	"/etc/ssl/openssl.cnf",
 }
 
 // networkReadPaths are the resolver and trust files that DNS and TLS read.
@@ -62,6 +68,8 @@ func applyToSelf(spec Spec) error {
 	if _, err := reportLandlockTier(); err != nil {
 		return err
 	}
+	abi, _ := llsyscall.LandlockGetABIVersion() // reportLandlockTier has already failed closed on an error
+	canRefer := abi >= landlockReferABI
 	config := landlock.V10.BestEffort()
 	readPaths := slices.Concat(systemReadPaths, spec.ReadPaths)
 	if spec.AllowNetwork {
@@ -70,13 +78,13 @@ func applyToSelf(spec Spec) error {
 	}
 	var rules []landlock.Rule
 	for _, path := range readPaths {
-		rules = append(rules, buildPathRule(path, false).IgnoreIfMissing())
+		rules = append(rules, buildPathRule(path, false, canRefer).IgnoreIfMissing())
 	}
 	for _, path := range deviceWritePaths {
-		rules = append(rules, buildPathRule(path, true).IgnoreIfMissing())
+		rules = append(rules, buildPathRule(path, true, canRefer).IgnoreIfMissing())
 	}
 	for _, path := range spec.WritePaths {
-		rules = append(rules, buildPathRule(path, true))
+		rules = append(rules, buildPathRule(path, true, canRefer))
 	}
 	err := config.Restrict(rules...)
 	if err != nil {
@@ -86,10 +94,13 @@ func applyToSelf(spec Spec) error {
 }
 
 // buildPathRule grants file-only rights to a non-directory, because Landlock rejects directory rights on one.
-func buildPathRule(path string, canWrite bool) landlock.FSRule {
+func buildPathRule(path string, canWrite, canRefer bool) landlock.FSRule {
 	info, err := os.Stat(path)
 	isDir := err != nil || info.IsDir()
 	switch {
+	case canWrite && isDir && canRefer:
+		// Refer only moves files between places already writable; without it a rename across two folders is EXDEV.
+		return landlock.RWDirs(path).WithRefer()
 	case canWrite && isDir:
 		return landlock.RWDirs(path)
 	case canWrite:

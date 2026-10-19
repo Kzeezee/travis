@@ -135,3 +135,20 @@ final_text = "Wrote todo.md."
 [[scenario.assert_files]]
 path = "todo.md"
 contains = "buy milk"
+
+# 4E regression: an MCP server runs inside the OS sandbox under the real wiring, with
+# require_sandbox on, and its tool answers the model. The runner waits for mcp_fake_echo to
+# register, which only happens once the sandboxed process has answered tools/list.
+[[scenario]]
+name = "sandboxed MCP server answers a tool call"
+fixture = "notes"
+mcp_fake_server = true
+turns = ["Echo hello through the MCP server."]
+assert_tools_called = ["mcp_fake_echo"]
+
+[[scenario.step]]
+tool = "mcp_fake_echo"
+arguments = '{"message":"hello"}'
+
+[[scenario.step]]
+final_text = "The MCP server echoed hello."

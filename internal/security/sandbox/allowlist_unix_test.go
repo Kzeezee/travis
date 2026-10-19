@@ -5,6 +5,7 @@ package sandbox_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -38,6 +39,17 @@ func TestSandboxGrantsTheAllowlist(t *testing.T) {
 		assertProbeEscaped(t, spec)
 	})
 
+	// Package managers download into a temp folder and rename into their cache (TRA-62).
+	t.Run("rename between folders inside scratch", func(t *testing.T) {
+		spec := buildProbeSpec(t, self, "rename", "")
+		from, to := createRenameSource(t, spec.WritePaths[0]), filepath.Join(spec.WritePaths[0], "cache", "f")
+		if err := os.Mkdir(filepath.Dir(to), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		spec.Argv[1] = from + string(os.PathListSeparator) + to
+		assertProbeEscaped(t, spec)
+	})
+
 	t.Run("network connect with AllowNetwork", func(t *testing.T) {
 		spec := buildProbeSpec(t, self, "connect", listenOnLoopbackTCP(t))
 		spec.AllowNetwork = true
@@ -54,6 +66,34 @@ func TestSandboxGrantsTheAllowlist(t *testing.T) {
 		spec.AllowNetwork = true
 		assertProbeEscaped(t, spec)
 	})
+}
+
+// Granting rename inside scratch must not let a file be moved out of it.
+func TestSandboxDeniesRenameOutOfScratch(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := buildProbeSpec(t, self, "rename", "")
+	to := filepath.Join(t.TempDir(), "escaped")
+	spec.Argv[1] = createRenameSource(t, spec.WritePaths[0]) + string(os.PathListSeparator) + to
+	assertProbeDenied(t, spec)
+	if _, err := os.Stat(to); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("file moved out of scratch after a denied rename: %v", err)
+	}
+}
+
+// createRenameSource writes scratch/tmp/f, the file a rename probe moves.
+func createRenameSource(t *testing.T, scratch string) string {
+	t.Helper()
+	from := filepath.Join(scratch, "tmp", "f")
+	if err := os.Mkdir(filepath.Dir(from), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(from, []byte("download"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return from
 }
 
 // AllowNetwork means IP only; a Unix socket would reach local services such as docker.sock or ssh-agent.
@@ -83,4 +123,31 @@ func assertProbeEscaped(t *testing.T, spec sandbox.Spec) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("allowed probe failed (%v):\n%s", err, output.String())
 	}
+}
+
+// The runner's prefix is readable but its var folder, where Homebrew keeps local databases, is not.
+func TestSandboxDeniesTheRunnerPrefixDataFolder(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := t.TempDir()
+	library, database := filepath.Join(prefix, "lib", "libnode.dylib"), filepath.Join(prefix, "var", "postgresql", "base")
+	for _, file := range []string{library, database, filepath.Join(prefix, "bin", "npx")} {
+		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runnerPaths := sandbox.ResolveRunnerReadPaths(filepath.Join(prefix, "bin", "npx"))
+
+	allowed := buildProbeSpec(t, self, "read", library)
+	allowed.ReadPaths = append(allowed.ReadPaths, runnerPaths...)
+	assertProbeEscaped(t, allowed)
+
+	denied := buildProbeSpec(t, self, "read", database)
+	denied.ReadPaths = append(denied.ReadPaths, runnerPaths...)
+	assertProbeDenied(t, denied)
 }

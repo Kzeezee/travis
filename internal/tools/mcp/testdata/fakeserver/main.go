@@ -2,7 +2,8 @@
 // own tests, in place of a real public server (the project's testing convention: fakes for
 // process boundaries, never a live third-party service). It exposes two tools: echo, which
 // proves a normal round trip, and crash, which exits the process so restart-with-backoff
-// supervision can be exercised against a real dead subprocess.
+// supervision can be exercised against a real dead subprocess. Its startup flags let tests
+// assert what the sandbox lets it see, by refusing to start when a check fails.
 package main
 
 import (
@@ -20,9 +21,19 @@ type echoArgs struct {
 
 func main() {
 	requireNoProviderKey := flag.Bool("require-no-provider-key", false, "fail if a provider credential was inherited")
+	mustNotRead := flag.String("must-not-read", "", "fail if this file is readable")
+	requireHome := flag.String("require-home", "", "fail unless HOME is this folder")
 	flag.Parse()
 	if _, hasProviderKey := os.LookupEnv("OPENAI_API_KEY"); *requireNoProviderKey && hasProviderKey {
 		fmt.Fprintln(os.Stderr, "provider credential reached MCP process")
+		os.Exit(1)
+	}
+	if _, err := os.ReadFile(*mustNotRead); *mustNotRead != "" && err == nil {
+		fmt.Fprintln(os.Stderr, "fakeserver read", *mustNotRead)
+		os.Exit(1)
+	}
+	if home := os.Getenv("HOME"); *requireHome != "" && home != *requireHome {
+		fmt.Fprintf(os.Stderr, "HOME is %q, want %q\n", home, *requireHome)
 		os.Exit(1)
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "fakeserver", Version: "0.1.0"}, nil)

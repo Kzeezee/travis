@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -39,6 +40,8 @@ type SecurityCfg struct {
 	ExecAllow []string `toml:"exec_allow"`
 	// HostAllow are the hosts fetch may reach, as glob patterns matched case-insensitively.
 	HostAllow []string `toml:"host_allow"`
+	// RequireSandbox refuses to start an MCP server this OS cannot sandbox; false runs it unconfined.
+	RequireSandbox bool `toml:"require_sandbox"`
 }
 
 // ProviderCfg selects which model profile is live and lists every profile a user has
@@ -68,6 +71,11 @@ type MCPServerCfg struct {
 	Command string
 	Args    []string
 	Env     map[string]string
+	// AllowNet lets the sandboxed server reach the network; its first launch needs it to download a package.
+	AllowNet bool `toml:"allow_net"`
+	// ReadPaths and WritePaths are absolute paths the sandboxed server may use beyond its own scratch folder.
+	ReadPaths  []string `toml:"read_paths"`
+	WritePaths []string `toml:"write_paths"`
 }
 
 // SkillsCfg configures the SKILL.md loader (DESIGN.md §5.8). User-config only, same
@@ -167,6 +175,8 @@ const (
 	envToolsMaxExposed = "TRAVIS_TOOLS_MAX_EXPOSED"
 )
 
+var mcpServerNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
 // fileReader abstracts file reads so tests can supply in-memory layers instead of a
 // real filesystem.
 type fileReader func(name string) ([]byte, error)
@@ -238,12 +248,13 @@ func buildDefaultConfig() Config {
 				},
 			},
 		},
-		Brain:   BrainCfg{MaxSteps: 40},
-		Tools:   ToolsCfg{ApprovalDefault: "ask", MaxExposed: 60},
-		Eval:    EvalCfg{Traces: true},
-		Session: SessionCfg{SnapshotMaxBytes: 16 << 20},
-		MCP:     MCPCfg{},
-		Skills:  SkillsCfg{Roots: []string{"config:skills"}},
+		Brain:    BrainCfg{MaxSteps: 40},
+		Tools:    ToolsCfg{ApprovalDefault: "ask", MaxExposed: 60},
+		Eval:     EvalCfg{Traces: true},
+		Security: SecurityCfg{RequireSandbox: true},
+		Session:  SessionCfg{SnapshotMaxBytes: 16 << 20},
+		MCP:      MCPCfg{},
+		Skills:   SkillsCfg{Roots: []string{"config:skills"}},
 	}
 }
 
@@ -472,8 +483,19 @@ func (c *Config) Validate() Diagnostics {
 	// worst; this is exec configuration, so it is held to the same hard-fail standard as
 	// a malformed [security.*] key, not treated as a soft warning.
 	for name, server := range c.MCP.Servers {
+		// The name becomes a tool-name segment and the server's scratch folder name.
+		if !mcpServerNamePattern.MatchString(name) {
+			diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("mcp.servers.%q: names may use only letters, digits, - and _", name)})
+		}
 		if server.Command == "" {
 			diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("mcp.servers.%s.command is empty", name)})
+		}
+		for key, paths := range map[string][]string{"read_paths": server.ReadPaths, "write_paths": server.WritePaths} {
+			for _, path := range paths {
+				if !filepath.IsAbs(path) {
+					diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("mcp.servers.%s.%s has %q, which is not an absolute path", name, key, path)})
+				}
+			}
 		}
 	}
 

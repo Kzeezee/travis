@@ -90,7 +90,11 @@ func TestRedTeamGateMCPDoesNotInheritProviderCredential(t *testing.T) {
 func TestRedTeamGateRememberedMCPTrustCannotBypassRemovedExecGrant(t *testing.T) {
 	approver := &fakeApprover{decision: core.ApprovalOnce}
 	process, clock := buildTestProcess(t, buildTestServerConfig(), deniedExecPolicy(), approver)
-	if err := process.trust.add(process.cfg.Command, process.cfg.Args, "previously approved", clock); err != nil {
+	_, grant, err := process.buildLaunchCommand(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.trust.add(process.cfg.Command, process.cfg.Args, grant, "previously approved", clock); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := process.connect(t.Context()); !errors.Is(err, core.ErrDenied) {

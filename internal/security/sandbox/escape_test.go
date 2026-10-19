@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,6 +61,9 @@ func runEscapeProbe(probe string, args []string) int {
 		if conn, err = dialer.DialContext(context.Background(), network, target); err == nil {
 			_ = conn.Close()
 		}
+	case "rename":
+		from, to, _ := strings.Cut(target, string(os.PathListSeparator))
+		err = os.Rename(from, to)
 	case "resolve":
 		_, err = net.DefaultResolver.LookupHost(context.Background(), target)
 	case "spawn-heartbeat":
@@ -121,8 +125,6 @@ func TestSandboxEscape(t *testing.T) {
 		t.Fatalf("BuildCommand: %v", err)
 	}
 
-	canContainNetwork := tier != sandbox.TierRestrictedToken && tier != sandbox.TierLandlockNoNet
-
 	t.Run("write outside scratch is denied", func(t *testing.T) {
 		outside := filepath.Join(t.TempDir(), "escaped.txt")
 		assertProbeDenied(t, buildProbeSpec(t, self, "write", outside))
@@ -140,14 +142,14 @@ func TestSandboxEscape(t *testing.T) {
 	})
 
 	t.Run("network connect is denied without AllowNetwork", func(t *testing.T) {
-		if !canContainNetwork {
+		if !tier.CanContainNetwork() {
 			t.Skipf("%s tier has no network containment (DESIGN §9.2.1)", tier)
 		}
 		assertProbeDenied(t, buildProbeSpec(t, self, "connect", listenOnLoopbackTCP(t)))
 	})
 
 	t.Run("unix socket connect is denied without AllowNetwork", func(t *testing.T) {
-		if !canContainNetwork {
+		if !tier.CanContainNetwork() {
 			t.Skipf("%s tier has no network containment (DESIGN §9.2.1)", tier)
 		}
 		assertProbeDenied(t, buildProbeSpec(t, self, "connect-unix", listenOnUnixSocket(t)))

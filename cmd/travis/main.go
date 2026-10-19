@@ -116,8 +116,8 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	// workspace config layer can set that, and a cloned repo must not choose its own
 	// security profile. This is the same policy construction the broker process uses
 	// (BuildSessionPolicy), reused here because MCP server launches are exec-capability
-	// decisions made in this process, not round-tripped through the broker (§5.7's fuller
-	// sandboxed design is a later phase; this is the trusted/local slice).
+	// decisions made in this process, not round-tripped through the broker. The servers
+	// themselves then run inside the OS sandbox (mcp.Sandboxing below).
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -154,6 +154,11 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		Memory: sessionBroker.Remote, Commands: sessionBroker.Remote, Pages: sessionBroker.Remote,
 		Bus: bus, Diagnostics: os.Stderr, Redactor: redactor,
 		Questioner: terminal.BuildQuestioner(questions), Approver: approver, MCPPolicy: mcpPolicy,
+		MCPSandboxing: mcp.Sandboxing{
+			// travis-broker doubles as the sandbox launcher; its hash is checked again before every launch.
+			ResolveLauncher: func() (string, error) { return broker.ResolveVerifiedBrokerExecutable(brokerSHA256) },
+			IsRequired:      cfg.Security.RequireSandbox,
+		},
 	})
 	if err != nil {
 		return err
@@ -288,6 +293,8 @@ type chatSessionDeps struct {
 	Approver   core.Approver   //exhaustruct:optional
 	// MCPPolicy decides MCP server launches. Its zero value grants nothing.
 	MCPPolicy policy.Policy //exhaustruct:optional
+	// MCPSandboxing confines MCP servers. Its zero value has no launcher, so every server is refused.
+	MCPSandboxing mcp.Sandboxing //exhaustruct:optional
 }
 
 // validate reports the first required dependency that is missing. A struct of dependencies
@@ -349,7 +356,7 @@ func assembleChatSession(deps chatSessionDeps) (*chatSession, error) {
 	// Async by design (BuildManager's own doc comment): connecting here, before the TUI's
 	// event loop starts reading approvals, would deadlock any server that needs Ask.
 	redactedEvents := redact.WrapSink(deps.Bus, deps.Redactor)
-	mcpManager := mcp.BuildManager(cfg.MCP, deps.MCPPolicy, deps.Approver, clock, redactedEvents, deps.Diagnostics, toolRegistry, paths.StateDir)
+	mcpManager := mcp.BuildManager(cfg.MCP, deps.MCPPolicy, deps.Approver, clock, redactedEvents, deps.Diagnostics, toolRegistry, paths.StateDir, deps.MCPSandboxing)
 
 	ids := id.BuildULIDGenerator(clock)
 	loopDeps := loop.Dependencies{Provider: deps.Provider, Tools: toolRegistry, Events: redactedEvents, Clock: clock, IDs: ids, Skills: skillsCatalog}
