@@ -126,7 +126,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	apiKey := config.ResolveProviderAPIKey()
+	apiKey := config.ResolveProviderAPIKey(profile.Auth)
 	redactor := redact.New(apiKey)
 	bus := buildSessionBus(os.Stderr)
 	approvals := make(chan core.ApprovalRequest)

@@ -83,10 +83,9 @@ type SkillsCfg struct {
 // AuthCfg never carries a credential value, only a reference the broker resolves
 // later (`keyring://`, `env://`, `cmd://`) — see ResolveProviderAPIKey.
 //
-// Known deviation, accepted for Phase 1: Ref is decoded but not yet consulted.
-// ResolveProviderAPIKey always reads OPENAI_API_KEY regardless of what Ref names, so
-// every profile shares one credential source until the broker (which resolves Ref
-// for real) arrives.
+// Known deviation, accepted for Phase 1: only `env://` refs to a fixed list of variables
+// (providerAuthEnvVars) are honoured; anything else falls back to OPENAI_API_KEY until
+// the broker (which resolves Ref for real) arrives.
 type AuthCfg struct {
 	Kind string
 	Ref  string
@@ -235,6 +234,12 @@ func buildDefaultConfig() Config {
 					Kind:    "openai_compatible",
 					BaseURL: "https://api.openai.com/v1",
 					Model:   "gpt-4o-mini",
+				},
+				"deepseek": {
+					Kind:    "openai_compatible",
+					BaseURL: "https://api.deepseek.com/v1",
+					Model:   "deepseek-chat",
+					Auth:    AuthCfg{Kind: "env", Ref: "env://DEEPSEEK_API_KEY"},
 				},
 			},
 		},
