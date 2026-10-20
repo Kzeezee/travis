@@ -27,6 +27,10 @@ build: ## Build every package, then bin/travis with bin/travis-broker's hash sta
 chat: build ## Build, then run `travis chat` against the current directory (pass flags with ARGS="...")
 	./bin/travis$(GOEXE) chat $(ARGS)
 
+.PHONY: audio
+audio: ## Build bin/travis-audio, the optional voice-input helper; needs cgo and a C compiler (§5.10)
+	CGO_ENABLED=1 go build -o bin/travis-audio$(GOEXE) ./cmd/travis-audio
+
 .PHONY: install
 install: ## Install travis and travis-broker to $(go env GOPATH)/bin with the hash stamped in, so `travis chat` works from any directory
 	go build -o $(GOBIN)/travis-broker$(GOEXE) ./cmd/travis-broker
