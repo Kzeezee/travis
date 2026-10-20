@@ -122,6 +122,11 @@ func buildValidatedPathSet(configDir, stateDir, cacheDir, systemConfigFile, work
 	}, nil
 }
 
+// ReportUserConfigFile is the per-user config file, the one `travis config init` creates.
+func (p PathSet) ReportUserConfigFile() string {
+	return filepath.Join(p.ConfigDir, "config.toml")
+}
+
 func (p PathSet) Resolve(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {

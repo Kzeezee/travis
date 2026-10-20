@@ -65,8 +65,10 @@ func run(args []string, in io.Reader, out io.Writer) error {
 		return nil
 	case "chat":
 		return runChat(args[1:], in, out)
+	case "config":
+		return runConfig(args[1:], out)
 	default:
-		return fmt.Errorf("unknown command %q (try: travis chat, travis version)", args[0])
+		return fmt.Errorf("unknown command %q (try: travis chat, travis config, travis version)", args[0])
 	}
 }
 
