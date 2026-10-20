@@ -201,7 +201,7 @@ func TestPaletteListsAndCompletesCommands(t *testing.T) {
 		t.Fatalf("got %d rows for /, want min(every command, the palette cap) = %d", len(rows), min(len(m.commands), maxPaletteRows))
 	}
 	m, _ = pressKeys(m, typedKeys("mo")...) // "m" alone now also matches /memory
-	if rows := m.listPaletteRows(); len(rows) != 1 || rows[0].name != "model" {
+	if rows := m.listPaletteRows(); len(rows) != 1 || rows[0].completion != "/model " {
 		t.Fatalf("got rows %v for /mo, want only /model", rows)
 	}
 	if view := renderPlainView(m); !strings.Contains(view, "› /model [name]") {
@@ -234,7 +234,7 @@ func TestPaletteKeysMoveSelectionAndEscClears(t *testing.T) {
 		t.Fatalf("got index %d, want down clamped at %d", m.paletteIndex, want)
 	}
 	m, _ = pressKeys(m, tea.KeyPressMsg{Code: tea.KeyTab})
-	if m.input.Value() != "/"+rows[len(rows)-1].name+" " {
+	if m.input.Value() != rows[len(rows)-1].completion {
 		t.Fatalf("got input %q, want the last visible command completed", m.input.Value())
 	}
 
@@ -256,5 +256,28 @@ func TestPaletteEnterRunsTheSelectedCommand(t *testing.T) {
 	}
 	if m.input.Value() != "" {
 		t.Fatalf("got input %q, want it cleared", m.input.Value())
+	}
+}
+
+func TestPaletteSuggestsModelsForTheModelArgument(t *testing.T) {
+	recorder := &recordingActions{}
+	actions := recorder.buildChatActions()
+	actions.ListModels = func(context.Context) ([]string, error) { return []string{"claude-x", "gpt-4o", "GPT-4o-mini"}, nil }
+	m := buildTestModel(actions)
+
+	m, _ = updateModel(m, listModels(m.ctx, actions.ListModels)())
+	m, _ = pressKeys(m, typedKeys("/model g")...)
+	rows := m.listPaletteRows()
+	if len(rows) != 2 || rows[0].completion != "/model gpt-4o" || rows[1].completion != "/model GPT-4o-mini" {
+		t.Fatalf("got rows %v for /model g, want the two case-insensitive g matches", rows)
+	}
+
+	m, _ = pressKeys(m, tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.input.Value() != "/model gpt-4o" {
+		t.Fatalf("got input %q, want tab to complete the selected model", m.input.Value())
+	}
+	m, _ = pressKeys(m, enterKey)
+	if recorder.selectedModel != "gpt-4o" || m.modelName != "gpt-4o" {
+		t.Fatalf("got selected %q, want enter to switch to gpt-4o", recorder.selectedModel)
 	}
 }

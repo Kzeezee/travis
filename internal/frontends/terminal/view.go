@@ -111,15 +111,14 @@ func renderApprovalModal(request core.ApprovalRequest, width int) string {
 	return assistantLabelStyle.Render(ansi.Truncate(line, max(width-1, 1), ellipsis))
 }
 
-// renderPalette lists matching commands; the selected row is marked and reversed so it shows without colour too.
-func (m chatModel) renderPalette(rows []slashCommand) string {
+// renderPalette lists matching commands or models; the selected row is marked and reversed so it shows without colour too.
+func (m chatModel) renderPalette(rows []paletteRow) string {
 	lines := make([]string, 0, len(rows))
-	for i, command := range rows {
-		label := fmt.Sprintf("%-16s %s", command.usage, command.summary)
+	for i, row := range rows {
 		if i == m.paletteIndex {
-			lines = append(lines, truncateWithMargin(selectedRowStyle.Render("› "+label), m.width))
+			lines = append(lines, truncateWithMargin(selectedRowStyle.Render("› "+row.label), m.width))
 		} else {
-			lines = append(lines, truncateWithMargin(dimStyle.Render("  "+label), m.width))
+			lines = append(lines, truncateWithMargin(dimStyle.Render("  "+row.label), m.width))
 		}
 	}
 	return strings.Join(lines, "\n")
