@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -131,6 +132,50 @@ func (p *Provider) Chat(ctx context.Context, request core.ProviderRequest) (core
 		case <-p.clock.After(delay):
 		}
 	}
+}
+
+type modelListResponse struct {
+	Data []struct {
+		ID string `json:"id"`
+	} `json:"data"`
+}
+
+// ListModels reports the endpoint's model IDs, sorted, from GET {baseURL}/models.
+func (p *Provider) ListModels(ctx context.Context) ([]string, error) {
+	endpoint, err := url.JoinPath(p.baseURL, "models")
+	if err != nil {
+		return nil, &core.ProviderError{Provider: providerName, Kind: core.ErrInvalid, Cause: err}
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, &core.ProviderError{Provider: providerName, Kind: core.ErrInvalid, Cause: err}
+	}
+	if p.apiKey != "" {
+		httpRequest.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+
+	response, err := p.client.Do(httpRequest)
+	if err != nil {
+		return nil, &core.ProviderError{Provider: providerName, Kind: core.ErrTransient, Cause: err}
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return nil, translateStatusError(response.StatusCode, response.Body)
+	}
+
+	var list modelListResponse
+	if err := json.NewDecoder(response.Body).Decode(&list); err != nil {
+		return nil, translateMalformedChunk(err)
+	}
+	ids := make([]string, 0, len(list.Data))
+	for _, model := range list.Data {
+		// Gemini lists "models/<id>" but accepts the bare id, which is what config and users write.
+		if id := strings.TrimPrefix(model.ID, "models/"); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids, nil
 }
 
 // openStream makes one attempt and returns the body of a 200 response. A failed attempt

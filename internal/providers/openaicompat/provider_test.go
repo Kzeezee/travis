@@ -609,3 +609,29 @@ func openChat(t *testing.T, server *httptest.Server, apiKey string) core.Stream 
 	t.Cleanup(func() { _ = stream.Close() })
 	return stream
 }
+
+func TestListModelsReturnsSortedIDsWithTheCredential(t *testing.T) {
+	var capturedAuthorizationHeader, capturedMethod, capturedPath string
+	server := startEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		capturedAuthorizationHeader, capturedMethod, capturedPath = r.Header.Get("Authorization"), r.Method, r.URL.Path
+		_, _ = io.WriteString(w, `{"data":[{"id":"gpt-4o"},{"id":"models/gemini-x"},{"id":"claude-x"},{"id":""}]}`)
+	})
+	provider := openaicompat.BuildProvider(server.URL+"/v1/", testAPIKey, server.Client(), core.SystemClock{})
+
+	ids, err := provider.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if !slices.Equal(ids, []string{"claude-x", "gemini-x", "gpt-4o"}) {
+		t.Fatalf("got ids %v, want sorted non-empty bare ids", ids)
+	}
+	if capturedMethod != http.MethodGet || capturedPath != "/v1/models" || capturedAuthorizationHeader != "Bearer "+testAPIKey {
+		t.Fatalf("got %s %s auth %q, want GET /v1/models with the bearer credential", capturedMethod, capturedPath, capturedAuthorizationHeader)
+	}
+
+	failing := startEndpoint(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
+	_, err = openaicompat.BuildProvider(failing.URL, "", failing.Client(), core.SystemClock{}).ListModels(context.Background())
+	if !errors.Is(err, core.ErrAuth) {
+		t.Fatalf("got %v, want an auth ProviderError", err)
+	}
+}

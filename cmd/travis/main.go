@@ -171,6 +171,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		RunTurn:      session.conversation.RunAssistantTurn,
 		ResetHistory: session.conversation.ResetHistory,
 		SelectModel:  session.conversation.SelectModel,
+		ListModels:   provider.ListModels,
 		ListTools:    session.reportToolNames,
 		ListSkills:   session.reportSkillSummaries,
 		ReadMemory:   session.memoryStore.ReadMemory,
