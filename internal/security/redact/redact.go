@@ -116,6 +116,9 @@ func (r Redactor) RedactEvent(event core.Event) core.Event {
 	case core.ThoughtStreamed:
 		e.Text = r.RedactText(e.Text)
 		return e
+	case core.SpeechRequested:
+		e.Text = r.RedactText(e.Text)
+		return e
 	case core.ToolCallStarted:
 		e.Call.Arguments = r.RedactJSON(e.Call.Arguments)
 		return e

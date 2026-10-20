@@ -20,12 +20,19 @@ const (
 		"- If a tool returns an error, read it and correct the call; do not repeat a call that already failed the same way.\n" +
 		"- When an answer draws on files, say which files."
 	stylePrompt = "Answer concisely in plain text; the terminal does not render Markdown."
+	// Only the tagged text is spoken, so the reply stays readable and the speech stays short.
+	speechPrompt = "The user also hears you. Wrap the one or two sentences worth saying aloud, such as the outcome " +
+		"or what you need from them, in <speak></speak>. Everything else is only shown. Never put code, paths, " +
+		"or lists inside the tags."
 )
 
 // buildSystemPrompt gives the date so relative dates ("last week's notes") resolve.
-func buildSystemPrompt(now time.Time, skillSections []string) string {
+func buildSystemPrompt(now time.Time, skillSections []string, isSpeechEnabled bool) string {
 	identity := identityPrompt + " Today is " + now.Format("Monday 2006-01-02") + "."
 	sections := []string{identity, toolUsePrompt, stylePrompt}
+	if isSpeechEnabled {
+		sections = append(sections, speechPrompt)
+	}
 	sections = append(sections, skillSections...)
 	return strings.Join(sections, "\n\n")
 }

@@ -37,6 +37,9 @@ type Dependencies struct {
 	Clock    core.Clock
 	IDs      core.IDGenerator
 	Skills   SkillsIndex
+	// IsSpeechEnabled asks the model to mark what to say aloud and publishes each marked span
+	// as SpeechRequested. Off, <speak> is ordinary text, so a reply about the tag itself survives.
+	IsSpeechEnabled bool
 }
 
 // zero defers to the lookup's own exposure limit
@@ -66,7 +69,11 @@ type AssistantConversation struct {
 	ids      core.IDGenerator
 	skills   SkillsIndex
 	model    string
-	maxSteps int
+
+	isSpeechEnabled bool
+	// hasSpokenThisTurn records whether the model marked any speech, so a silent reply gets a fallback.
+	hasSpokenThisTurn bool
+	maxSteps          int
 
 	// entries is this conversation's copy of what it recorded in the session log; the history
 	// the model sees is always rebuilt from it, never kept separately.
@@ -91,6 +98,8 @@ func BuildAssistantConversation(deps Dependencies, model string, maxSteps int) *
 		skills:   deps.Skills,
 		model:    model,
 		maxSteps: maxSteps,
+
+		isSpeechEnabled: deps.IsSpeechEnabled,
 	}
 }
 
@@ -110,6 +119,7 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 	c.busy.Lock()
 	defer c.busy.Unlock()
 	c.turnID = c.ids.GenerateID()
+	c.hasSpokenThisTurn = false
 	userMessage := core.Message{Role: core.RoleUser, Parts: []core.Part{core.TextPart{Text: prompt}}}
 	c.events.Publish(ctx, core.UserMessageSubmitted{EventHeader: c.buildEventHeader(), Message: userMessage})
 	if err := c.recordMessage(ctx, userMessage); err != nil {
@@ -138,6 +148,9 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 		}
 		if len(reply.calls) == 0 {
 			c.isNextStepUntrusted = false
+			if c.isSpeechEnabled && !c.hasSpokenThisTurn && strings.TrimSpace(reply.text) != "" {
+				c.startSpeechFallback(ctx, reply.text)
+			}
 			c.completeTurn(ctx, reply.reason, usage)
 			return nil
 		}
@@ -221,7 +234,7 @@ func (c *AssistantConversation) runStep(ctx context.Context, hint string) (stepR
 	tools := c.buildToolSpecs(ctx, hint)
 	request := core.ProviderRequest{
 		Model:    c.model,
-		System:   buildSystemPrompt(c.clock.ReportCurrentTime(), sections),
+		System:   buildSystemPrompt(c.clock.ReportCurrentTime(), sections, c.isSpeechEnabled),
 		Messages: session.BuildHistory(c.entries),
 		Tools:    tools,
 	}
@@ -248,11 +261,16 @@ func (c *AssistantConversation) buildToolSpecs(ctx context.Context, hint string)
 
 func (c *AssistantConversation) consumeStream(ctx context.Context, stream core.Stream) (stepReply, error) {
 	var text strings.Builder
+	var speech speechExtractor
 	reply := stepReply{reason: core.StopEndTurn}
 
 	for {
 		chunk, err := stream.Next()
 		if errors.Is(err, io.EOF) {
+			if c.isSpeechEnabled {
+				shown, speeches := speech.flush()
+				c.publishAssistantText(ctx, shown, speeches)
+			}
 			reply.text = text.String()
 			c.mintMissingCallIDs(reply.calls)
 			return reply, nil
@@ -266,7 +284,12 @@ func (c *AssistantConversation) consumeStream(ctx context.Context, stream core.S
 		}
 		if chunk.Text != "" {
 			text.WriteString(chunk.Text)
-			c.events.Publish(ctx, core.AssistantTextStreamed{EventHeader: c.buildEventHeader(), Text: chunk.Text})
+			if c.isSpeechEnabled {
+				shown, speeches := speech.feed(chunk.Text)
+				c.publishAssistantText(ctx, shown, speeches)
+			} else {
+				c.publishAssistantText(ctx, chunk.Text, nil)
+			}
 		}
 		reply.calls = append(reply.calls, chunk.ToolCalls...)
 		if chunk.Usage != nil {
@@ -275,6 +298,18 @@ func (c *AssistantConversation) consumeStream(ctx context.Context, stream core.S
 		if chunk.Finish != "" {
 			reply.reason = chunk.Finish
 		}
+	}
+}
+
+// publishAssistantText publishes shown text before the speech it closed, so the transcript
+// never lags what is being said.
+func (c *AssistantConversation) publishAssistantText(ctx context.Context, shown string, speeches []string) {
+	if shown != "" {
+		c.events.Publish(ctx, core.AssistantTextStreamed{EventHeader: c.buildEventHeader(), Text: shown})
+	}
+	for _, speech := range speeches {
+		c.hasSpokenThisTurn = true
+		c.events.Publish(ctx, core.SpeechRequested{EventHeader: c.buildEventHeader(), Text: speech})
 	}
 }
 

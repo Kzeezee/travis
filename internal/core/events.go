@@ -22,6 +22,7 @@ const (
 	EventFileChanged           EventType = "file.changed"
 	EventFilesReverted         EventType = "files.reverted"
 	EventConversationRewound   EventType = "conversation.rewound"
+	EventSpeechRequested       EventType = "speech.requested"
 )
 
 // Event is the shared interface for timeline facts observed by UI, traces, or tests.
@@ -187,4 +188,15 @@ type ConversationRewound struct {
 
 func (ConversationRewound) ReportEventType() EventType {
 	return EventConversationRewound
+}
+
+// SpeechRequested records that the assistant marked Text to be spoken aloud (§5.11). It is
+// shown in the transcript like any other text; speaking it is a voice frontend's choice.
+type SpeechRequested struct {
+	EventHeader
+	Text string `json:"text"`
+}
+
+func (SpeechRequested) ReportEventType() EventType {
+	return EventSpeechRequested
 }
