@@ -65,8 +65,10 @@ func run(args []string, in io.Reader, out io.Writer) error {
 		return nil
 	case "chat":
 		return runChat(args[1:], in, out)
+	case "config":
+		return runConfig(args[1:], out)
 	default:
-		return fmt.Errorf("unknown command %q (try: travis chat, travis version)", args[0])
+		return fmt.Errorf("unknown command %q (try: travis chat, travis config, travis version)", args[0])
 	}
 }
 
@@ -171,6 +173,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		RunTurn:      session.conversation.RunAssistantTurn,
 		ResetHistory: session.conversation.ResetHistory,
 		SelectModel:  session.conversation.SelectModel,
+		ListModels:   provider.ListModels,
 		ListTools:    session.reportToolNames,
 		ListSkills:   session.reportSkillSummaries,
 		ReadMemory:   session.memoryStore.ReadMemory,

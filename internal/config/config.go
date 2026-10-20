@@ -22,15 +22,15 @@ import (
 // Config is the fully merged, validated settings every subsystem reads from. Fields
 // are added by whichever ticket first needs that subsystem's config, not all at once.
 type Config struct {
-	Profile  string
-	Provider ProviderCfg
-	Brain    BrainCfg
-	Tools    ToolsCfg
-	Eval     EvalCfg
-	Session  SessionCfg
-	MCP      MCPCfg
-	Skills   SkillsCfg
-	Security SecurityCfg
+	Profile  string      `toml:"profile"`
+	Provider ProviderCfg `toml:"provider"`
+	Brain    BrainCfg    `toml:"brain"`
+	Tools    ToolsCfg    `toml:"tools"`
+	Eval     EvalCfg     `toml:"eval"`
+	Session  SessionCfg  `toml:"session"`
+	MCP      MCPCfg      `toml:"mcp"`
+	Skills   SkillsCfg   `toml:"skills"`
+	Security SecurityCfg `toml:"security"`
 }
 
 // SecurityCfg is the user layer's grants. The workspace layer may not set [security] at all
@@ -47,16 +47,16 @@ type SecurityCfg struct {
 // ProviderCfg selects which model profile is live and lists every profile a user has
 // defined, keyed by whatever name they chose.
 type ProviderCfg struct {
-	Active   string
-	Profiles map[string]ProviderProfileCfg
+	Active   string                        `toml:"active"`
+	Profiles map[string]ProviderProfileCfg `toml:"profiles"`
 }
 
 type ProviderProfileCfg struct {
-	Kind      string
-	BaseURL   string `toml:"base_url"`
-	Model     string
-	MaxTokens int `toml:"max_tokens"`
-	Auth      AuthCfg
+	Kind      string  `toml:"kind"`
+	BaseURL   string  `toml:"base_url"`
+	Model     string  `toml:"model"`
+	MaxTokens int     `toml:"max_tokens"`
+	Auth      AuthCfg `toml:"auth"`
 }
 
 // MCPCfg lists every local MCP server a user has defined, keyed by whatever name they
@@ -64,13 +64,13 @@ type ProviderProfileCfg struct {
 // be able to make `travis chat` exec a command just by being `cd`'d into (DESIGN.md R-27,
 // here for code execution rather than credential redirection).
 type MCPCfg struct {
-	Servers map[string]MCPServerCfg
+	Servers map[string]MCPServerCfg `toml:"servers"`
 }
 
 type MCPServerCfg struct {
-	Command string
-	Args    []string
-	Env     map[string]string
+	Command string            `toml:"command"`
+	Args    []string          `toml:"args"`
+	Env     map[string]string `toml:"env"`
 	// AllowNet lets the sandboxed server reach the network; its first launch needs it to download a package.
 	AllowNet bool `toml:"allow_net"`
 	// ReadPaths and WritePaths are absolute paths the sandboxed server may use beyond its own scratch folder.
@@ -85,7 +85,7 @@ type SkillsCfg struct {
 	// Roots is resolved through PathSet.Resolve: a "config:"-prefixed root lives outside
 	// the workspace and is trusted (user tier); anything that resolves inside the
 	// workspace is untrusted (workspace tier), regardless of how it was spelled.
-	Roots []string
+	Roots []string `toml:"roots"`
 }
 
 // AuthCfg never carries a credential value, only a reference the broker resolves
@@ -95,8 +95,8 @@ type SkillsCfg struct {
 // (providerAuthEnvVars) are honoured; anything else falls back to OPENAI_API_KEY until
 // the broker (which resolves Ref for real) arrives.
 type AuthCfg struct {
-	Kind string
-	Ref  string
+	Kind string `toml:"kind"`
+	Ref  string `toml:"ref"`
 }
 
 // BrainCfg bounds one assistant turn (DESIGN.md 5.4).
@@ -118,7 +118,7 @@ type ToolsCfg struct {
 // layer cannot set it: a cloned repo must not be able to switch off the record of what
 // the agent did inside it.
 type EvalCfg struct {
-	Traces bool
+	Traces bool `toml:"traces"`
 }
 
 // SessionCfg bounds what the change journal stores (DESIGN.md 5.15). The workspace
@@ -198,8 +198,7 @@ func load(readFile fileReader, pathSet PathSet, extraPaths []string, lookup envL
 	cfg := buildDefaultConfig()
 	var diags Diagnostics
 
-	userConfigFile := filepath.Join(pathSet.ConfigDir, "config.toml")
-	for _, layerPath := range []string{pathSet.SystemConfigFile, userConfigFile} {
+	for _, layerPath := range []string{pathSet.SystemConfigFile, pathSet.ReportUserConfigFile()} {
 		layerDiags, err := decodeLayerFile(readFile, layerPath, &cfg)
 		diags = append(diags, layerDiags...)
 		if err != nil {

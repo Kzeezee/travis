@@ -5,6 +5,7 @@ package terminal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -63,6 +64,8 @@ type ChatActions struct {
 	RunTurn      func(ctx context.Context, prompt string) error
 	ResetHistory func()
 	SelectModel  func(name string)
+	// ListModels names the models the active endpoint offers, for /model suggestions; nil means none.
+	ListModels func(ctx context.Context) ([]string, error)
 	// ListTools, ListSkills and ReadMemory query the session live, not a startup snapshot:
 	// a server that connects or dies mid-session must show up correctly in /tools.
 	ListTools  func() []string
@@ -150,6 +153,19 @@ type turnFinishedMsg struct {
 
 type inputEndedMsg struct{}
 
+// modelsListedMsg carries /model suggestions; a failed listing is dropped, leaving no suggestions.
+type modelsListedMsg struct{ names []string }
+
+func listModels(ctx context.Context, list func(context.Context) ([]string, error)) tea.Cmd {
+	return func() tea.Msg {
+		names, err := list(ctx)
+		if err != nil {
+			return nil
+		}
+		return modelsListedMsg{names: names}
+	}
+}
+
 type approvalRequestedMsg struct{ request core.ApprovalRequest }
 type questionRequestedMsg struct{ request core.QuestionRequest }
 
@@ -219,6 +235,8 @@ type chatModel struct {
 	actions   ChatActions
 	commands  []slashCommand
 	modelName string
+	// modelNames are the /model suggestions, empty until the endpoint's listing arrives.
+	modelNames []string
 
 	transcript      transcript
 	replies         *replyRenderer // a pointer so its cache survives chatModel's value copies
@@ -269,6 +287,9 @@ func (m chatModel) Init() tea.Cmd {
 	if m.questions != nil {
 		cmds = append(cmds, listenForQuestions(m.questions))
 	}
+	if m.actions.ListModels != nil {
+		cmds = append(cmds, listModels(m.ctx, m.actions.ListModels))
+	}
 	return tea.Batch(cmds...)
 }
 
@@ -318,6 +339,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case turnFinishedMsg:
 		return m.finishTurn(msg)
+	case modelsListedMsg:
+		m.modelNames = msg.names
+		m.fitViewport() // the palette may already be open for "/model "
 	case turnsListedMsg:
 		return m.openUndoPicker(msg)
 	case rewindFinishedMsg:
@@ -368,13 +392,13 @@ func (m chatModel) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.paletteIndex = min(m.paletteIndex+1, len(rows)-1)
 			return m, nil
 		case "tab":
-			m.input.SetValue("/" + rows[m.paletteIndex].name + " ")
+			m.input.SetValue(rows[m.paletteIndex].completion)
 			m.input.CursorEnd()
 			m.paletteIndex = 0
 			m.fitViewport()
 			return m, nil
 		case "enter":
-			m.input.SetValue("/" + rows[m.paletteIndex].name)
+			m.input.SetValue(rows[m.paletteIndex].completion)
 			return m.submitPrompt()
 		case "esc":
 			m.input.Reset()
@@ -477,13 +501,37 @@ func (m chatModel) handleApprovalKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	)
 }
 
-// listPaletteRows reports the commands matching a bare "/word" being typed while idle; none means the palette is closed.
-func (m chatModel) listPaletteRows() []slashCommand {
+// paletteRow is one palette suggestion: completion is the input text tab fills in.
+type paletteRow struct {
+	completion string
+	label      string
+}
+
+// listPaletteRows reports what the palette suggests while idle: commands for a bare "/word", or
+// the endpoint's models for "/model prefix". None means the palette is closed.
+func (m chatModel) listPaletteRows() []paletteRow {
 	value := m.input.Value()
-	if m.cancelTurn != nil || !strings.HasPrefix(value, "/") || strings.Contains(value, " ") {
+	if m.cancelTurn != nil || !strings.HasPrefix(value, "/") {
 		return nil
 	}
-	rows := filterSlashCommands(m.commands, value[1:])
+	var rows []paletteRow
+	if prefix, isModelArgument := strings.CutPrefix(value, "/model "); isModelArgument {
+		if strings.Contains(prefix, " ") {
+			return nil
+		}
+		for _, name := range m.modelNames {
+			if strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
+				rows = append(rows, paletteRow{completion: "/model " + name, label: name})
+			}
+		}
+	} else if !strings.Contains(value, " ") {
+		for _, command := range filterSlashCommands(m.commands, value[1:]) {
+			rows = append(rows, paletteRow{
+				completion: "/" + command.name + " ",
+				label:      fmt.Sprintf("%-16s %s", command.usage, command.summary),
+			})
+		}
+	}
 	return rows[:min(len(rows), maxPaletteRows)]
 }
 

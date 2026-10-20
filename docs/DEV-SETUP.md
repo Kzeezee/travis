@@ -130,7 +130,9 @@ ollama pull qwen3:14b
 ```
 
 Then create a `config.toml` in your **user config directory** (not the workspace
-`.travis/` one — see the next paragraph for why):
+`.travis/` one — see the next paragraph for why). `travis config path` prints where that
+is on your machine, and `travis config init` writes a commented starter file there
+(it refuses to overwrite an existing one):
 
 | OS | Path |
 | --- | --- |
@@ -149,7 +151,8 @@ model    = "qwen3:14b"
 ```
 
 `config.Load()` picks this up automatically on the next `travis chat` — no env var or
-flag needed for a local model. To switch back to a cloud model, add a second
+flag needed for a local model. `travis config check` validates every layer (non-zero exit
+on errors) and `travis config show` prints the merged result, with MCP `env` values masked. To switch back to a cloud model, add a second
 `[provider.profiles.<name>]` block and change `active` to point at it, or set
 `TRAVIS_PROVIDER_ACTIVE` for a one-off override without editing the file.
 
