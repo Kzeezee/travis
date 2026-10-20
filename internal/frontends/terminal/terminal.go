@@ -15,6 +15,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/term"
 
 	"github.com/Kzeezee/travis/internal/core"
@@ -238,6 +239,7 @@ type chatModel struct {
 	modelNames []string
 
 	transcript      transcript
+	replies         *replyRenderer // a pointer so its cache survives chatModel's value copies
 	viewport        viewport.Model
 	input           textinput.Model
 	width           int
@@ -273,7 +275,7 @@ func buildChatModel(
 
 	m := chatModel{
 		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, actions: actions, commands: buildSlashCommands(), modelName: opts.ModelName,
-		viewport: viewport.New(), input: input,
+		viewport: viewport.New(), input: input, replies: &replyRenderer{},
 	}
 	m.transcript.warnings = opts.StartupWarnings
 	m.resize(defaultWidth, defaultHeight)
@@ -295,6 +297,10 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
+	case tea.ColorProfileMsg:
+		// Markdown is the default until this arrives (once at startup), so tests need no message to be deterministic.
+		m.replies.isPlainTextOnly = msg.Profile < colorprofile.ANSI256
+		m.refreshTranscript()
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	case tea.PasteMsg:
@@ -608,7 +614,7 @@ func (m *chatModel) fitViewport() {
 // refreshTranscript re-renders the transcript, following new output unless the user scrolled up.
 func (m *chatModel) refreshTranscript() {
 	isFollowingLatest := m.viewport.AtBottom()
-	content := renderTranscript(m.transcript, m.width)
+	content := renderTranscript(m.transcript, m.width, m.replies)
 	if m.pendingQuestion != nil {
 		content += "\n\n" + wrapWithMargin(assistantLabelStyle.Render("travis asks ›")+" "+m.pendingQuestion.Text, m.width)
 	}

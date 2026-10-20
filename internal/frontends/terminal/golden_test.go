@@ -56,6 +56,21 @@ func TestGoldenFrames(t *testing.T) {
 		})
 	}
 
+	// teatest runs without a terminal, so the frames above use the plain-text fallback; these build the model directly to render markdown.
+	for _, width := range []int{50, 80} {
+		t.Run(fmt.Sprintf("markdown_width_%d", width), func(t *testing.T) {
+			m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "gpt-4o-mini"})
+			m.resize(width, 20)
+			m.transcript.startTurn("what's in my notes folder?")
+			m, _ = updateModel(m, eventBatchMsg{events: []core.Event{
+				core.UserMessageSubmitted{},
+				core.AssistantTextStreamed{Text: markdownReply},
+				core.TurnCompleted{Reason: core.StopEndTurn},
+			}})
+			teatest.RequireEqualOutput(t, []byte(renderPlainView(m)))
+		})
+	}
+
 	t.Run("palette_width_80", func(t *testing.T) {
 		m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "gpt-4o-mini"})
 		m.resize(80, 16)
@@ -64,3 +79,5 @@ func TestGoldenFrames(t *testing.T) {
 		teatest.RequireEqualOutput(t, []byte(renderPlainView(m)))
 	})
 }
+
+const markdownReply = "Your notes folder has **three** files:\n\n- `groceries.md`\n- `cs464.md`\n- `ideas.md`, which I couldn't open\n\n```go\nos.ReadDir(\"notes\")\n```"
