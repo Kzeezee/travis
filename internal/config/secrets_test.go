@@ -39,7 +39,7 @@ func TestResolveProviderAPIKeyIsEmptyWhenUnset(t *testing.T) {
 }
 
 func TestRemoveProviderCredentialKeepsEverythingElse(t *testing.T) {
-	environ := []string{"PATH=/bin", "OPENAI_API_KEY=sk-test", "openai_api_key=sk-lower", "DEEPSEEK_API_KEY=sk-ds", "TRAVIS_HOME=/t", "=C:=C:\\"}
+	environ := []string{"PATH=/bin", "OPENAI_API_KEY=sk-test", "openai_api_key=sk-lower", "DEEPSEEK_API_KEY=sk-ds", "GEMINI_API_KEY=g-key", "TRAVIS_HOME=/t", "=C:=C:\\"}
 
 	got := removeProviderCredential(environ)
 	if want := []string{"PATH=/bin", "TRAVIS_HOME=/t", "=C:=C:\\"}; !slices.Equal(got, want) {
