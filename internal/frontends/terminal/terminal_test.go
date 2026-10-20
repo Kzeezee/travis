@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Kzeezee/travis/internal/core"
@@ -325,7 +326,7 @@ func TestRenderTurnLabelsOnlyRepliesNeverWorkOrBlankText(t *testing.T) {
 		{text: "\nOn the 13th.\n"},
 	}}
 
-	got := ansi.Strip(renderTurn(turn, 80))
+	got := ansi.Strip(renderTurn(turn, 80, &replyRenderer{}))
 	if strings.Count(got, "travis ›") != 2 || !strings.Contains(got, "travis › Let me look.") || !strings.Contains(got, "travis › On the 13th.") {
 		t.Fatalf("got\n%s\nwant a label on each reply only, none on the blank chunk, card, or thought", got)
 	}
@@ -392,5 +393,52 @@ func TestPasteIsIgnoredWhileAModalIsOpen(t *testing.T) {
 	}
 	if next.(chatModel).pendingApproval == nil {
 		t.Fatal("the modal was dismissed by a paste")
+	}
+}
+
+func TestRenderReplyShowsMarkdownWithoutRawMarkers(t *testing.T) {
+	got := ansi.Strip((&replyRenderer{}).renderReply("A **bold** claim:\n\n- one\n- two\n\n```\ncode here\n```", 60))
+
+	for _, raw := range []string{"**", "```", "- one"} {
+		if strings.Contains(got, raw) {
+			t.Fatalf("got\n%s\nwant no raw %q marker", got, raw)
+		}
+	}
+	for _, shown := range []string{"travis › A bold claim:", "• one", "• two", "code here"} {
+		if !strings.Contains(got, shown) {
+			t.Fatalf("got\n%s\nwant %q", got, shown)
+		}
+	}
+}
+
+func TestRenderReplyKeepsTextOfHalfFinishedMarkdown(t *testing.T) {
+	// The 33ms coalescer can emit any prefix of a reply, so every prefix must render.
+	reply := "Try:\n\n```go\nfmt.Println(\"hi\")\n"
+	for end := range len(reply) + 1 {
+		(&replyRenderer{}).renderReply(reply[:end], 60)
+	}
+
+	got := ansi.Strip((&replyRenderer{}).renderReply(reply, 60))
+	if !strings.Contains(got, `fmt.Println("hi")`) || !strings.Contains(got, "travis › Try:") {
+		t.Fatalf("got\n%s\nwant the text of the unclosed fence", got)
+	}
+}
+
+func TestLowColourTerminalKeepsMarkdownPlain(t *testing.T) {
+	m := buildTestModel(ChatActions{})
+	m.transcript.startTurn("q")
+	m, _ = updateModel(m, tea.ColorProfileMsg{Profile: colorprofile.ANSI})
+	m, _ = updateModel(m, eventBatchMsg{events: []core.Event{
+		core.UserMessageSubmitted{},
+		core.AssistantTextStreamed{Text: "A **bold** claim"},
+	}})
+
+	if got := renderPlainView(m); !strings.Contains(got, "travis › A **bold** claim") {
+		t.Fatalf("got\n%s\nwant markdown left untouched", got)
+	}
+
+	m, _ = updateModel(m, tea.ColorProfileMsg{Profile: colorprofile.ANSI256})
+	if got := renderPlainView(m); !strings.Contains(got, "travis › A bold claim") {
+		t.Fatalf("got\n%s\nwant markdown rendered once 256 colours are reported", got)
 	}
 }

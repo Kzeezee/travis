@@ -1,0 +1,20 @@
+ you › what's in my notes folder?                 
+                                                  
+ travis › Your notes folder has three files:      
+                                                  
+          •  groceries.md                         
+          •  cs464.md                             
+          •  ideas.md , which I couldn't open     
+                                                  
+            os.ReadDir("notes")                   
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+                                                  
+──────────────────────────────────────────────────
+ ›                                                
+──────────────────────────────────────────────────
+ gpt-4o-mini · idle · last turn: none

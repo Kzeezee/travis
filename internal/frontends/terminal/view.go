@@ -6,6 +6,9 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
+	glamouransi "charm.land/glamour/v2/ansi"
+	glamourstyles "charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -150,7 +153,7 @@ func reportOutcome(outcome turnOutcome) string {
 	return ""
 }
 
-func renderTranscript(t transcript, width int) string {
+func renderTranscript(t transcript, width int, replies *replyRenderer) string {
 	sections := make([]string, 0, len(t.turns)+2)
 	if len(t.warnings) > 0 {
 		warnings := make([]string, 0, len(t.warnings))
@@ -165,7 +168,7 @@ func renderTranscript(t transcript, width int) string {
 	for _, turn := range t.turns {
 		switch {
 		case !turn.isRewound:
-			sections = append(sections, renderTurn(turn, width))
+			sections = append(sections, renderTurn(turn, width, replies))
 		case len(turn.notices) > 0: // a rewound turn shows only what /undo did, in its place
 			sections = append(sections, renderNotices(turn.notices, width))
 		}
@@ -175,7 +178,7 @@ func renderTranscript(t transcript, width int) string {
 
 // renderTurn lays a turn out as the prompt, then replies, thoughts, and tool cards in arrival order.
 // Only replies carry the travis label; thoughts and cards stay faint so they never read as the answer.
-func renderTurn(turn chatTurn, width int) string {
+func renderTurn(turn chatTurn, width int, replies *replyRenderer) string {
 	lines := []string{wrapWithMargin(userLabelStyle.Render("you ›")+" "+turn.prompt, width), ""}
 
 	for _, part := range turn.parts {
@@ -186,7 +189,7 @@ func renderTurn(turn chatTurn, width int) string {
 		case part.isThought:
 			lines = append(lines, truncateWithMargin(renderCollapsedThought(part.text), width))
 		case reply != "": // a whitespace-only chunk before a tool call must not show a bare label
-			lines = append(lines, wrapWithMargin(assistantLabelStyle.Render("travis ›")+" "+reply, width))
+			lines = append(lines, replies.renderReply(reply, width))
 		}
 	}
 
@@ -230,6 +233,76 @@ func renderToolCard(card toolCard) string {
 		return errorStyle.Render("  ✗ " + card.name + ": " + card.detail)
 	}
 	return ""
+}
+
+const assistantLabel = "travis ›"
+
+// replyMarkdownStyle is glamour's dark style with the document margin and surrounding blank lines
+// removed, so a reply fits beside the label. It is fixed, never auto-detected, so frames are reproducible.
+var replyMarkdownStyle = func() glamouransi.StyleConfig {
+	style := glamourstyles.DarkStyleConfig
+	noMargin := uint(0)
+	style.Document.Margin = &noMargin
+	style.Document.BlockPrefix = ""
+	style.Document.BlockSuffix = ""
+	return style
+}()
+
+// ponytail: cache dropped wholesale at this size (each streamed frame adds a dead entry); LRU if re-rendering history after a drop is ever felt.
+const maxCachedReplies = 256
+
+type markdownCacheKey struct {
+	text  string
+	width int
+}
+
+// replyRenderer lays assistant replies out beside the travis label: as markdown, or as plain
+// wrapped text when the terminal has under 256 colours. The zero value renders markdown.
+type replyRenderer struct {
+	isPlainTextOnly bool
+	cache           map[markdownCacheKey]string
+}
+
+// renderReply labels a reply and fits it in the transcript width. Markdown lines hang under the
+// first line's text so blocks (lists, fences) stay aligned; an unclosed fence renders as code, and a
+// markdown failure falls back to plain text.
+func (r *replyRenderer) renderReply(reply string, width int) string {
+	label := assistantLabelStyle.Render(assistantLabel) + " "
+	if r.isPlainTextOnly {
+		return wrapWithMargin(label+reply, width)
+	}
+	indent := lipgloss.Width(assistantLabel) + 1
+	key := markdownCacheKey{reply, width}
+	body, isCached := r.cache[key]
+	if !isCached {
+		var err error
+		if body, err = renderMarkdown(reply, max(width-1-indent, 1)); err != nil {
+			return wrapWithMargin(label+reply, width)
+		}
+		if r.cache == nil || len(r.cache) >= maxCachedReplies {
+			r.cache = make(map[markdownCacheKey]string)
+		}
+		r.cache[key] = body
+	}
+	lines := strings.Split(body, "\n")
+	for i := 1; i < len(lines); i++ {
+		if lines[i] != "" {
+			lines[i] = strings.Repeat(" ", indent+1) + lines[i]
+		}
+	}
+	return " " + label + strings.Join(lines, "\n")
+}
+
+func renderMarkdown(text string, wrapWidth int) (string, error) {
+	renderer, err := glamour.NewTermRenderer(glamour.WithStyles(replyMarkdownStyle), glamour.WithWordWrap(wrapWidth), glamour.WithPreservedNewLines())
+	if err != nil {
+		return "", err
+	}
+	rendered, err := renderer.Render(text)
+	if err != nil {
+		return "", err
+	}
+	return strings.Trim(rendered, "\n"), nil
 }
 
 // wrapWithMargin wraps text inside a one-cell left margin.
