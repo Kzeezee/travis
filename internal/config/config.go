@@ -251,6 +251,12 @@ func buildDefaultConfig() Config {
 					Model:   "deepseek-chat",
 					Auth:    AuthCfg{Kind: "env", Ref: "env://DEEPSEEK_API_KEY"},
 				},
+				"gemini": {
+					Kind:    "openai_compatible",
+					BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+					Model:   "gemini-3.5-flash-lite",
+					Auth:    AuthCfg{Kind: "env", Ref: "env://GEMINI_API_KEY"},
+				},
 			},
 		},
 		Brain:    BrainCfg{MaxSteps: 40},

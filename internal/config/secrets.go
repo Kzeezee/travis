@@ -9,7 +9,7 @@ import (
 // providerAuthEnvVars are the only variables a profile's `auth.ref = "env://NAME"` may name.
 // A closed list keeps BuildEnvironmentWithoutSecrets able to strip every credential.
 // The first is the fallback, matching DESIGN.md 5.2's example `ref = "env://OPENAI_API_KEY"`.
-var providerAuthEnvVars = []string{"OPENAI_API_KEY", "DEEPSEEK_API_KEY"}
+var providerAuthEnvVars = []string{"OPENAI_API_KEY", "DEEPSEEK_API_KEY", "GEMINI_API_KEY"}
 
 // ResolveProviderAPIKey reports the model-provider credential the profile's auth names, or
 // an empty string when none is set. An empty result is normal: local endpoints need no credential.

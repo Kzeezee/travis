@@ -368,18 +368,7 @@ func TestNotesTaskRunsEndToEndThroughTheRealWiring(t *testing.T) {
 // task, but the replies are a real model's, replayed through the real provider adapter and its
 // stream parser. Re-record: go test ./cmd/travis -run Recorded -record-cassettes
 func TestNotesTaskReplaysARecordedModel(t *testing.T) {
-	path := filepath.Join("..", "..", "testdata", "cassettes", "notes-task.jsonl")
-	baseURL, model, auth := "http://cassette.invalid/v1", "replayed-model", config.AuthCfg{}
-	if cassette.IsRecording() {
-		cfg, _, err := config.Load()
-		if err != nil {
-			t.Fatal(err)
-		}
-		profile := cfg.Provider.Profiles[cfg.Provider.Active]
-		baseURL, model, auth = profile.BaseURL, profile.Model, profile.Auth
-		t.Logf("recording against %s, model %s (provider profile %q)", baseURL, model, cfg.Provider.Active)
-	}
-	provider := openaicompat.BuildProvider(baseURL, config.ResolveProviderAPIKey(auth), cassette.BuildClient(t, path), core.SystemClock{})
+	provider, model := buildRecordedProvider(t, "notes-task.jsonl", "")
 
 	run := runNotesTask(t, provider, model)
 
@@ -391,6 +380,40 @@ func TestNotesTaskReplaysARecordedModel(t *testing.T) {
 	if run.finalThoughts == "" || strings.Contains(run.answer, run.finalThoughts) {
 		t.Fatalf("final thoughts = %q, answer = %q: want reasoning streamed apart from the answer", run.finalThoughts, run.answer)
 	}
+}
+
+// TestNotesTaskReplaysARecordedGeminiModel guards TRA-39: Gemini sends tool calls without an index
+// and needs each call's thought signature back, or the step after a tool call fails with a 400.
+// Re-record: go test ./cmd/travis -run RecordedGemini -record-cassettes (needs GEMINI_API_KEY)
+func TestNotesTaskReplaysARecordedGeminiModel(t *testing.T) {
+	provider, model := buildRecordedProvider(t, "gemini-notes-task.jsonl", "gemini")
+
+	run := runNotesTask(t, provider, model)
+
+	if !strings.Contains(run.answer, "13") || !strings.Contains(run.answer, "October") {
+		t.Fatalf("answer = %q, want it to give the appointment date, %s", run.answer, notesTask.answerDate)
+	}
+}
+
+// buildRecordedProvider replays the named cassette, or records it against the named provider
+// profile (the active one when empty) under -record-cassettes. It also reports the model to ask for.
+func buildRecordedProvider(t *testing.T, cassetteName, profileName string) (*openaicompat.Provider, string) {
+	t.Helper()
+	baseURL, model, auth := "http://cassette.invalid/v1", "replayed-model", config.AuthCfg{}
+	if cassette.IsRecording() {
+		cfg, _, err := config.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if profileName == "" {
+			profileName = cfg.Provider.Active
+		}
+		profile := cfg.Provider.Profiles[profileName]
+		baseURL, model, auth = profile.BaseURL, profile.Model, profile.Auth
+		t.Logf("recording against %s, model %s (provider profile %q)", baseURL, model, profileName)
+	}
+	path := filepath.Join("..", "..", "testdata", "cassettes", cassetteName)
+	return openaicompat.BuildProvider(baseURL, config.ResolveProviderAPIKey(auth), cassette.BuildClient(t, path), core.SystemClock{}), model
 }
 
 // TestWriteTaskRunsEndToEndThroughTheRealWiring is the TRA-25 write path: fs_read, fs_edit and

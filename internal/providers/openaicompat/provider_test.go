@@ -365,6 +365,69 @@ func TestStreamAssemblesToolCallsOnTheFinishFrame(t *testing.T) {
 	}
 }
 
+// Frames as gemini-3.5-flash-lite sends them: no tool call index, and a thought signature on the first call.
+func TestStreamKeepsIndexlessParallelToolCallsApartWithTheirProviderExtra(t *testing.T) {
+	server := startEndpoint(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeStream(w,
+			`{"choices":[{"delta":{"role":"assistant","tool_calls":[{"extra_content":{"google":{"thought_signature":"c2ln"}},"function":{"arguments":"{\"path\":\"README.md\"}","name":"read_file"},"id":"call_1","type":"function"}]},"index":0}]}`,
+			`{"choices":[{"delta":{"role":"assistant","tool_calls":[{"function":{"arguments":"{\"path\":\"go.mod\"}","name":"read_file"},"id":"call_2","type":"function"}]},"index":0}]}`,
+			`{"choices":[{"delta":{"role":"assistant"},"finish_reason":"stop","index":0}]}`,
+			"[DONE]",
+		)
+	})
+
+	chunks, err := drain(t, openChat(t, server, ""))
+	if err != nil {
+		t.Fatalf("draining returned %v, want nil", err)
+	}
+	got := chunks[len(chunks)-1].ToolCalls
+	want := []core.ToolCall{
+		{ID: "call_1", Name: "read_file", Arguments: json.RawMessage(`{"path":"README.md"}`), ProviderExtra: json.RawMessage(`{"google":{"thought_signature":"c2ln"}}`)},
+		{ID: "call_2", Name: "read_file", Arguments: json.RawMessage(`{"path":"go.mod"}`)},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got tool calls %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i].ID != want[i].ID || string(got[i].Arguments) != string(want[i].Arguments) || string(got[i].ProviderExtra) != string(want[i].ProviderExtra) {
+			t.Fatalf("got tool call %d %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestChatSendsProviderExtraBackOnTheToolCall(t *testing.T) {
+	var capturedRequestBody struct {
+		Messages []struct {
+			ToolCalls []struct {
+				ExtraContent json.RawMessage `json:"extra_content"`
+			} `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	server := startEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedRequestBody)
+		writeStream(w, "[DONE]")
+	})
+
+	extra := `{"google":{"thought_signature":"c2ln"}}`
+	provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client(), core.FixedClock{})
+	stream, err := provider.Chat(context.Background(), core.ProviderRequest{
+		Model: "gemini-3.5-flash-lite",
+		Messages: []core.Message{{Role: core.RoleAssistant, Parts: []core.Part{
+			core.ToolCallPart{ToolCall: core.ToolCall{ID: "call_1", Name: "read_file", Arguments: json.RawMessage(`{}`), ProviderExtra: json.RawMessage(extra)}},
+			core.ToolCallPart{ToolCall: core.ToolCall{ID: "call_2", Name: "read_file", Arguments: json.RawMessage(`{}`)}},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned %v, want nil", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	calls := capturedRequestBody.Messages[0].ToolCalls
+	if len(calls) != 2 || string(calls[0].ExtraContent) != extra || calls[1].ExtraContent != nil {
+		t.Fatalf("got tool calls %+v, want extra_content only on the first, verbatim", calls)
+	}
+}
+
 func TestStreamEndsCleanlyWithoutADoneMarker(t *testing.T) {
 	server := startEndpoint(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeStream(w, `{"choices":[{"delta":{"content":"only"}}]}`)

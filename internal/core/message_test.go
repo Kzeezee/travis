@@ -55,7 +55,7 @@ func TestMessageMarshalJSONWithStrictParts(t *testing.T) {
 func TestMessageJSONRoundTripsEveryPartKind(t *testing.T) {
 	message := Message{Role: RoleAssistant, Parts: []Part{
 		TextPart{Text: "reading file"},
-		ToolCallPart{ToolCall: ToolCall{ID: "call_123", Name: "fs_read", Arguments: json.RawMessage(`{"path":"a.go"}`)}},
+		ToolCallPart{ToolCall: ToolCall{ID: "call_123", Name: "fs_read", Arguments: json.RawMessage(`{"path":"a.go"}`), ProviderExtra: json.RawMessage(`{"google":{"thought_signature":"c2ln"}}`)}},
 		ToolResultPart{ToolResult: ToolResult{CallID: "call_123", Name: "fs_read", Content: "package a", IsError: true}},
 	}}
 	encoded, err := json.Marshal(message)

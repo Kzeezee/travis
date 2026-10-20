@@ -26,6 +26,9 @@ type ToolCall struct {
 	ID        ID              `json:"id"`
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
+	// ProviderExtra is opaque data the provider attached to the call and requires back verbatim
+	// in later requests, such as Gemini's thought signature. Only the provider adapter reads it.
+	ProviderExtra json.RawMessage `json:"provider_extra,omitempty"`
 }
 
 type toolCallIDKey struct{}
