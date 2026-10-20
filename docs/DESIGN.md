@@ -1699,7 +1699,7 @@ brokered like any other privileged effect.
 [voice.input]
 enabled   = true
 mode      = "ptt"                # ptt | vad   (wake deferred, OQ-14)
-ptt_key   = "ctrl+space"
+ptt_key   = "ctrl+t"             # not ctrl+space: VS Code's terminal and macOS input switching take it
 ptt_style = "hold"               # hold | toggle; "hold" needs Bubble Tea v2 key-release
 backend   = "whisper_server"
 model     = "ggml-large-v3-turbo-q5_0.bin"   # resolved under the OS state dir (§5.2)

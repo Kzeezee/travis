@@ -6,16 +6,19 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"time"
 
 	"github.com/Kzeezee/travis/internal/agent/loop"
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/eval/trace"
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
+	"github.com/Kzeezee/travis/internal/frontends/voicein"
 	"github.com/Kzeezee/travis/internal/frontends/voiceout"
 	"github.com/Kzeezee/travis/internal/id"
 	"github.com/Kzeezee/travis/internal/log"
@@ -39,6 +42,9 @@ const (
 	defaultMaxReadBytes = 256 << 10
 	// defaultMaxWriteBytes matches the read cap and fits inside broker.MaxWriteFileBytes.
 	defaultMaxWriteBytes = 256 << 10
+	// transcriptionTimeout bounds one dictation's trip to the speech-to-text server; a stuck
+	// server leaves the input box empty rather than the status bar saying "transcribing" forever.
+	transcriptionTimeout = 60 * time.Second
 )
 
 // Overridden at release time via: go build -ldflags "-X main.version=v0.1.0"
@@ -180,6 +186,11 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	events, unsubscribe := session.bus.Subscribe(nil)
 	defer unsubscribe()
 
+	startDictation, voiceInputWarning := buildDictation(cfg.Voice.Input)
+	if voiceInputWarning != "" {
+		startupWarnings = append(startupWarnings, voiceInputWarning)
+	}
+
 	actions := terminal.ChatActions{
 		RunTurn:      session.conversation.RunAssistantTurn,
 		ResetHistory: session.conversation.ResetHistory,
@@ -189,9 +200,11 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		ListSkills:   session.reportSkillSummaries,
 		ReadMemory:   session.memoryStore.ReadMemory,
 		Undo:         terminal.UndoActions{ListTurns: session.conversation.ListTurns, Rewind: session.conversation.Rewind},
+
+		StartDictation: startDictation,
 	}
 	chatErr := terminal.RunChat(context.Background(), events, approvals, actions,
-		terminal.Options{ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions})
+		terminal.Options{ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions, PushToTalkKey: cfg.Voice.Input.PushToTalkKey})
 	session.close()
 	return chatErr
 }
@@ -251,6 +264,24 @@ func startVoiceOutput(cfg config.VoiceOutputCfg, bus *core.Bus, diagnostics io.W
 	speech, _ := bus.Subscribe(func(event core.Event) bool { return event.ReportEventType() == core.EventSpeechRequested })
 	go narrator.SpeakRequestedSpeech(speech)
 	return narrator, ""
+}
+
+// buildDictation is push-to-talk when voice input is on. A missing travis-audio, or an OS with no
+// capture backend, keeps the chat and turns voice input off, saying why (R-19).
+func buildDictation(cfg config.VoiceInputCfg) (func(context.Context) (func() (string, error), error), string) {
+	if !cfg.Enabled {
+		return nil, ""
+	}
+	if !voicein.ReportIsCaptureSupported() {
+		return nil, "voice: this OS has no microphone support; voice input is off"
+	}
+	helper, err := voicein.ResolveHelperExecutable()
+	if err != nil {
+		return nil, fmt.Sprintf("voice: %v; voice input is off", err)
+	}
+	client := &http.Client{Timeout: transcriptionTimeout}
+	dictation := voicein.BuildDictation(voicein.BuildHelperCapturer(helper), voicein.BuildHTTPTranscriber(cfg.BaseURL, cfg.Model, client))
+	return dictation.StartDictation, ""
 }
 
 // buildSessionBus is the bus one chat session publishes to; diagnostics receives its warnings.

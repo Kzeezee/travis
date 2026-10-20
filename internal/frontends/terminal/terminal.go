@@ -43,6 +43,8 @@ type Options struct {
 	Input           io.Reader
 	Output          io.Writer
 	Questions       <-chan core.QuestionRequest
+	// PushToTalkKey records while held; empty means ctrl+t (§5.10 ptt_key).
+	PushToTalkKey string
 }
 
 // UndoActions are the operations /undo runs: list the turns it can take back, and rewind from
@@ -72,6 +74,9 @@ type ChatActions struct {
 	ListSkills func() []SkillSummary
 	ReadMemory func(ctx context.Context) (string, error)
 	Undo       UndoActions
+	// StartDictation begins a push-to-talk recording; finish stops it and returns the transcript.
+	// Nil means voice input is off.
+	StartDictation func(ctx context.Context) (finish func() (string, error), err error)
 }
 
 // RunChat runs the interactive chat until the user quits or input ends.
@@ -255,6 +260,15 @@ type chatModel struct {
 	// sandboxTier is the tier MCP servers run under, empty until one starts (DESIGN §9.2.1: always shown).
 	sandboxTier string
 
+	dictation       dictationState
+	finishDictation func() (string, error) // set only while recording
+	// isDictationStopRequested remembers a release that came before the recording had started.
+	isDictationStopRequested bool
+	// canHoldToTalk is true once the terminal reports key releases; until then push-to-talk toggles.
+	canHoldToTalk  bool
+	pushToTalkKey  string
+	pushToTalkCode rune
+
 	cancelTurn        context.CancelFunc // set only while a turn runs
 	isCancelRequested bool
 	hasInputEnded     bool
@@ -275,7 +289,10 @@ func buildChatModel(
 
 	m := chatModel{
 		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, actions: actions, commands: buildSlashCommands(), modelName: opts.ModelName,
-		viewport: viewport.New(), input: input, replies: &replyRenderer{},
+		viewport: viewport.New(), input: input, replies: &replyRenderer{}, pushToTalkKey: opts.PushToTalkKey,
+	}
+	if m.pushToTalkKey == "" {
+		m.pushToTalkKey = defaultPushToTalkKey
 	}
 	m.transcript.warnings = opts.StartupWarnings
 	m.resize(defaultWidth, defaultHeight)
@@ -303,6 +320,14 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshTranscript()
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case tea.KeyReleaseMsg:
+		return m.handlePushToTalkRelease(msg)
+	case tea.KeyboardEnhancementsMsg:
+		m.canHoldToTalk = msg.SupportsEventTypes()
+	case dictationStartedMsg:
+		return m.handleDictationStarted(msg)
+	case dictationFinishedMsg:
+		return m.handleDictationFinished(msg)
 	case tea.PasteMsg:
 		return m.handlePaste(msg)
 	case tea.MouseWheelMsg:
@@ -326,7 +351,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case approvalRequestedMsg:
 		m.pendingApproval = &msg.request
 		// Not re-armed here: only one modal at a time; handleApprovalKey re-arms it once answered.
-		return m, nil
+		return m.muteDictationForModal()
 	case questionRequestedMsg:
 		if m.cancelTurn == nil {
 			return m, listenForQuestions(m.questions)
@@ -336,7 +361,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.refreshTranscript()
 		m.viewport.GotoBottom()
-		return m, nil
+		return m.muteDictationForModal()
 	case turnFinishedMsg:
 		return m.finishTurn(msg)
 	case modelsListedMsg:
@@ -382,6 +407,9 @@ func (m chatModel) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.undoPicker != nil {
 		return m.handleUndoPickerKey(key)
+	}
+	if m.isDictationAvailable() && key.String() == m.pushToTalkKey {
+		return m.handlePushToTalkPress(key)
 	}
 	if rows := m.listPaletteRows(); len(rows) > 0 {
 		switch key.String() {

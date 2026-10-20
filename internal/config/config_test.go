@@ -456,6 +456,30 @@ func TestLoadVoiceOutputIsOffByDefaultAndOnlyTrustedLayersTurnItOn(t *testing.T)
 	}
 }
 
+func TestLoadVoiceInputIsOffByDefaultAndPointsAtThisMachine(t *testing.T) {
+	cfg, diags, err := load(buildFileReaderFromMap(nil), testPathSet(), nil, buildEnvLookupFromMap(nil))
+	if err != nil {
+		t.Fatalf("load() error = %v, diags = %v", err, diags)
+	}
+	input := cfg.Voice.Input
+	if input.Enabled || input.BaseURL != "http://127.0.0.1:8178/v1" || input.PushToTalkKey != "ctrl+t" {
+		t.Fatalf("Voice.Input = %+v, want off, localhost and ctrl+t", input)
+	}
+}
+
+func TestValidateRejectsAnUnusableVoiceInputAddressOnlyWhenEnabled(t *testing.T) {
+	cfg := buildDefaultConfig()
+	cfg.Voice.Input.BaseURL = "localhost:8178"
+	if diags := cfg.Validate(); diags.HasErrors() {
+		t.Fatalf("Validate() = %v, want a disabled voice input left unchecked", diags)
+	}
+
+	cfg.Voice.Input.Enabled = true
+	if diags := cfg.Validate(); !diags.HasErrors() {
+		t.Fatal("Validate() accepted a base_url with no http scheme")
+	}
+}
+
 func TestLoadSnapshotMaxBytesDefaultsTo16MiBAndOnlyTrustedLayersChangeIt(t *testing.T) {
 	pathSet := testPathSet()
 	for _, tc := range []struct {
