@@ -78,9 +78,10 @@ type chatFunction struct {
 }
 
 type chatToolCall struct {
-	ID       string               `json:"id"`
-	Type     string               `json:"type"`
-	Function chatToolCallFunction `json:"function"`
+	ID           string               `json:"id"`
+	Type         string               `json:"type"`
+	Function     chatToolCallFunction `json:"function"`
+	ExtraContent json.RawMessage      `json:"extra_content,omitempty"`
 }
 
 type chatToolCallFunction struct {
@@ -242,6 +243,7 @@ func buildChatToolCall(toolCall core.ToolCall) chatToolCall {
 			Name:      toolCall.Name,
 			Arguments: string(toolCall.Arguments),
 		},
+		ExtraContent: toolCall.ProviderExtra,
 	}
 }
 

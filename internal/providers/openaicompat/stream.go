@@ -28,6 +28,7 @@ type pendingToolCall struct {
 	id        core.ID
 	name      string
 	arguments strings.Builder
+	extra     json.RawMessage
 }
 
 func buildStream(body io.ReadCloser) *stream {
@@ -51,13 +52,14 @@ type streamChunk struct {
 }
 
 type streamToolCallDelta struct {
-	Index    int    `json:"index"`
+	Index    *int   `json:"index"` // Gemini omits it
 	ID       string `json:"id"`
 	Type     string `json:"type"`
 	Function struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
 	} `json:"function"`
+	ExtraContent json.RawMessage `json:"extra_content"`
 }
 
 // Next returns the next chunk, or io.EOF once the endpoint signals the end of the stream.
@@ -130,10 +132,11 @@ func (s *stream) decodeChunk(payload string) (core.Chunk, error) {
 }
 
 func (s *stream) addToolCallDelta(delta streamToolCallDelta) {
-	call, isPending := s.pendingToolCalls[delta.Index]
+	index := s.selectToolCallIndex(delta)
+	call, isPending := s.pendingToolCalls[index]
 	if !isPending {
 		call = &pendingToolCall{}
-		s.pendingToolCalls[delta.Index] = call
+		s.pendingToolCalls[index] = call
 	}
 	if delta.ID != "" {
 		call.id = core.ID(delta.ID)
@@ -141,7 +144,23 @@ func (s *stream) addToolCallDelta(delta streamToolCallDelta) {
 	if delta.Function.Name != "" {
 		call.name = delta.Function.Name
 	}
+	if len(delta.ExtraContent) > 0 {
+		call.extra = delta.ExtraContent
+	}
 	call.arguments.WriteString(delta.Function.Arguments)
+}
+
+// selectToolCallIndex reports which call a delta extends. Without an index, a delta carrying a
+// call ID starts the next call and any other delta continues the latest one.
+func (s *stream) selectToolCallIndex(delta streamToolCallDelta) int {
+	if delta.Index != nil {
+		return *delta.Index
+	}
+	latest := len(s.pendingToolCalls) - 1
+	if latest < 0 || delta.ID != "" {
+		return latest + 1
+	}
+	return latest
 }
 
 // takeToolCalls returns the assembled calls in index order and resets for the next reply.
@@ -158,7 +177,7 @@ func (s *stream) takeToolCalls() []core.ToolCall {
 		if arguments == "" {
 			arguments = "{}"
 		}
-		calls = append(calls, core.ToolCall{ID: pending.id, Name: pending.name, Arguments: json.RawMessage(arguments)})
+		calls = append(calls, core.ToolCall{ID: pending.id, Name: pending.name, Arguments: json.RawMessage(arguments), ProviderExtra: pending.extra})
 	}
 	clear(s.pendingToolCalls)
 	return calls
