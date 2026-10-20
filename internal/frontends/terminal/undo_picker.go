@@ -60,7 +60,7 @@ func (m chatModel) openUndoPicker(msg turnsListedMsg) (tea.Model, tea.Cmd) {
 		m.undoPicker = &undoPicker{turns: newestFirst, mode: undoModes[0]}
 	}
 	m.refreshTranscript()
-	return m, nil
+	return m.muteDictationForModal()
 }
 
 // handleUndoPickerKey takes every key while the picker is open, so nothing typed reaches the input.

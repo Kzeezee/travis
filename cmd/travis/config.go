@@ -38,6 +38,11 @@ const starterConfig = `# Travis user config. Uncomment and edit; run "travis con
 
 # [voice.output]
 # enabled = true
+
+# [voice.input]               # needs travis-audio (make audio) and a local whisper server
+# enabled  = true
+# base_url = "http://127.0.0.1:8178/v1"
+# ptt_key  = "ctrl+t"
 `
 
 func runConfig(args []string, out io.Writer) error {

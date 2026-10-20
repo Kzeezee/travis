@@ -239,6 +239,28 @@ bin/travis-audio capture | head -c 64000 > /tmp/two-seconds.pcm
 macOS asks the terminal app for microphone access the first time; a denied permission can
 record silence rather than fail, so check the file is not all zeros.
 
+Speech-to-text runs in a local whisper.cpp server, so audio from the room never leaves the
+machine (D-15). On macOS:
+
+```
+brew install whisper-cpp
+curl -L -o ~/ai/ggml-base.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+whisper-server -m ~/ai/ggml-base.en.bin --port 8178 --inference-path /v1/audio/transcriptions
+```
+
+Then turn it on in the user config:
+
+```toml
+[voice.input]
+enabled = true
+```
+
+Hold `ctrl+t` while speaking; the transcript lands in the input box for you to edit and
+send. A terminal that cannot report key releases (VS Code's, for one) falls back to
+press-to-start, press-to-stop, and the status bar says so. Pick another key with `ptt_key`
+if `ctrl+t` is taken; `ctrl+space` is not the default because VS Code's terminal and
+macOS input switching both claim it.
+
 ## 6. The Makefile, and what CI will run
 
 `make help` lists the targets. `make check` is everything CI runs, on your machine, in

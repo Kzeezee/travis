@@ -52,7 +52,7 @@ func reportSandboxStatus(tier string) string {
 
 func (m chatModel) View() tea.View {
 	separator := dimStyle.Render(strings.Repeat("─", m.width))
-	statusBar := fmt.Sprintf(" %s · %s · last turn: %s%s", m.modelName, m.reportTurnState(), reportOutcome(m.lastTurnOutcome), reportSandboxStatus(m.sandboxTier))
+	statusBar := fmt.Sprintf(" %s · %s · last turn: %s%s", m.modelName, m.reportTurnState(), reportOutcome(m.lastTurnOutcome), reportSandboxStatus(m.sandboxTier)) + m.reportDictationStatus()
 
 	inputLine := m.input.View()
 	if m.pendingApproval != nil {
@@ -80,6 +80,8 @@ func (m chatModel) View() tea.View {
 	), "\n"))
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
+	// Hold-to-talk needs key releases; terminals without them report so, and push-to-talk toggles.
+	view.KeyboardEnhancements.ReportEventTypes = m.isDictationAvailable()
 	if cursor := m.input.Cursor(); cursor != nil && m.pendingApproval == nil && m.undoPicker == nil {
 		cursor.Y += m.viewport.Height() + len(rows) + 1
 		view.Cursor = cursor

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -38,6 +39,17 @@ type Config struct {
 // workspace layer has no field for it, so a cloned repo cannot make travis talk.
 type VoiceCfg struct {
 	Output VoiceOutputCfg `toml:"output"`
+	Input  VoiceInputCfg  `toml:"input"`
+}
+
+// VoiceInputCfg is off by default. On, holding PushToTalkKey records through travis-audio and
+// BaseURL's OpenAI-style /audio/transcriptions turns it into text for the input box. The
+// default is a whisper.cpp server on this machine, so the room's audio never leaves it (D-15).
+type VoiceInputCfg struct {
+	Enabled       bool   `toml:"enabled"`
+	BaseURL       string `toml:"base_url"`
+	Model         string `toml:"model"`
+	PushToTalkKey string `toml:"ptt_key"`
 }
 
 // VoiceOutputCfg is off by default. On, the model marks what to say and the OS's built-in
@@ -278,6 +290,9 @@ func buildDefaultConfig() Config {
 		Session:  SessionCfg{SnapshotMaxBytes: 16 << 20},
 		MCP:      MCPCfg{},
 		Skills:   SkillsCfg{Roots: []string{"config:skills"}},
+		Voice: VoiceCfg{Input: VoiceInputCfg{
+			BaseURL: "http://127.0.0.1:8178/v1", Model: "whisper-1", PushToTalkKey: "ctrl+t",
+		}},
 	}
 }
 
@@ -500,6 +515,15 @@ func (c *Config) Validate() Diagnostics {
 			Severity: SeverityWarning,
 			Message:  fmt.Sprintf("tools.approval_default %q is not one of auto, ask, never", c.Tools.ApprovalDefault),
 		})
+	}
+
+	if c.Voice.Input.Enabled {
+		if endpoint, err := url.Parse(c.Voice.Input.BaseURL); err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" {
+			diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("voice.input.base_url %q is not an http(s) address", c.Voice.Input.BaseURL)})
+		}
+		if strings.TrimSpace(c.Voice.Input.PushToTalkKey) == "" {
+			diags = append(diags, Diagnostic{Severity: SeverityError, Message: "voice.input.ptt_key is empty"})
+		}
 	}
 
 	// A server with no command is a silent no-op at best and a confusing exec target at
