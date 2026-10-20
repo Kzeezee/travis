@@ -223,6 +223,22 @@ traces = false
 To keep a throwaway session (tests, experiments) out of your real state folder,
 point `TRAVIS_HOME` at another directory; config, state and traces all move under it.
 
+### Voice
+
+Voice output needs nothing extra: set `[voice.output] enabled = true` in the user config and
+travis speaks through the OS (`say` on macOS, `espeak-ng` or `espeak` on Linux, SAPI on
+Windows). Voice input records through a separate helper, `travis-audio`, kept out of the main
+binary because it needs cgo. Build it with `make audio` (a C compiler is required: Xcode
+command line tools, `gcc`, or MinGW on Windows). To check it reaches a microphone, record two
+seconds of 16 kHz mono PCM:
+
+```
+bin/travis-audio capture | head -c 64000 > /tmp/two-seconds.pcm
+```
+
+macOS asks the terminal app for microphone access the first time; a denied permission can
+record silence rather than fail, so check the file is not all zeros.
+
 ## 6. The Makefile, and what CI will run
 
 `make help` lists the targets. `make check` is everything CI runs, on your machine, in
