@@ -104,6 +104,7 @@ func TestRedactEventOnlyTouchesFreeTextFields(t *testing.T) {
 		},
 		"assistant text":         core.AssistantTextStreamed{EventHeader: header, Text: "contains topsecret"},
 		"thought":                core.ThoughtStreamed{EventHeader: header, Text: "contains topsecret"},
+		"speech":                 core.SpeechRequested{EventHeader: header, Text: "contains topsecret"},
 		"tool call":              core.ToolCallStarted{EventHeader: header, Call: core.ToolCall{ID: "c-1", Name: "fs_read", Arguments: json.RawMessage(`{"path":"topsecret"}`)}},
 		"tool result":            core.ToolCallFinished{EventHeader: header, Result: core.ToolResult{CallID: "c-1", Name: "fs_read", Content: "topsecret"}, Display: "topsecret"},
 		"broker unavailable":     core.BrokerUnavailable{EventHeader: header, Reason: "contains topsecret"},

@@ -433,6 +433,29 @@ func TestLoadTracesAreOnByDefaultAndOnlyTrustedLayersTurnThemOff(t *testing.T) {
 	}
 }
 
+func TestLoadVoiceOutputIsOffByDefaultAndOnlyTrustedLayersTurnItOn(t *testing.T) {
+	pathSet := testPathSet()
+	for _, tc := range []struct {
+		name        string
+		files       map[string]string
+		wantEnabled bool
+	}{
+		{"compiled default", nil, false},
+		{"user file", map[string]string{testUserConfigFile(pathSet): "[voice.output]\nenabled = true\n"}, true},
+		{"workspace file is ignored", map[string]string{pathSet.WorkspaceConfigFile: "[voice.output]\nenabled = true\n"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, diags, err := load(buildFileReaderFromMap(tc.files), pathSet, nil, buildEnvLookupFromMap(nil))
+			if err != nil {
+				t.Fatalf("load() error = %v, diags = %v", err, diags)
+			}
+			if cfg.Voice.Output.Enabled != tc.wantEnabled {
+				t.Fatalf("Voice.Output.Enabled = %v, want %v", cfg.Voice.Output.Enabled, tc.wantEnabled)
+			}
+		})
+	}
+}
+
 func TestLoadSnapshotMaxBytesDefaultsTo16MiBAndOnlyTrustedLayersChangeIt(t *testing.T) {
 	pathSet := testPathSet()
 	for _, tc := range []struct {

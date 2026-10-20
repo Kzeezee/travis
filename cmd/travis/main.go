@@ -16,6 +16,7 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/eval/trace"
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
+	"github.com/Kzeezee/travis/internal/frontends/voiceout"
 	"github.com/Kzeezee/travis/internal/id"
 	"github.com/Kzeezee/travis/internal/log"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
@@ -134,6 +135,16 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	approvals := make(chan core.ApprovalRequest)
 	questions := make(chan core.QuestionRequest)
 	approver := terminal.BuildApprover(approvals)
+	questioner := terminal.BuildQuestioner(questions)
+	narrator, voiceWarning := startVoiceOutput(cfg.Voice.Output, bus, os.Stderr)
+	if voiceWarning != "" {
+		startupWarnings = append(startupWarnings, voiceWarning)
+	}
+	if narrator != nil {
+		defer narrator.Close()
+		approver = voiceout.WrapApprover(approver, narrator)
+		questioner = voiceout.WrapQuestioner(questioner, narrator)
+	}
 	sessionID := id.BuildULIDGenerator(core.SystemClock{}).GenerateID()
 	sessionBroker, err := startSessionBroker(paths, sessionID, cfg.Session, os.Stderr, broker.RemoteOptions{
 		Events:   redact.WrapSink(bus, redactor),
@@ -155,7 +166,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		Files: sessionBroker.Remote, Log: sessionBroker.Remote,
 		Memory: sessionBroker.Remote, Commands: sessionBroker.Remote, Pages: sessionBroker.Remote,
 		Bus: bus, Diagnostics: os.Stderr, Redactor: redactor,
-		Questioner: terminal.BuildQuestioner(questions), Approver: approver, MCPPolicy: mcpPolicy,
+		Questioner: questioner, Approver: approver, MCPPolicy: mcpPolicy, IsSpeechEnabled: narrator != nil,
 		MCPSandboxing: mcp.Sandboxing{
 			// travis-broker doubles as the sandbox launcher; its hash is checked again before every launch.
 			ResolveLauncher: func() (string, error) { return broker.ResolveVerifiedBrokerExecutable(brokerSHA256) },
@@ -224,6 +235,22 @@ func (s *chatSession) reportSkillSummaries() []terminal.SkillSummary {
 		out = append(out, terminal.SkillSummary{Name: summary.Name, Tier: summary.Tier.String(), Description: summary.Description})
 	}
 	return out
+}
+
+// startVoiceOutput starts speaking what the bus marks for speech when voice output is on. A
+// machine with no speech program keeps the chat and turns voice off, saying why (R-19).
+func startVoiceOutput(cfg config.VoiceOutputCfg, bus *core.Bus, diagnostics io.Writer) (*voiceout.Narrator, string) {
+	if !cfg.Enabled {
+		return nil, ""
+	}
+	speaker, err := voiceout.BuildSystemSpeaker()
+	if err != nil {
+		return nil, fmt.Sprintf("voice: %v; voice output is off", err)
+	}
+	narrator := voiceout.StartNarrator(speaker, log.BuildTextLogger(diagnostics, log.LevelWarn))
+	speech, _ := bus.Subscribe(func(event core.Event) bool { return event.ReportEventType() == core.EventSpeechRequested })
+	go narrator.SpeakRequestedSpeech(speech)
+	return narrator, ""
 }
 
 // buildSessionBus is the bus one chat session publishes to; diagnostics receives its warnings.
@@ -298,6 +325,8 @@ type chatSessionDeps struct {
 	MCPPolicy policy.Policy //exhaustruct:optional
 	// MCPSandboxing confines MCP servers. Its zero value has no launcher, so every server is refused.
 	MCPSandboxing mcp.Sandboxing //exhaustruct:optional
+	// IsSpeechEnabled asks the model to mark what to say; something must be listening on Bus to say it.
+	IsSpeechEnabled bool //exhaustruct:optional
 }
 
 // validate reports the first required dependency that is missing. A struct of dependencies
@@ -362,7 +391,7 @@ func assembleChatSession(deps chatSessionDeps) (*chatSession, error) {
 	mcpManager := mcp.BuildManager(cfg.MCP, deps.MCPPolicy, deps.Approver, clock, redactedEvents, deps.Diagnostics, toolRegistry, paths.StateDir, deps.MCPSandboxing)
 
 	ids := id.BuildULIDGenerator(clock)
-	loopDeps := loop.Dependencies{Provider: deps.Provider, Tools: toolRegistry, Events: redactedEvents, Clock: clock, IDs: ids, Skills: skillsCatalog}
+	loopDeps := loop.Dependencies{Provider: deps.Provider, Tools: toolRegistry, Events: redactedEvents, Clock: clock, IDs: ids, Skills: skillsCatalog, IsSpeechEnabled: deps.IsSpeechEnabled}
 	if deps.Log != nil {
 		loopDeps.Log = redact.WrapSessionLog(deps.Log, deps.Redactor)
 	}

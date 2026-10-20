@@ -35,6 +35,9 @@ const starterConfig = `# Travis user config. Uncomment and edit; run "travis con
 
 # [eval]
 # traces = true
+
+# [voice.output]
+# enabled = true
 `
 
 func runConfig(args []string, out io.Writer) error {

@@ -31,6 +31,19 @@ type Config struct {
 	MCP      MCPCfg      `toml:"mcp"`
 	Skills   SkillsCfg   `toml:"skills"`
 	Security SecurityCfg `toml:"security"`
+	Voice    VoiceCfg    `toml:"voice"`
+}
+
+// VoiceCfg turns speech on (DESIGN.md §5.10, §5.11). User-config only, like EvalCfg: the
+// workspace layer has no field for it, so a cloned repo cannot make travis talk.
+type VoiceCfg struct {
+	Output VoiceOutputCfg `toml:"output"`
+}
+
+// VoiceOutputCfg is off by default. On, the model marks what to say and the OS's built-in
+// speech program says it; travis also announces when it is waiting for an approval.
+type VoiceOutputCfg struct {
+	Enabled bool `toml:"enabled"`
 }
 
 // SecurityCfg is the user layer's grants. The workspace layer may not set [security] at all

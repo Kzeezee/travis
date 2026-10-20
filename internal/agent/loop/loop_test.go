@@ -719,3 +719,152 @@ func TestRunCarriesTheUntrustedMarkOnlyPastAnEarlyTurnEnd(t *testing.T) {
 		t.Fatalf("untrusted per tool step from the budget's last step on = %v, want %v", probe.seenUntrusted, want)
 	}
 }
+
+func runSpeechTurn(t *testing.T, isSpeechEnabled bool) (*fakeProvider, *recordingSink) {
+	t.Helper()
+	stream := buildTextStream(core.Chunk{Text: "Done. <spe"}, core.Chunk{Text: "ak>All green.</speak> details"})
+	provider := &fakeProvider{streams: []*fakeStream{stream}}
+	sink := &recordingSink{}
+	deps := loop.Dependencies{
+		Provider:        provider,
+		Events:          sink,
+		Clock:           core.FixedClock{Time: time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)},
+		IDs:             &core.SequentialIDGenerator{Prefix: "id-"},
+		IsSpeechEnabled: isSpeechEnabled,
+	}
+	if err := loop.BuildAssistantConversation(deps, "test-model", testMaxSteps).RunAssistantTurn(context.Background(), "hi"); err != nil {
+		t.Fatalf("RunAssistantTurn returned %v, want nil", err)
+	}
+	return provider, sink
+}
+
+func collectShownAndSpoken(sink *recordingSink) (shown string, spoken []string) {
+	for _, event := range sink.events {
+		switch e := event.(type) {
+		case core.AssistantTextStreamed:
+			shown += e.Text
+		case core.SpeechRequested:
+			spoken = append(spoken, e.Text)
+		}
+	}
+	return shown, spoken
+}
+
+func TestRunWithSpeechSpeaksTaggedTextAndShowsItUntagged(t *testing.T) {
+	provider, sink := runSpeechTurn(t, true)
+
+	shown, spoken := collectShownAndSpoken(sink)
+	if shown != "Done. All green. details" {
+		t.Fatalf("shown = %q", shown)
+	}
+	if !slices.Equal(spoken, []string{"All green."}) {
+		t.Fatalf("spoken = %q", spoken)
+	}
+	if !strings.Contains(provider.requests[0].System, "<speak>") {
+		t.Fatal("the system prompt does not ask the model to mark speech")
+	}
+}
+
+func TestRunWithoutSpeechLeavesTagsAsText(t *testing.T) {
+	provider, sink := runSpeechTurn(t, false)
+
+	shown, spoken := collectShownAndSpoken(sink)
+	if shown != "Done. <speak>All green.</speak> details" || len(spoken) != 0 {
+		t.Fatalf("shown = %q, spoken = %q", shown, spoken)
+	}
+	if strings.Contains(provider.requests[0].System, "<speak>") {
+		t.Fatal("the system prompt asks for speech while speech is off")
+	}
+}
+
+// channelSink is safe to publish to from the fallback's goroutine while the turn is still publishing.
+type channelSink struct{ events chan core.Event }
+
+func (s channelSink) Publish(_ context.Context, event core.Event) { s.events <- event }
+
+func runSpeechTurnWith(t *testing.T, provider core.Provider) channelSink {
+	t.Helper()
+	sink := channelSink{events: make(chan core.Event, 64)}
+	deps := loop.Dependencies{
+		Provider:        provider,
+		Events:          sink,
+		Clock:           core.FixedClock{Time: time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)},
+		IDs:             &core.SequentialIDGenerator{Prefix: "id-"},
+		IsSpeechEnabled: true,
+	}
+	if err := loop.BuildAssistantConversation(deps, "test-model", testMaxSteps).RunAssistantTurn(context.Background(), "hi"); err != nil {
+		t.Fatalf("RunAssistantTurn returned %v, want nil", err)
+	}
+	return sink
+}
+
+func waitForSpeech(t *testing.T, sink channelSink) core.SpeechRequested {
+	t.Helper()
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case event := <-sink.events:
+			if speech, ok := event.(core.SpeechRequested); ok {
+				return speech
+			}
+		case <-timeout:
+			t.Fatal("no speech was requested")
+		}
+	}
+}
+
+// §5.11 tier 3: a reply the model marked nothing in still gets one spoken line.
+func TestRunSpeaksASummaryWhenTheReplyMarkedNothing(t *testing.T) {
+	provider := &fakeProvider{streams: []*fakeStream{
+		buildTextStream(core.Chunk{Text: "Tokyo has about 37 million people in its metro area."}),
+		buildTextStream(core.Chunk{Text: "<speak>Tokyo is the biggest.</speak>"}),
+	}}
+
+	speech := waitForSpeech(t, runSpeechTurnWith(t, provider))
+
+	if speech.Text != "Tokyo is the biggest." {
+		t.Fatalf("spoke %q, want the summary without its tags", speech.Text)
+	}
+	summaryRequest := provider.requests[1]
+	if len(summaryRequest.Tools) != 0 || !strings.Contains(summaryRequest.Messages[0].Parts[0].(core.TextPart).Text, "Tokyo has about") {
+		t.Fatalf("summary request = %+v, want the reply and no tools", summaryRequest)
+	}
+}
+
+func TestRunMakesNoSummaryCallWhenTheReplyWasSpoken(t *testing.T) {
+	provider := &fakeProvider{streams: []*fakeStream{buildTextStream(core.Chunk{Text: "<speak>Done.</speak>"})}}
+
+	waitForSpeech(t, runSpeechTurnWith(t, provider))
+
+	if len(provider.requests) != 1 {
+		t.Fatalf("made %d provider calls, want 1", len(provider.requests))
+	}
+}
+
+// rejectingSkipProvider refuses any request that asks to skip reasoning, as an endpoint without
+// the switch would, and otherwise serves its streams in order.
+type rejectingSkipProvider struct{ fakeProvider }
+
+func (p *rejectingSkipProvider) Chat(ctx context.Context, request core.ProviderRequest) (core.Stream, error) {
+	if request.ShouldSkipReasoning {
+		p.requests = append(p.requests, request)
+		return nil, &core.ProviderError{Provider: "test", Kind: core.ErrInvalid}
+	}
+	return p.fakeProvider.Chat(ctx, request)
+}
+
+func TestRunSummaryAsksToSkipReasoningAndRetriesWithoutWhenRejected(t *testing.T) {
+	provider := &rejectingSkipProvider{fakeProvider{streams: []*fakeStream{
+		buildTextStream(core.Chunk{Text: "A long unmarked answer."}),
+		buildTextStream(core.Chunk{Text: "Short version."}),
+	}}}
+
+	speech := waitForSpeech(t, runSpeechTurnWith(t, provider))
+
+	if speech.Text != "Short version." {
+		t.Fatalf("spoke %q, want the retried summary", speech.Text)
+	}
+	if len(provider.requests) != 3 || !provider.requests[1].ShouldSkipReasoning || provider.requests[2].ShouldSkipReasoning {
+		t.Fatalf("requests = %+v, want answer, skip-reasoning summary, then a plain retry", provider.requests)
+	}
+}
