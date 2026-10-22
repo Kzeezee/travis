@@ -72,6 +72,8 @@ func run(args []string, in io.Reader, out io.Writer) error {
 		return nil
 	case "chat":
 		return runChat(args[1:], in, out)
+	case "run":
+		return runHeadless(args[1:], out)
 	case "config":
 		return runConfig(args[1:], out)
 	default:

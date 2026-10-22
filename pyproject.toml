@@ -1,0 +1,10 @@
+[project]
+name = "travis"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "inspect-ai>=0.3.283",
+    "openai>=3.36.0",
+]
