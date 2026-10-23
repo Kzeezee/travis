@@ -84,7 +84,8 @@ through `make chat` and `travis-broker __sandbox-launch` directly. Tier `restric
 | same | + `Python313` | moves on to `Python312`, denied: uv stops at the first unreadable one |
 | same, `--python …\Python313\python.exe` | + `Python313` | `Failed to query Python interpreter: Access is denied` (**Windows gap 2**) |
 | launcher runs `python.exe -c "print(1)"` directly | `Python313` | prints `1`, exit 0 |
-| uvx, `--python`, gap 2 fixed | `.local\bin`, `Python313` | installs into scratch, **`initialize` + `tools/list` pass** |
+| uvx through `make chat`, gap 2 fixed | + `Python313` | `failed to create directory …\AppData\Roaming\uv\tools` (**Windows gap 3**) |
+| uvx, `--python`, gaps 2 and 3 fixed | `.local\bin`, `Python313` | installs into scratch, **`initialize` + `tools/list` pass** |
 
 **Windows gap 1:** the derived read path is an ACL edit, and a standard user cannot edit
 the ACL on `Program Files`. npx servers cannot start unless travis runs elevated, which
@@ -95,6 +96,10 @@ would leave the ACE there for good. Fix candidate: skip the grant where the rest
 SYSTEM, so the target could not open the pipes it created (`pipe: Access is denied`). Fixed
 by granting the user, the sandbox SID and SYSTEM in the token's default DACL, with a
 regression test (`TestSandboxedTargetCanCaptureChildOutput`).
+
+**Windows gap 3:** uv keeps its tools under `%APPDATA%`, which `HOME` and `USERPROFILE` do
+not move, so the scratch env missed it. Fixed by pointing `APPDATA` and `LOCALAPPDATA` into
+scratch too.
 
 The grants persist: `icacls` shows the sandbox SID's inheritable `(RX)` ACE on `.local\bin`
 and `Python313` after the run. A uvx server also needs its Python in `read_paths` and passed
