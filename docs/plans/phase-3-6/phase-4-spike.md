@@ -114,7 +114,10 @@ TRA-62 (gap 2), each with a regression test; both block 4E.
   low-integrity access, so the derived prefix (for example
   `C:\Program Files\nodejs`) gets its ACL changed persistently. Measure this on Windows
   before 4E derives a read set there. 4E may need to skip the derived prefix on Windows,
-  where low integrity can already read it.
+  where low integrity can already read it. **Seen after 4E shipped:** `make chat` on Windows
+  failed with `grant sandbox access to "C:\Program Files\nodejs": Access is denied`, since
+  a normal user cannot edit that ACL. The launcher now skips a read grant it is denied;
+  `Users` can already read Program Files, and skipping never widens access.
 - **Linux ran only in Docker on arm64**, not on a distro host or CI. nvm installs were not
   tried, but the `~/.local` (uv) case confirms the prefix rule.
 - **`server-everything` is a toy.** Servers that need credentials (GitHub token via env)
