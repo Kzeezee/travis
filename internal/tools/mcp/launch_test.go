@@ -184,6 +184,17 @@ func TestBuildSandboxSpecConfinesWritesToScratchAndConfiguredPaths(t *testing.T)
 	}
 }
 
+// uv on Windows writes its tools under APPDATA, which HOME and USERPROFILE do not move.
+func TestBuildSandboxSpecPointsEveryUserFolderIntoScratch(t *testing.T) {
+	scratch := t.TempDir()
+	spec := buildSandboxSpec("/launcher", "/opt/runner/bin/uvx", scratch, config.MCPServerCfg{})
+	for _, key := range []string{"HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"} {
+		if !slices.Contains(spec.Env, key+"="+scratch) {
+			t.Errorf("%s is not the scratch folder in %v", key, spec.Env)
+		}
+	}
+}
+
 // The only explanation a server gives for dying at startup is on its stderr: it is kept in a log that diagnostics
 // names, and never written to the terminal, where it would draw over the chat screen.
 func TestServerStartupErrorIsKeptInItsStderrLog(t *testing.T) {
