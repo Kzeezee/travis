@@ -340,7 +340,7 @@ MCP servers run inside the OS sandbox. A server can read its runner's install fo
 local databases) and write only its own scratch folder,
 `<state dir>/mcp/<name>`, where its home, temp and npm/uv caches live. The network is
 off unless the server allows it, except under `restricted-token` (Windows) and
-`landlock-no-net` (Linux before 6.15), which cannot block it; the approval prompt says
+`landlock-no-net` (Linux before 7.1), which cannot block it; the approval prompt says
 `network not blocked` there:
 
 ```toml
@@ -358,6 +358,17 @@ The status bar shows the tier (`sandbox: seatbelt`, `landlock`, `landlock-no-net
 shows `⚠ sandbox: none`. Changing the tier, `allow_net` or the paths asks for approval
 again.
 
+On Linux the tier depends on the kernel's Landlock version. **Linux 5.19 is the supported
+floor.** 5.13 to 5.18 runs sandboxed, but its Landlock refuses renames between folders,
+which uv needs, so uvx servers cannot install; npx copies instead and still works.
+
+| Kernel | MCP servers |
+| --- | --- |
+| below 5.13 | no Landlock: refused, or unconfined with `require_sandbox = false` |
+| 5.13 to 5.18 | `landlock-no-net`; uvx servers fail to install |
+| 5.19 to 7.0 | `landlock-no-net`; everything works |
+| 7.1+ | `landlock`; TCP and Unix sockets blocked, UDP too from 7.2 |
+
 `[skills] load_workspace` has been removed. Configure workspace skill roots in your
 user `[skills] roots` instead. Workspace skills and `AGENTS.md` require one keyboard
 approval per content snapshot per chat session. Content changes ask again; declining
@@ -369,6 +380,7 @@ keeps the workspace instructions out of the prompt and `skill_open`.
 | A newly approved MCP server's tools are absent from the first reply | Discovery runs asynchronously; wait for the server's tools to appear in `/tools` before sending the request |
 | An MCP server did not start | Its own errors are in `<state dir>/mcp/<name>/stderr.log`, which the startup line names |
 | That log shows an npm `network`, `ENOTFOUND` or `EAI_AGAIN` error | Its first launch downloads the package but `allow_net` is off; set `allow_net = true` for that server |
+| That log shows `Invalid cross-device link (os error 18)` from uv on Linux | The kernel is older than 5.19 and its sandbox cannot allow the rename uv needs; use 5.19+ (for example Ubuntu's HWE kernel) |
 | `gopls` not found, but it is installed | `$(go env GOPATH)/bin` missing from PATH (§2) |
 | Golden-file tests fail only on Windows | line endings. Goldens normalise before comparing (§8.1) — the test is wrong, not your machine |
 | Tests pass locally, fail in CI | CI runs `-race` natively on three OSes. Run `go test -race ./...` before pushing |
