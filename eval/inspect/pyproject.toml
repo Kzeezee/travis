@@ -1,8 +1,7 @@
 [project]
-name = "travis"
+name = "travis-eval"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+description = "Inspect AI live evals for travis (Phase 6)"
 requires-python = ">=3.14"
 dependencies = [
     "inspect-ai>=0.3.283",
