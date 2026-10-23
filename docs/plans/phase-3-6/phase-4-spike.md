@@ -7,7 +7,7 @@ merged, so it measures the shipped backends rather than prototypes. The harness 
 `cmd/sandboxspike` on the throwaway branch
 `feat/tra-45-phase-4-spike-sandbox-feasibility` (never merged): it launches a real server through
 `sandbox.BuildCommand` and completes `initialize` + `tools/list`. Linux ran in Docker (see
-below). Windows is **not run yet**; rerun the harness there before 4E closes.
+below). Windows ran later, through shipped travis after 4E merged (see below).
 
 ## What ran (seatbelt)
 
@@ -68,6 +68,37 @@ backend grants `/etc/ssl` only with `AllowNetwork`. Fix: add that one file to
 directories, even inside scratch, fails with `EXDEV`. uv renames from a temp dir into
 its cache. Fix: `RWDirs(path).WithRefer()` on write paths. Tracked as TRA-61 (gap 1) and
 TRA-62 (gap 2), each with a regression test; both block 4E.
+
+## What ran (restricted token, Windows)
+
+Run 2026-10-23 on Windows 11 (26200), not elevated, Node 22.13 in `C:\Program Files\nodejs`,
+uv in `%UserProfile%\.local\bin`, Python 3.12 and 3.13 from python.org under
+`%LocalAppData%\Programs\Python`. The cmd/sandboxspike branch is gone, so servers ran
+through `make chat` and `travis-broker __sandbox-launch` directly. Tier `restricted-token`.
+
+| Case | Read paths | Result |
+|---|---|---|
+| `go test ./internal/security/sandbox/` | — | escape test passes; network cases skip (tier has no network containment) |
+| npx `server-everything` / `server-filesystem` | derived `C:\Program Files\nodejs` | `grant sandbox access to "C:\Program Files\nodejs": Access is denied` (**Windows gap 1**) |
+| uvx `mcp-server-time` | derived `.local\bin` | uv walks the registry Pythons; reading `Python313\python.exe` is denied |
+| same | + `Python313` | moves on to `Python312`, denied: uv stops at the first unreadable one |
+| same, `--python …\Python313\python.exe` | + `Python313` | `Failed to query Python interpreter: Access is denied` (**Windows gap 2**) |
+| launcher runs `python.exe -c "print(1)"` directly | `Python313` | prints `1`, exit 0 |
+| uvx, `--python`, gap 2 fixed | `.local\bin`, `Python313` | installs into scratch, **`initialize` + `tools/list` pass** |
+
+**Windows gap 1:** the derived read path is an ACL edit, and a standard user cannot edit
+the ACL on `Program Files`. npx servers cannot start unless travis runs elevated, which
+would leave the ACE there for good. Fix candidate: skip the grant where the restricting SIDs
+(Users, Everyone) can already read. Open as a ticket.
+
+**Windows gap 2:** the restricted token kept the default DACL, which names only the user and
+SYSTEM, so the target could not open the pipes it created (`pipe: Access is denied`). Fixed
+by granting the user, the sandbox SID and SYSTEM in the token's default DACL, with a
+regression test (`TestSandboxedTargetCanCaptureChildOutput`).
+
+The grants persist: `icacls` shows the sandbox SID's inheritable `(RX)` ACE on `.local\bin`
+and `Python313` after the run. A uvx server also needs its Python in `read_paths` and passed
+with `--python`, or uv fails on the first registry Python it cannot read.
 
 ## Findings
 
