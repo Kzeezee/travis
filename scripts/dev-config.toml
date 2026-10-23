@@ -1,0 +1,24 @@
+# Permissive user config for local development; `make dev-config` installs it. Never ship it.
+# It must live in the user config dir: a workspace .travis/config.toml cannot set [provider],
+# [security] or [mcp] (DESIGN.md R-27).
+
+[provider]
+active = "local"
+
+# Matches scripts/llama-server.sh's defaults; any OpenAI-compatible endpoint works.
+[provider.profiles.local]
+kind     = "openai_compatible"
+base_url = "http://127.0.0.1:8080/v1"
+model    = "Ling-3.0-tiny-Q4_K_M"
+
+[security]
+# Any command may run; every exec and MCP server launch still asks for approval (D-27).
+exec_allow = ["**"]
+# Hosts the fetch tool may reach.
+host_allow = ["*"]
+
+# Sample server with many tools, for exercising MCP end to end. Needs Node (npx).
+[mcp.servers.everything]
+command   = "npx"
+args      = ["-y", "@modelcontextprotocol/server-everything"]
+allow_net = true
