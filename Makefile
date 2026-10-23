@@ -27,6 +27,12 @@ build: ## Build every package, then bin/travis with bin/travis-broker's hash sta
 chat: build ## Build, then run `travis chat` against the current directory (pass flags with ARGS="...")
 	./bin/travis$(GOEXE) chat $(ARGS)
 
+.PHONY: dev-config
+dev-config: build ## Install scripts/dev-config.toml as your user config (permissive, dev only); never overwrites
+	@user_file=$$(./bin/travis$(GOEXE) config path | sed -n 's/^user *\(.*\) ([a-z]*)$$/\1/p'); \
+	if [ -e "$$user_file" ]; then echo "$$user_file already exists; not overwriting (compare with scripts/dev-config.toml)"; exit 1; fi; \
+	mkdir -p "$$(dirname "$$user_file")" && install -m 600 scripts/dev-config.toml "$$user_file" && echo "wrote $$user_file"
+
 .PHONY: audio
 audio: ## Build bin/travis-audio, the optional voice-input helper; needs cgo and a C compiler (§5.10)
 	CGO_ENABLED=1 go build -o bin/travis-audio$(GOEXE) ./cmd/travis-audio

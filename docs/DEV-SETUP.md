@@ -270,6 +270,7 @@ CI's order: `build vet lint test-race tidy vuln`. Run it before pushing.
 | --- | --- |
 | `make build` | `go build ./...`, then `bin/travis` and `bin/travis-broker` with the broker's hash stamped in |
 | `make chat` | `make build`, then runs `bin/travis chat` here; pass flags with `ARGS="--model foo"` |
+| `make dev-config` | installs `scripts/dev-config.toml` as your user config if you have none: local llama-server provider, every command allowed (each still asks), the `everything` MCP server. Dev only; release builds keep the deny-by-default config |
 | `make install` | installs `travis` and `travis-broker` to `$(go env GOPATH)/bin` with the hash stamped in, so plain `travis chat` works from any directory once that's on your PATH |
 | `make test` / `make test-race` | unit tests; `-race` is what CI runs |
 | `make lint` | `golangci-lint run` at the version pinned in `.golangci-lint-version` |
@@ -377,6 +378,7 @@ keeps the workspace instructions out of the prompt and `skill_open`.
 | Symptom | Cause |
 | --- | --- |
 | `command not found: go` in a new terminal | PATH not picked up — restart the terminal, or check the install location |
+| Every `exec` call fails with `exec_denied` / `no exec grant covers` | The command is not in `[security] exec_allow`; `make dev-config` (or `exec_allow = ["**"]`) allows all, each call still asks |
 | A newly approved MCP server's tools are absent from the first reply | Discovery runs asynchronously; wait for the server's tools to appear in `/tools` before sending the request |
 | An MCP server did not start | Its own errors are in `<state dir>/mcp/<name>/stderr.log`, which the startup line names |
 | That log shows an npm `network`, `ENOTFOUND` or `EAI_AGAIN` error | Its first launch downloads the package but `allow_net` is off; set `allow_net = true` for that server |
