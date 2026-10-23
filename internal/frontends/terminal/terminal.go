@@ -43,6 +43,8 @@ type Options struct {
 	Input           io.Reader
 	Output          io.Writer
 	Questions       <-chan core.QuestionRequest
+	// Diagnostics, when set, shows its lines as notices while the chat runs.
+	Diagnostics *DiagnosticsWriter
 	// PushToTalkKey records while held; empty means ctrl+t (§5.10 ptt_key).
 	PushToTalkKey string
 }
@@ -95,10 +97,15 @@ func RunChat(
 	defer cancel() // also stops a turn still running when the program exits
 
 	input, inputEnded := watchInputEnd(opts.Input)
+	model := buildChatModel(ctx, events, approvals, actions, opts)
+	if opts.Diagnostics != nil {
+		model.diagnostics = opts.Diagnostics.startCapture()
+		defer opts.Diagnostics.stopCapture()
+	}
 	// Bubble Tea recovers panics in View, Update, and Cmds, restores the terminal, and prints the
 	// trace (DESIGN.md §5.9); passing tea.WithoutCatchPanics would give that up.
 	program := tea.NewProgram(
-		buildChatModel(ctx, events, approvals, actions, opts),
+		model,
 		tea.WithInput(input),
 		tea.WithOutput(opts.Output),
 	)
@@ -237,9 +244,11 @@ type chatModel struct {
 	events    <-chan core.Event
 	approvals <-chan core.ApprovalRequest
 	questions <-chan core.QuestionRequest
-	actions   ChatActions
-	commands  []slashCommand
-	modelName string
+	// diagnostics are runtime diagnostic lines, shown as notices instead of drawn over the screen.
+	diagnostics <-chan string
+	actions     ChatActions
+	commands    []slashCommand
+	modelName   string
 	// modelNames are the /model suggestions, empty until the endpoint's listing arrives.
 	modelNames []string
 
@@ -304,6 +313,9 @@ func (m chatModel) Init() tea.Cmd {
 	if m.questions != nil {
 		cmds = append(cmds, listenForQuestions(m.questions))
 	}
+	if m.diagnostics != nil {
+		cmds = append(cmds, listenForDiagnostics(m.diagnostics))
+	}
 	if m.actions.ListModels != nil {
 		cmds = append(cmds, listModels(m.ctx, m.actions.ListModels))
 	}
@@ -348,6 +360,10 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !msg.isChannelClosed {
 			return m, listenForEvents(m.events)
 		}
+	case diagnosticLineMsg:
+		m.transcript.addNotice(strings.TrimPrefix(msg.line, "travis: "))
+		m.refreshTranscript()
+		return m, listenForDiagnostics(m.diagnostics)
 	case approvalRequestedMsg:
 		m.pendingApproval = &msg.request
 		// Not re-armed here: only one modal at a time; handleApprovalKey re-arms it once answered.
