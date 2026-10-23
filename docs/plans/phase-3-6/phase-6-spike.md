@@ -53,11 +53,21 @@ The published run at 30 tasks × 3 trials is about USD 0.30 at that rate. Multi-
 and injection tasks will run longer; even at 10× the cost per run the published run stays
 inside its ~USD 5.60 share, so 6B can keep k=3.
 
+## Running it
+
+`travis run` exists only in eval builds: `--answers` lets a file answer approvals, which
+D-10 forbids for real use, so `cmd/travis/run.go` carries `//go:build eval` and release
+builds get a stub that refuses. The Dockerfile builds with `GOFLAGS=-tags=eval`.
+
+```sh
+cd eval/inspect
+uv run inspect eval notes.py --model <provider/model>
+uv run inspect view --log-dir logs
+```
+
 ## Left for 6B
 
 - `runHeadless` duplicates `runChat`'s setup; share one assembly.
 - Exit codes per stop reason, and the answers file validated at the boundary (shape only so
-  far). `--answers` lets a file answer approvals, which D-10 forbids for real use; keep the
-  command eval-only.
+  far).
 - A shared solver for all tasks, and results exported as JSONL rows.
-- The Python project sits at the repo root from `uv init`; move it under `eval/inspect/`.

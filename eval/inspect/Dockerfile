@@ -4,7 +4,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN make build
+# eval tag: compiles in `travis run`, which release builds leave out (D-10).
+RUN GOFLAGS=-tags=eval make build
 
 FROM debian:trixie-slim
 COPY --from=build /src/bin/travis /src/bin/travis-broker /usr/local/bin/
