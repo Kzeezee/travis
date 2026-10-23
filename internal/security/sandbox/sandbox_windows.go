@@ -227,5 +227,49 @@ func createSandboxToken() (windows.Token, error) {
 		_ = restricted.Close()
 		return 0, fmt.Errorf("lower token integrity: %w", err)
 	}
+	if err := setSandboxDefaultDACL(self, restricted, sandboxSID); err != nil {
+		_ = restricted.Close()
+		return 0, err
+	}
 	return restricted, nil
+}
+
+// tokenDefaultDACL is TOKEN_DEFAULT_DACL, which x/sys/windows does not define.
+type tokenDefaultDACL struct {
+	DefaultDACL *windows.ACL
+}
+
+// setSandboxDefaultDACL lets the target open the pipes and other objects it creates: the inherited default DACL
+// names only the user and SYSTEM, which fail the restricted check, so `pipe: Access is denied` (uv's interpreter
+// query). Everyone is left out so other processes cannot open those objects.
+func setSandboxDefaultDACL(self, restricted windows.Token, sandboxSID *windows.SID) error {
+	user, err := self.GetTokenUser()
+	if err != nil {
+		return fmt.Errorf("read launcher user: %w", err)
+	}
+	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return fmt.Errorf("build system sid: %w", err)
+	}
+	grants := make([]windows.EXPLICIT_ACCESS, 0, 3)
+	for _, sid := range []*windows.SID{user.User.Sid, sandboxSID, system} {
+		grants = append(grants, windows.EXPLICIT_ACCESS{
+			AccessPermissions: windows.GENERIC_ALL,
+			AccessMode:        windows.GRANT_ACCESS,
+			Trustee: windows.TRUSTEE{
+				TrusteeForm:  windows.TRUSTEE_IS_SID,
+				TrusteeValue: windows.TrusteeValueFromSID(sid),
+			},
+		})
+	}
+	dacl, err := windows.ACLFromEntries(grants, nil)
+	if err != nil {
+		return fmt.Errorf("build default dacl: %w", err)
+	}
+	defaultDACL := tokenDefaultDACL{DefaultDACL: dacl}
+	if err := windows.SetTokenInformation(restricted, windows.TokenDefaultDacl,
+		(*byte)(unsafe.Pointer(&defaultDACL)), uint32(unsafe.Sizeof(defaultDACL))); err != nil {
+		return fmt.Errorf("set default dacl: %w", err)
+	}
+	return nil
 }
