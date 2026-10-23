@@ -1,0 +1,9 @@
+[project]
+name = "travis-eval"
+version = "0.1.0"
+description = "Inspect AI live evals for travis (Phase 6)"
+requires-python = ">=3.14"
+dependencies = [
+    "inspect-ai>=0.3.283",
+    "openai>=3.36.0",
+]

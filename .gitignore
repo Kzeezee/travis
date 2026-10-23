@@ -22,3 +22,9 @@ coverage.*
 # OS
 .DS_Store
 Thumbs.db
+
+# Inspect eval (6-spike)
+.env
+.venv/
+__pycache__/
+eval/inspect/logs/

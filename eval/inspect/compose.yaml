@@ -1,0 +1,8 @@
+services:
+  default:
+    build:
+      context: ../..
+      dockerfile: eval/inspect/Dockerfile
+    init: true
+    # The bridge reaches the model through Inspect's exec channel, so travis needs no network.
+    network_mode: none
