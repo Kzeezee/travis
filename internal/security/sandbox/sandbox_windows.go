@@ -52,7 +52,9 @@ func applyToSelf(spec Spec) error {
 		return err
 	}
 	for _, path := range spec.ReadPaths {
-		if err := grantSandboxAccess(path, readAccessMask); err != nil {
+		// A folder the user cannot re-permission, like Program Files, is left as is: skipping a grant never widens
+		// access, Users can already read system installs, and a runner that truly cannot be read fails to start.
+		if err := grantSandboxAccess(path, readAccessMask); err != nil && !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 			return err
 		}
 	}
