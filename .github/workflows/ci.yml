@@ -108,9 +108,11 @@ jobs:
           GOOS=windows go vet ./...
           GOOS=darwin go vet ./...
 
-      # `travis run` is eval-only (D-10); vet it so the tagged file cannot rot unseen.
-      - name: Vet eval-tagged code
-        run: go vet -tags eval ./cmd/travis
+      # `travis run` is eval-only (D-10); vet and test it so the tagged files cannot rot unseen.
+      - name: Vet and test eval-tagged code
+        run: |
+          go vet -tags eval ./cmd/travis
+          go test -tags eval -run '^TestHeadless' ./cmd/travis
 
   tidy-and-verify:
     name: tidy and verify

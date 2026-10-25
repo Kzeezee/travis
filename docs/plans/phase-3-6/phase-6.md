@@ -59,9 +59,9 @@ below that the 95% interval is too wide to report anything.
 
 | | |
 |---|---|
-| Changes | Inspect route: `travis run` hardened (exit codes, answers file validated at the boundary), a shared solver for all tasks, results exported as JSONL. Fallback route: a Go runner through `assembleChatSession` with a scripted approver and simulated user. Either route: k trials per task, budget cap, `make eval-live`, and a GitHub Actions workflow started by hand (`workflow_dispatch`) with the OpenRouter key as a repo secret. No scheduled runs. |
+| Changes | Inspect route: `travis run` hardened (exit codes, answers file validated at the boundary), a shared solver for all tasks, results exported as JSONL. Fallback route: a Go runner through `assembleChatSession` with a scripted approver and simulated user. Either route: k trials per task, budget cap, and `make eval-live`. Live runs are local only: no CI workflow, so the OpenRouter key never becomes a repo secret. |
 | Data | Result row: `{task, model, trial, passed, steps, tokens, cost_usd, latency_ms, transcript}`. |
-| Proof | One task × DeepSeek × k=3 produces three rows and three transcripts, locally and from the manual workflow. |
+| Proof | One task × DeepSeek × k=3 produces three rows and three transcripts from a local `make eval-live`. |
 | Depends on | 6-spike |
 
 ### 6C Task set and graders (new, grows continuously)

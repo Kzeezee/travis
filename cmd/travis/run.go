@@ -3,8 +3,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -20,10 +22,46 @@ import (
 	"github.com/Kzeezee/travis/internal/tools/mcp"
 )
 
-// scriptedAnswers is the --answers file: approvals and ask_user replies, consumed in order.
+// scriptedAnswers is the validated --answers file: approval decisions and ask_user replies,
+// consumed in order.
 type scriptedAnswers struct {
-	Approvals []string `json:"approvals"`
-	Questions []string `json:"questions"`
+	approvals []core.ApprovalDecision
+	questions []string
+}
+
+// scriptedApprovalDecisions are the only approvals a file may give; "always" is left out so
+// one scripted answer can never widen policy for the rest of the run.
+var scriptedApprovalDecisions = map[string]core.ApprovalDecision{"once": core.ApprovalOnce, "deny": core.ApprovalDenied}
+
+// turnExitCodes is the exit-code contract with eval/inspect/travis_agent.py: 0 is end_turn,
+// 1 is travis failing to run at all, and these are the other ways the loop ends a turn.
+var turnExitCodes = map[core.StopReason]int{
+	core.StopError:  2,
+	core.StopBudget: 3,
+	core.StopLength: 4,
+}
+
+// turnStoppedError reports a turn that ran but did not end with the model's answer.
+type turnStoppedError struct {
+	reason core.StopReason
+	err    error
+}
+
+func (e turnStoppedError) Error() string {
+	if e.err != nil {
+		return fmt.Sprintf("turn stopped with %q: %v", e.reason, e.err)
+	}
+	return fmt.Sprintf("turn stopped with %q", e.reason)
+}
+
+func (e turnStoppedError) Unwrap() error { return e.err }
+
+// ReportExitCode is how the turn stopped; a reason with no code of its own is an error.
+func (e turnStoppedError) ReportExitCode() int {
+	if code, ok := turnExitCodes[e.reason]; ok {
+		return code
+	}
+	return turnExitCodes[core.StopError]
 }
 
 // scriptedHuman stands in for the keyboard in an eval run (6-spike). Once a list runs out it
@@ -37,11 +75,9 @@ func (h *scriptedHuman) RequestApproval(_ context.Context, op core.Operation) (c
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	decision := core.ApprovalDenied
-	if len(h.answers.Approvals) > 0 {
-		if h.answers.Approvals[0] == "once" {
-			decision = core.ApprovalOnce
-		}
-		h.answers.Approvals = h.answers.Approvals[1:]
+	if len(h.answers.approvals) > 0 {
+		decision = h.answers.approvals[0]
+		h.answers.approvals = h.answers.approvals[1:]
 	}
 	fmt.Fprintf(os.Stderr, "travis: approval %s %s -> %v\n", op.Kind, op.Target, decision)
 	return decision, nil
@@ -50,30 +86,43 @@ func (h *scriptedHuman) RequestApproval(_ context.Context, op core.Operation) (c
 func (h *scriptedHuman) AskUser(_ context.Context, question string) (string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if len(h.answers.Questions) == 0 {
+	if len(h.answers.questions) == 0 {
 		return "", fmt.Errorf("no scripted answer for %q: %w", question, core.ErrInvalid)
 	}
-	answer := h.answers.Questions[0]
-	h.answers.Questions = h.answers.Questions[1:]
+	answer := h.answers.questions[0]
+	h.answers.questions = h.answers.questions[1:]
 	return answer, nil
 }
 
+// loadScriptedAnswers reads the --answers file strictly: a misspelt field or a second JSON
+// value is refused rather than silently leaving the run with fewer answers than intended.
 func loadScriptedAnswers(path string) (scriptedAnswers, error) {
-	var answers scriptedAnswers
 	if path == "" {
-		return answers, nil
+		return scriptedAnswers{}, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return answers, err
+		return scriptedAnswers{}, err
 	}
-	if err := json.Unmarshal(data, &answers); err != nil {
-		return answers, fmt.Errorf("answers file %s: %w", path, err)
+	var file struct {
+		Approvals []string `json:"approvals"`
+		Questions []string `json:"questions"`
 	}
-	for _, approval := range answers.Approvals {
-		if approval != "once" && approval != "deny" {
-			return answers, fmt.Errorf("answers file %s: approval %q is not once or deny: %w", path, approval, core.ErrInvalid)
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&file); err != nil {
+		return scriptedAnswers{}, fmt.Errorf("answers file %s: %w: %w", path, err, core.ErrInvalid)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return scriptedAnswers{}, fmt.Errorf("answers file %s: holds more than one JSON value: %w", path, core.ErrInvalid)
+	}
+	answers := scriptedAnswers{questions: file.Questions}
+	for _, approval := range file.Approvals {
+		decision, ok := scriptedApprovalDecisions[approval]
+		if !ok {
+			return scriptedAnswers{}, fmt.Errorf("answers file %s: approval %q is not once or deny: %w", path, approval, core.ErrInvalid)
 		}
+		answers.approvals = append(answers.approvals, decision)
 	}
 	return answers, nil
 }
@@ -171,11 +220,8 @@ func runHeadless(args []string, out io.Writer) error {
 	unsubscribe()
 	session.close()
 	reason := <-outcome
-	if turnErr != nil {
-		return turnErr
-	}
-	if reason != core.StopEndTurn {
-		return fmt.Errorf("turn stopped with %q", reason)
+	if turnErr != nil || reason != core.StopEndTurn {
+		return turnStoppedError{reason: reason, err: turnErr}
 	}
 	return nil
 }

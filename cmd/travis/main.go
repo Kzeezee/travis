@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -57,8 +58,18 @@ var brokerSHA256 string
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "travis:", err)
-		os.Exit(1)
+		os.Exit(reportExitCode(err))
 	}
+}
+
+// reportExitCode is 1 unless the error carries its own code, as `travis run` does to report
+// how its turn stopped.
+func reportExitCode(err error) int {
+	var coded interface{ ReportExitCode() int }
+	if errors.As(err, &coded) {
+		return coded.ReportExitCode()
+	}
+	return 1
 }
 
 func run(args []string, in io.Reader, out io.Writer) error {
