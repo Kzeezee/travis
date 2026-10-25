@@ -109,7 +109,7 @@ none should survive as permanent design.
 |---|---|---|
 | 1 | Eval runner | Inspect AI over a headless `travis run`, if 6-spike shows the route works; Go runner otherwise. Regression (6A) stays in Go. |
 | 2 | Eval models and budget | DeepSeek V4.1 Flash via OpenRouter. SGD 10 total for live runs. No local models. A subscription-based run with more models may be decided later. |
-| 3 | Live eval trigger | Manual only: `make eval-live` and a `workflow_dispatch` workflow. No schedule. |
+| 3 | Live eval trigger | Local only: `make eval-live` on a developer's machine. No CI workflow, so the model key never becomes a repo secret. |
 | 4 | TRA-38 (model suggestions) | Kept separate, linked to 3C |
 | 5 | Sandbox tier in the MCP trust key | Yes; a tier change re-prompts |
 

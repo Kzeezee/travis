@@ -302,6 +302,7 @@ CI's order: `build vet lint test-race tidy vuln`. Run it before pushing.
 | `make vet` | `go vet` for this OS **and** `GOOS=windows` / `GOOS=darwin` |
 | `make tidy` | `go mod verify` and `go mod tidy -diff` |
 | `make vuln` | `govulncheck ./...` |
+| `make eval-live` | live eval through Inspect (Phase 6B); not part of `check`, it spends model credit. See below |
 
 **Why `go run ./cmd/travis` and a plain `go build` can't start a chat.** `travis` checks
 `travis-broker`'s SHA-256 before every session and refuses a mismatch, or a `travis` built
@@ -336,6 +337,16 @@ above are a convenience, not the definition of the gates. If you add a gate, add
 **Tests run with `-shuffle=on`.** Order-dependent tests fail intermittently instead of
 never. On failure Go prints `-test.shuffle <seed>`; replay it exactly with
 `go test -shuffle=<seed> ./...` — the seed is in the CI log too.
+
+**Live eval.** `make eval-live` builds `travis run` (eval builds only, D-10) into a
+network-less Docker container, routes its model calls through Inspect's bridge, and runs
+each task k times (`--trials`, default 3). It needs Docker, `uv`, and the model's key
+(`OPENROUTER_API_KEY` for the default DeepSeek model). Each run is capped by
+`--max-cost-per-run` (default USD 0.05); the key's credit limit is the hard stop. Logs and a
+results JSONL, one row per run, land in `eval/inspect/logs/`; `uv run inspect view` from
+`eval/inspect` opens the transcripts. `ARGS="--model mockllm/model --trials 1"` checks the
+whole pipeline for free. Live evals run only on a developer's machine: no CI workflow runs
+them, so the model key never becomes a repo secret.
 
 **One required check, named `ci`.** It is an aggregator over the real jobs, so a matrix
 edit cannot silently rename the required check away.
