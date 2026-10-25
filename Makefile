@@ -78,6 +78,10 @@ tidy: ## Verify module downloads and that go.mod/go.sum are already tidy
 vuln: $(GOVULNCHECK) ## Check dependencies against the Go vulnerability database
 	$(GOVULNCHECK) ./...
 
+.PHONY: eval-live
+eval-live: ## Live eval (6B) via Inspect, k trials per task; logs and results JSONL land in eval/inspect/logs (needs Docker, uv, the model's key; flags via ARGS="...")
+	cd eval/inspect && uv run python live.py $(ARGS)
+
 .PHONY: check
 check: build vet lint test-race tidy vuln ## Everything CI runs, on this machine only
 
