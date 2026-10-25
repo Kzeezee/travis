@@ -93,6 +93,19 @@ func TestMCPAddRefusesPipedInputAndUnpinnedPackages(t *testing.T) {
 	}
 }
 
+func TestMCPAddRefusesANameItsToolsCouldNotUse(t *testing.T) {
+	install, _, registry := buildTestInstall(t, "y\n")
+
+	for _, name := range []string{"my.files", "has space", strings.Repeat("x", 33)} {
+		if err := install.addServer([]string{name, "/opt/bin/my-server"}); err == nil || !strings.Contains(err.Error(), "letters, digits") {
+			t.Errorf("%q: got %v, want a name refusal", name, err)
+		}
+	}
+	if len(registry.asked) != 0 || len(loadConfiguredServers(t)) != 0 {
+		t.Fatal("a refused name still reached the registry or the config")
+	}
+}
+
 func TestMCPAddOfALocalCommandNeedsNoRegistry(t *testing.T) {
 	install, out, registry := buildTestInstall(t, "yes\n")
 

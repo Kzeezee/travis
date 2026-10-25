@@ -47,9 +47,17 @@ func runSetupWizard(in io.Reader, out io.Writer) (bool, error) {
 		ListMCPServers:   func() []string { return slices.Sorted(maps.Keys(cfg.MCP.Servers)) },
 		DescribeSecurity: func() []string { return describeSecurity(cfg, paths) },
 	}
-	return terminal.RunSetup(context.Background(), actions, terminal.SetupOptions{
+	isFinished, err := terminal.RunSetup(context.Background(), actions, terminal.SetupOptions{
 		Input: in, Output: out, ConfigFile: paths.ReportUserConfigFile(), IsVoiceOutputEnabled: cfg.Voice.Output.Enabled,
 	})
+	if err != nil || !isFinished {
+		return isFinished, err
+	}
+	// Finishing with every step skipped saves nothing, and a missing file would offer setup on every chat.
+	if _, statErr := os.Stat(paths.ReportUserConfigFile()); errors.Is(statErr, os.ErrNotExist) {
+		return true, config.SaveActiveProvider(paths, cfg.Provider.Active)
+	}
+	return true, nil
 }
 
 // shouldOfferSetup is true on a first run: no user config yet and a person at the keyboard.

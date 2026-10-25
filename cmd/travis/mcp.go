@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -26,6 +27,10 @@ const (
 	// registryTimeout bounds the provenance lookup; npm's full document for a busy package can be slow.
 	registryTimeout = 20 * time.Second
 )
+
+// mcpServerNamePattern keeps every tool name, mcp_<server>_<tool>, within what the registry accepts
+// (^[a-zA-Z0-9_-]{1,64}$), leaving room for the tool's own name.
+var mcpServerNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,32}$`)
 
 // mcpInstall is what `travis mcp add` needs from outside: the registry, the user's answer, and the config file.
 type mcpInstall struct {
@@ -125,6 +130,9 @@ func (i mcpInstall) addServer(args []string) error {
 		return errors.New(mcpUsage)
 	}
 	name := args[0]
+	if !mcpServerNamePattern.MatchString(name) {
+		return fmt.Errorf("server name %q may use only letters, digits, _ and -, up to 32 of them: %w", name, core.ErrInvalid)
+	}
 	flags := flag.NewFlagSet("mcp add", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	allowNet := flags.Bool("allow-net", false, "")
