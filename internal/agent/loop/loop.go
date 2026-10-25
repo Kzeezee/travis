@@ -148,8 +148,10 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 		}
 		if len(reply.calls) == 0 {
 			c.isNextStepUntrusted = false
-			if c.isSpeechEnabled && !c.hasSpokenThisTurn && strings.TrimSpace(reply.text) != "" {
-				c.startSpeechFallback(ctx, reply.text)
+			if c.isSpeechEnabled && !c.hasSpokenThisTurn {
+				if sentence := pickSpokenSentence(reply.text); sentence != "" {
+					c.events.Publish(ctx, core.SpeechRequested{EventHeader: c.buildEventHeader(), Text: sentence})
+				}
 			}
 			c.completeTurn(ctx, reply.reason, usage)
 			return nil

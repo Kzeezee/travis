@@ -14,10 +14,6 @@ type ProviderRequest struct {
 	Messages  []Message  `json:"messages"`
 	Tools     []ToolSpec `json:"tools,omitempty"`
 	MaxTokens int        `json:"max_tokens,omitempty"`
-	// ShouldSkipReasoning asks a reasoning model to answer without thinking first, for small
-	// derived jobs where the wait costs more than the thinking adds. An adapter whose endpoint
-	// has no such switch ignores it.
-	ShouldSkipReasoning bool `json:"skip_reasoning,omitempty"`
 }
 
 type Stream interface {

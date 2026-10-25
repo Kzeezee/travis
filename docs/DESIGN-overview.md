@@ -219,7 +219,7 @@ are scorecard metrics tracked per PR.
 - **In:** push-to-talk (hold `ctrl+space`, requires Bubble Tea v2) or VAD → whisper.
   Transcript lands **in the input box** where you can edit it. You press enter.
 - **Out:** *selective* — the model marks what to speak via structured output or
-  `<speak>` tags, with a cheap fallback summariser for small models that forget.
+  `<speak>` tags; when a small model forgets, the reply's first sentence is spoken.
   Sentence-level streaming; barge-in stops playback immediately.
 - **Voice never approves anything.** An ASR error on a consent decision is a policy
   bypass, and a podcast saying "yes, approve" is a real attack. When an approval fires,

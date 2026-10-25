@@ -1,13 +1,8 @@
 package loop
 
 import (
-	"context"
-	"errors"
-	"io"
+	"regexp"
 	"strings"
-	"time"
-
-	"github.com/Kzeezee/travis/internal/core"
 )
 
 const (
@@ -103,70 +98,41 @@ func measurePartialTagSuffix(text, tag string) int {
 	return 0
 }
 
-// speechFallbackPrompt asks for what tier 2 failed to get: a reply the model marked nothing in
-// still deserves one spoken line (§5.11 tier 3).
-const speechFallbackPrompt = "Say in one short spoken sentence what this reply tells the user. " +
-	"Plain words only: no code, paths, lists, or markup."
+var (
+	lineMarkerPattern   = regexp.MustCompile(`^(#{1,6}|>|[-*+]|\d+[.)])\s+`)
+	sentenceEndPattern  = regexp.MustCompile(`[.!?](\s|$)`)
+	inlineCodePattern   = regexp.MustCompile("^`[^`]+`[.!?:]?$")
+	markdownLinkPattern = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+	emphasisRemover     = strings.NewReplacer("**", "", "__", "", "~~", "", "*", "", "`", "")
+	speakTagRemover     = strings.NewReplacer(speakOpenTag, "", speakCloseTag, "")
+)
 
-// A local model can take a while; past this the moment for the line has gone.
-const speechFallbackTimeout = 30 * time.Second
-
-// startSpeechFallback asks the provider for a one-line spoken summary of reply and publishes it.
-// It runs after the turn has returned, so the user can type meanwhile; it offers no tools, and
-// speech is an observer, so a failure just stays silent.
-func (c *AssistantConversation) startSpeechFallback(ctx context.Context, reply string) {
-	header, provider := c.buildEventHeader(), c.provider
-	request := core.ProviderRequest{
-		Model:    c.model,
-		System:   speechFallbackPrompt,
-		Messages: []core.Message{{Role: core.RoleUser, Parts: []core.Part{core.TextPart{Text: reply}}}},
-		// A summary of text that already exists needs no thinking; with it a local model takes ~10x longer.
-		ShouldSkipReasoning: true,
+// pickSpokenSentence chooses what to say for a reply the model marked nothing in (§5.11 tier
+// 3): its first displayed sentence as plain words, or nothing when that is code or a path.
+// A second model call was tried here and dropped: small models answer the reply instead of
+// summarising it.
+// ponytail: a line or ". " ends a sentence, so "e.g. this" is cut short and hard-wrapped text
+// is spoken only up to the wrap.
+func pickSpokenSentence(reply string) string {
+	for _, line := range strings.Split(speakTagRemover.Replace(reply), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t") || strings.HasPrefix(strings.TrimSpace(line), "```") {
+			return ""
+		}
+		sentence := lineMarkerPattern.ReplaceAllString(strings.TrimSpace(line), "")
+		if end := sentenceEndPattern.FindStringIndex(sentence); end != nil {
+			sentence = sentence[:end[0]+1]
+		}
+		if inlineCodePattern.MatchString(sentence) {
+			return ""
+		}
+		sentence = strings.TrimSpace(emphasisRemover.Replace(markdownLinkPattern.ReplaceAllString(sentence, "$1")))
+		if !strings.ContainsAny(sentence, " \t") && strings.ContainsAny(sentence, "/\\") {
+			return ""
+		}
+		return sentence
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), speechFallbackTimeout)
-	go func() {
-		defer cancel()
-		summary, err := collectStreamText(ctx, provider, request)
-		if errors.Is(err, core.ErrInvalid) {
-			// An endpoint may reject the skip-reasoning switch; slower speech beats none.
-			request.ShouldSkipReasoning = false
-			summary, err = collectStreamText(ctx, provider, request)
-		}
-		if err != nil {
-			return
-		}
-		if text := extractSpokenText(summary); text != "" {
-			c.events.Publish(ctx, core.SpeechRequested{EventHeader: header, Text: text})
-		}
-	}()
-}
-
-func collectStreamText(ctx context.Context, provider core.Provider, request core.ProviderRequest) (string, error) {
-	stream, err := provider.Chat(ctx, request)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = stream.Close() }()
-	var text strings.Builder
-	for {
-		chunk, err := stream.Next()
-		if errors.Is(err, io.EOF) {
-			return text.String(), nil
-		}
-		if err != nil {
-			return "", err
-		}
-		text.WriteString(chunk.Text)
-	}
-}
-
-// extractSpokenText keeps only the tagged part when the model tagged its summary anyway.
-func extractSpokenText(summary string) string {
-	var extractor speechExtractor
-	shown, speeches := extractor.feed(summary)
-	rest, more := extractor.flush()
-	if speeches = append(speeches, more...); len(speeches) > 0 {
-		return strings.Join(speeches, " ")
-	}
-	return strings.TrimSpace(shown + rest)
+	return ""
 }

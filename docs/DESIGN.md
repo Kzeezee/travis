@@ -1777,12 +1777,14 @@ and small local models will not comply reliably. So the design is **layered**:
 | ---- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
 | 1    | Native structured output — a `speech` field in a JSON-schema-constrained response             | provider supports `json_schema`                             |
 | 2    | Inline `<speak>…</speak>` markers, extracted by a streaming parser                            | provider supports tool/tag following                        |
-| 3    | **Fallback summariser** — a cheap second call: "one sentence, spoken aloud, of the following" | model emitted no speech markers and `voice.fallback = true` |
+| 3    | **First sentence** of the shown reply, markdown stripped; nothing if it is code or a path     | model emitted no speech markers and `voice.fallback = true` |
 | 4    | Silence + a UI hint "🔇 nothing to speak"                                                     | fallback disabled                                           |
 
-Tier 3 is what makes this actually work with a 7B local model, and it is cheap
-(routes to `provider.routing.summarize`). Without it the feature is fragile.
-This is a substantive gap in the original sketch. `[R-11]`
+Tier 3 is what makes this work with a small local model, and it costs no second call.
+A summariser call was tried first and dropped: small models answer the reply instead of
+summarising it (Ling-3.0-tiny spoke "That is correct." for "The capital of France is
+Paris."). Tier 1 is not used on llama-server, where a `json_schema` request with tools
+present stops tool calls. `[R-11]`
 
 **Public interface.**
 
@@ -1816,7 +1818,7 @@ backend   = "piper"
 voice     = "en_GB-alba-medium"
 speed     = 1.05
 mode      = "selective"          # selective | full | off
-fallback  = true                 # tier-3 summariser
+fallback  = true                 # tier 3: speak the first sentence
 max_chars = 600                  # never speak more than this per turn
 duck      = true
 alerts    = true                 # speak approval/blocker notices (§6.5)
@@ -3119,7 +3121,7 @@ broken server, and it should therefore be sticky-visible in the status bar
 
 **C4 — The `<speak>` tag mechanism is fragile alone.** Addressed by the tiered design
 in §5.11, but flagged: the original sketch assumes model compliance. A 7B local model
-will forget the tags. Tier 3 (fallback summariser) is load-bearing, not optional.
+will forget the tags. Tier 3 (speak the first sentence) is load-bearing, not optional.
 
 **C5 — Tool-count explosion. `RESOLVED → D-03.`** 12 MCP servers ≈ 300 tools ≈ 40k
 tokens of schemas before the user types anything; on a 32k local model the app is
@@ -3271,7 +3273,7 @@ first as skipped Windows CI jobs. Treat a red Windows job exactly like a red Lin
 | R-08 | Bus drops hide state from the user | Med | explicit `EventsDropped` UI marker | 5.1 |
 | R-09 | Secret leakage into context or traces | High | broker-side resolution, value+pattern redaction | 5.12.3 |
 | R-10 | CGO breaks single-binary distribution | Med | helper processes, HTTP-based local STT | 5.10 |
-| R-11 | Selective speech fails on small models | Med | tiered fallback summariser | 5.11 |
+| R-11 | Selective speech fails on small models | Med | tiered fallback: untagged replies speak their first sentence | 5.11 |
 | R-12 | Injection→action in the same step | High | approval escalation on untrusted intake | 5.12.4 |
 | R-13 | Subagent privilege escalation | High | intersection-only token derivation | 5.14 |
 | R-14 | Approval fatigue → blind `y` | Med | irreversibility tiering, durable decision rules, non-blocking asks, red-team case | 6.4 |

@@ -103,3 +103,32 @@ func TestSpeechExtractorSkipsBlankSpans(t *testing.T) {
 		t.Fatalf("speeches = %q, want none", speeches)
 	}
 }
+
+func TestPickSpokenSentence(t *testing.T) {
+	for _, tc := range []struct{ name, reply, want string }{
+		{"plain", "The capital of France is Paris.", "The capital of France is Paris."},
+		{"first of several", "Done. Three tests fail!", "Done."},
+		{"question", "Really? Yes.", "Really?"},
+		{"decimal is not an end", "Pi is 3.14 or so. Close enough.", "Pi is 3.14 or so."},
+		{"no end mark", "Here is the diff:\n\n+ a", "Here is the diff:"},
+		{"leading blank lines", "\n\n  Hello there.\n", "Hello there."},
+		{"emphasis and link", "**Paris** is the _capital_ per [the atlas](https://x.org/a).", "Paris is the _capital_ per the atlas."},
+		{"inline code in prose", "Run `go test` now. Then commit.", "Run go test now."},
+		{"heading", "## Result\nAll good.", "Result"},
+		{"bullet", "- First item. Second.", "First item."},
+		{"numbered", "1. Install it.", "Install it."},
+		{"quote", "> Quoted words.", "Quoted words."},
+		{"blank speak span", "<speak> </speak>Done.", "Done."},
+		{"fenced code", "```go\nfmt.Println()\n```\nThat prints.", ""},
+		{"indented code", "    x := 1\nThat sets x.", ""},
+		{"inline code only", "`go test ./...`", ""},
+		{"path", "internal/agent/loop/speech.go", ""},
+		{"windows path", `C:\Users\kez\notes.txt`, ""},
+		{"url", "https://example.com/page", ""},
+		{"empty", " \n\t\n", ""},
+	} {
+		if got := pickSpokenSentence(tc.reply); got != tc.want {
+			t.Errorf("%s: pickSpokenSentence(%q) = %q, want %q", tc.name, tc.reply, got, tc.want)
+		}
+	}
+}
