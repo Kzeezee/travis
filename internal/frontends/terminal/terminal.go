@@ -66,6 +66,15 @@ type ChatActions struct {
 	RunTurn      func(ctx context.Context, prompt string) error
 	ResetHistory func()
 	SelectModel  func(name string)
+	// SwitchProvider moves later turns onto the named provider profile, or reports the key it
+	// still needs; SwitchProviderWithKey stores that key first (empty switches without one).
+	SwitchProvider        func(profile string) (ProviderSwitch, error)
+	SwitchProviderWithKey func(profile, apiKey string) (ProviderSwitch, error)
+	ListProviders         func() []string
+	// DescribeProviders reports each profile with whether it has a key; it may read the OS
+	// credential store, so it runs off the UI thread. ListMCPServers is live, like ListTools.
+	DescribeProviders func() []ProviderSummary
+	ListMCPServers    func() []MCPServerSummary
 	// ListModels names the models the active endpoint offers, for /model suggestions; nil means none.
 	ListModels func(ctx context.Context) ([]string, error)
 	// ListTools, ListSkills and ReadMemory query the session live, not a startup snapshot:
@@ -254,6 +263,8 @@ type chatModel struct {
 	pendingQuestion *core.QuestionRequest
 	// undoPicker is open while the user chooses what /undo takes back; it takes every key.
 	undoPicker *undoPicker
+	// keyPromptProfile names the provider profile whose API key the masked input is collecting.
+	keyPromptProfile string
 	// brokerFailure is set once the broker connection breaks; it never clears, since every
 	// later effect fails closed until travis restarts.
 	brokerFailure string
@@ -367,6 +378,10 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case modelsListedMsg:
 		m.modelNames = msg.names
 		m.fitViewport() // the palette may already be open for "/model "
+	case providerSwitchedMsg:
+		return m.finishProviderSwitch(msg)
+	case providersDescribedMsg:
+		return m.showProviderDescriptions(msg)
 	case turnsListedMsg:
 		return m.openUndoPicker(msg)
 	case rewindFinishedMsg:
@@ -390,6 +405,9 @@ func (m chatModel) handlePaste(paste tea.PasteMsg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(paste)
+	if m.keyPromptProfile != "" {
+		return m, cmd // a pasted key stays masked; the palette never opens over it
+	}
 	m.paletteIndex = 0
 	m.fitViewport()
 	return m, cmd
@@ -407,6 +425,9 @@ func (m chatModel) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.undoPicker != nil {
 		return m.handleUndoPickerKey(key)
+	}
+	if m.keyPromptProfile != "" {
+		return m.handleKeyPromptKey(key)
 	}
 	if m.isDictationAvailable() && key.String() == m.pushToTalkKey {
 		return m.handlePushToTalkPress(key)
@@ -539,7 +560,7 @@ type paletteRow struct {
 // the endpoint's models for "/model prefix". None means the palette is closed.
 func (m chatModel) listPaletteRows() []paletteRow {
 	value := m.input.Value()
-	if m.cancelTurn != nil || !strings.HasPrefix(value, "/") {
+	if m.cancelTurn != nil || m.keyPromptProfile != "" || !strings.HasPrefix(value, "/") {
 		return nil
 	}
 	var rows []paletteRow
@@ -550,6 +571,15 @@ func (m chatModel) listPaletteRows() []paletteRow {
 		for _, name := range m.modelNames {
 			if strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
 				rows = append(rows, paletteRow{completion: "/model " + name, label: name})
+			}
+		}
+	} else if prefix, isProviderArgument := strings.CutPrefix(value, "/provider "); isProviderArgument {
+		if strings.Contains(prefix, " ") {
+			return nil
+		}
+		for _, name := range m.listProviderNames() {
+			if strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
+				rows = append(rows, paletteRow{completion: "/provider " + name, label: name})
 			}
 		}
 	} else if !strings.Contains(value, " ") {

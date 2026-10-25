@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -20,8 +22,29 @@ import (
 // CommandTransport's own Close (via each session, closed through ctx cancellation ending
 // their Wait) asks them to exit by closing stdin first, same as the broker's shutdown.
 type Manager struct {
-	cancel context.CancelFunc
-	done   sync.WaitGroup
+	cancel    context.CancelFunc
+	done      sync.WaitGroup
+	reg       *registry.Registry
+	processes map[string]*serverProcess
+}
+
+// ServerState is where one configured server is in its life this session.
+type ServerState string
+
+const (
+	// ServerStarting covers launching, waiting for the user's approval, and the MCP handshake.
+	ServerStarting    ServerState = "starting"
+	ServerRunning     ServerState = "running"
+	ServerFailed      ServerState = "failed to start"
+	ServerUnavailable ServerState = "unavailable"
+)
+
+// ServerStatus is one configured server as /mcp shows it; Reason explains a failed or unavailable server.
+type ServerStatus struct {
+	Name      string
+	State     ServerState
+	ToolCount int
+	Reason    string
 }
 
 // BuildManager starts connecting every configured server in the background and registers
@@ -36,11 +59,12 @@ type Manager struct {
 // and where each server's scratch folder (mcp/<name>) is created.
 func BuildManager(servers config.MCPCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, reg *registry.Registry, stateDir string, sandboxing Sandboxing) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	manager := &Manager{cancel: cancel}
+	manager := &Manager{cancel: cancel, reg: reg, processes: map[string]*serverProcess{}}
 
 	trust := buildTrustStore(filepath.Join(stateDir, trustFileName))
 	for name, serverCfg := range servers.Servers {
 		process := buildServerProcess(name, serverCfg, pol, approver, clock, events, diagnostics, trust, sandboxing, filepath.Join(stateDir, "mcp", name), buildUnregisterTools(reg, name))
+		manager.processes[name] = process
 		manager.done.Add(1)
 		go func(name string, process *serverProcess) {
 			defer manager.done.Done()
@@ -68,11 +92,13 @@ func connectAndRegister(ctx context.Context, name string, process *serverProcess
 	session, err := process.connectAndSupervise(ctx)
 	if err != nil {
 		fmt.Fprintf(diagnostics, "travis: mcp server %q did not start: %v\n", name, err)
+		process.recordStartFailure(err)
 		return
 	}
 	listed, err := session.ListTools(ctx, &mcpsdk.ListToolsParams{})
 	if err != nil {
 		fmt.Fprintf(diagnostics, "travis: mcp server %q: listing tools failed: %v\n", name, err)
+		process.recordStartFailure(fmt.Errorf("listing tools failed: %w", err))
 		return
 	}
 	for _, remoteTool := range listed.Tools {
@@ -81,6 +107,17 @@ func connectAndRegister(ctx context.Context, name string, process *serverProcess
 			fmt.Fprintf(diagnostics, "travis: mcp server %q: registering tool %q failed: %v\n", name, tool.Name(), err)
 		}
 	}
+}
+
+// ReportServerStatuses describes every configured server right now, sorted by name.
+func (m *Manager) ReportServerStatuses() []ServerStatus {
+	statuses := make([]ServerStatus, 0, len(m.processes))
+	for _, name := range slices.Sorted(maps.Keys(m.processes)) {
+		state, reason := m.processes[name].reportState()
+		tools := m.reg.List(registry.Filter{Source: registry.SourceMCP, NamePrefix: toolNamePrefix(name)})
+		statuses = append(statuses, ServerStatus{Name: name, State: state, ToolCount: len(tools), Reason: reason})
+	}
+	return statuses
 }
 
 // Close ends supervision for every server this manager started and waits for their

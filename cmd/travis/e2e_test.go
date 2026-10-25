@@ -412,8 +412,12 @@ func buildRecordedProvider(t *testing.T, cassetteName, profileName string) (*ope
 		baseURL, model, auth = profile.BaseURL, profile.Model, profile.Auth
 		t.Logf("recording against %s, model %s (provider profile %q)", baseURL, model, profileName)
 	}
+	apiKey, err := config.ResolveProviderAPIKey(profileName, auth)
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join("..", "..", "testdata", "cassettes", cassetteName)
-	return openaicompat.BuildProvider(baseURL, config.ResolveProviderAPIKey(auth), cassette.BuildClient(t, path), core.SystemClock{}), model
+	return openaicompat.BuildProvider(baseURL, apiKey, cassette.BuildClient(t, path), core.SystemClock{}), model
 }
 
 // TestWriteTaskRunsEndToEndThroughTheRealWiring is the TRA-25 write path: fs_read, fs_edit and

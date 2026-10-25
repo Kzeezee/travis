@@ -126,7 +126,10 @@ func runHeadless(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	apiKey := config.ResolveProviderAPIKey(profile.Auth)
+	apiKey, err := config.ResolveProviderAPIKey(cfg.Provider.Active, profile.Auth)
+	if err != nil {
+		return err
+	}
 	redactor := redact.New(apiKey)
 	bus := buildSessionBus(os.Stderr)
 	sessionID := id.BuildULIDGenerator(core.SystemClock{}).GenerateID()

@@ -33,7 +33,7 @@ func (m chatModel) isDictationAvailable() bool {
 }
 
 func (m chatModel) isModalOpen() bool {
-	return m.pendingApproval != nil || m.pendingQuestion != nil || m.undoPicker != nil
+	return m.pendingApproval != nil || m.pendingQuestion != nil || m.undoPicker != nil || m.keyPromptProfile != ""
 }
 
 // handlePushToTalkPress starts a recording, or stops one where the terminal cannot report the

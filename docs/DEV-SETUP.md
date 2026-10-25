@@ -182,12 +182,36 @@ Write it BOM-free instead:
 Use local models for day-to-day development; save a paid provider for quality
 benchmarking near the end.
 
-**Known gap:** `auth.ref` (e.g. `env://ANTHROPIC_API_KEY`) is parsed but not yet
-consulted — every profile currently shares the same `OPENAI_API_KEY` lookup
-(`config.ResolveProviderAPIKey()`). A profile needing a different credential source
-doesn't work yet; this lands with the broker in a later phase. There is also no
-config hot-reload: editing `.travis/config.toml` only takes effect on the next
-`travis chat`, not the running session.
+**Credentials.** A profile's `auth.ref` names where its key lives, never the key itself:
+`keyring://NAME` reads account `NAME` under service `travis` in the OS credential store
+(macOS Keychain, Windows Credential Manager, Linux Secret Service), and `env://NAME`
+reads one of `OPENAI_API_KEY`, `DEEPSEEK_API_KEY` or `GEMINI_API_KEY`; anything else
+falls back to `OPENAI_API_KEY`. When that yields nothing, travis tries the keyring entry
+named after the profile. In chat, `/provider <name>` switches profile and, when a remote
+endpoint has no key, asks for one and saves it there; it also writes `[provider] active`
+to your user config, so the next chat starts there (`TRAVIS_PROVIDER_ACTIVE` and flags
+still win). There is also no config hot-reload: editing `.travis/config.toml` only takes
+effect on the next `travis chat`, not the running session.
+
+**Travis writes your user config.** `travis init` (offered on the first `travis chat`
+when no user config exists), `/provider` and `travis mcp add|remove` change the user
+`config.toml` for you, so hand-editing is optional. Each write re-reads the file first
+and changes only its own setting, so every value you set by hand, including keys travis
+does not know, survives; comments and key order do not. Before its first rewrite of a
+file with comments, travis keeps a copy as `config.toml.bak`. It never writes the
+workspace `.travis/config.toml`, and never writes a key into any file.
+
+**Adding MCP servers.** `travis mcp add <name> [--allow-net] [--env KEY=VALUE] -- <command>
+[args...]` shows a provenance card (publisher, publish date, weekly downloads, direct
+dependencies, integrity) from npm or PyPI and saves the server only when you type `y` at
+a terminal; piped input is refused. `npx` and `uvx` packages must pin an exact version
+(`pkg@1.2.3`, `pkg==1.2.3`). Re-adding a name replaces it, which is how you update one;
+`travis mcp remove <name>` deletes it. `--env` values are stored in plain text.
+
+**Seeing what is set up.** `travis provider list` shows each profile, the active one and
+whether it has a key; `travis models` lists what the active endpoint offers; `travis mcp
+list` shows configured MCP servers. In chat, `/provider` and `/mcp` show the same live,
+with each server's state and tool count, and `/model` says how many models are on offer.
 
 ### Session traces
 

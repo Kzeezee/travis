@@ -7,8 +7,10 @@ package redact
 import (
 	"encoding/json"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/Kzeezee/travis/internal/core"
 )
@@ -33,27 +35,49 @@ var valuePatterns = []*regexp.Regexp{
 }
 
 // Redactor scrubs known secret values and credential-shaped fields from event payloads.
+// Copies share one set of known values, so a value added later reaches every copy.
 type Redactor struct {
-	knownValues []string
+	known *knownValueSet
 }
 
-// New returns a Redactor that also scrubs each non-empty known value verbatim, longest
-// first so a short value is never left exposed inside a longer one it is a substring of.
+// knownValueSet is kept longest first so a short value is never left exposed inside a
+// longer one it is a substring of.
+type knownValueSet struct {
+	mu     sync.RWMutex
+	values []string
+}
+
+// New returns a Redactor that also scrubs each non-empty known value verbatim.
 func New(knownValues ...string) Redactor {
-	var nonEmpty []string
+	r := Redactor{known: &knownValueSet{}}
 	for _, value := range knownValues {
-		if value != "" {
-			nonEmpty = append(nonEmpty, value)
-		}
+		r.AddKnownValue(value)
 	}
-	sort.Slice(nonEmpty, func(i, j int) bool { return len(nonEmpty[i]) > len(nonEmpty[j]) })
-	return Redactor{knownValues: nonEmpty}
+	return r
+}
+
+// AddKnownValue makes every copy of r scrub value from now on, such as a key typed in mid-session.
+func (r Redactor) AddKnownValue(value string) {
+	if value == "" || r.known == nil {
+		return
+	}
+	r.known.mu.Lock()
+	defer r.known.mu.Unlock()
+	if slices.Contains(r.known.values, value) {
+		return
+	}
+	r.known.values = append(r.known.values, value)
+	sort.SliceStable(r.known.values, func(i, j int) bool { return len(r.known.values[i]) > len(r.known.values[j]) })
 }
 
 // RedactText scrubs known values and known secret-value formats from free text.
 func (r Redactor) RedactText(text string) string {
-	for _, value := range r.knownValues {
-		text = strings.ReplaceAll(text, value, Placeholder)
+	if r.known != nil {
+		r.known.mu.RLock()
+		for _, value := range r.known.values {
+			text = strings.ReplaceAll(text, value, Placeholder)
+		}
+		r.known.mu.RUnlock()
 	}
 	for _, pattern := range valuePatterns {
 		text = pattern.ReplaceAllString(text, Placeholder)

@@ -22,6 +22,10 @@ func buildSlashCommands() []slashCommand {
 		}},
 		{name: "new", usage: "/new", summary: "start a new conversation", run: startNewConversation},
 		{name: "model", usage: "/model [name]", summary: "show or switch the model", run: selectModel},
+		{name: "provider", usage: "/provider [name]", summary: "list or switch provider profiles", run: func(m chatModel, name string) (chatModel, tea.Cmd) {
+			return m.requestProviderSwitch(name)
+		}},
+		{name: "mcp", usage: "/mcp", summary: "list MCP servers and their state", run: showMCPServers},
 		{name: "tools", usage: "/tools", summary: "list available tools", run: showTools},
 		{name: "skills", usage: "/skills", summary: "list loaded skills", run: showSkills},
 		{name: "memory", usage: "/memory", summary: "show the current memory", run: showMemory},
@@ -69,7 +73,11 @@ func startNewConversation(m chatModel, _ string) (chatModel, tea.Cmd) {
 
 func selectModel(m chatModel, name string) (chatModel, tea.Cmd) {
 	if name == "" {
-		m.transcript.addNotice("model: " + m.modelName)
+		notice := "model: " + m.modelName
+		if len(m.modelNames) > 0 {
+			notice += fmt.Sprintf(" · %d available · type /model and a space to browse", len(m.modelNames))
+		}
+		m.transcript.addNotice(notice)
 		return m, nil
 	}
 	m.actions.SelectModel(name)
@@ -89,6 +97,31 @@ func showTools(m chatModel, _ string) (chatModel, tea.Cmd) {
 		return m, nil
 	}
 	m.transcript.addNotice("tools: " + strings.Join(names, ", "))
+	return m, nil
+}
+
+// MCPServerSummary is one configured MCP server as /mcp lists it: plain values only.
+type MCPServerSummary struct {
+	Name, State, Reason string
+	ToolCount           int
+}
+
+func showMCPServers(m chatModel, _ string) (chatModel, tea.Cmd) {
+	var servers []MCPServerSummary
+	if m.actions.ListMCPServers != nil {
+		servers = m.actions.ListMCPServers()
+	}
+	if len(servers) == 0 {
+		m.transcript.addNotice("mcp: no servers configured · add them under [mcp.servers] in your user config")
+		return m, nil
+	}
+	for _, server := range servers {
+		line := fmt.Sprintf("%s · %s · %d tools", server.Name, server.State, server.ToolCount)
+		if server.Reason != "" {
+			line += " · " + cutFirstLine(server.Reason)
+		}
+		m.transcript.addNotice(line)
+	}
 	return m, nil
 }
 

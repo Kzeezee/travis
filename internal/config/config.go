@@ -116,9 +116,9 @@ type SkillsCfg struct {
 // AuthCfg never carries a credential value, only a reference the broker resolves
 // later (`keyring://`, `env://`, `cmd://`) — see ResolveProviderAPIKey.
 //
-// Known deviation, accepted for Phase 1: only `env://` refs to a fixed list of variables
-// (providerAuthEnvVars) are honoured; anything else falls back to OPENAI_API_KEY until
-// the broker (which resolves Ref for real) arrives.
+// Known deviation, accepted for Phase 1: only `keyring://` refs and `env://` refs to a
+// fixed list of variables (providerAuthEnvVars) are honoured; anything else falls back
+// to OPENAI_API_KEY until the broker (which resolves Ref for real) arrives.
 type AuthCfg struct {
 	Kind string `toml:"kind"`
 	Ref  string `toml:"ref"`

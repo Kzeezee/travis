@@ -44,6 +44,9 @@ func TestBuildManagerConnectsAndRegistersAdaptedTools(t *testing.T) {
 	if _, ok := reg.Lookup("mcp_fake_crash"); !ok {
 		t.Fatal("mcp_fake_crash was not registered")
 	}
+	if statuses := manager.ReportServerStatuses(); len(statuses) != 1 || statuses[0].State != ServerRunning || statuses[0].ToolCount < 2 {
+		t.Fatalf("ReportServerStatuses() = %+v, want fake running with its tools counted", statuses)
+	}
 
 	arguments, err := json.Marshal(map[string]string{"message": "hello from a test"})
 	if err != nil {
@@ -150,5 +153,9 @@ func TestBuildManagerSkipsAServerDeniedByPolicy(t *testing.T) {
 	})
 	if tools := reg.List(registry.Filter{}); len(tools) != 0 {
 		t.Fatalf("registry = %v, want empty: policy denied this server outright", tools)
+	}
+	pollUntil(t, 2*time.Second, func() bool { return manager.ReportServerStatuses()[0].State == ServerFailed })
+	if status := manager.ReportServerStatuses()[0]; status.Reason == "" || status.ToolCount != 0 {
+		t.Fatalf("ReportServerStatuses() = %+v, want the denial as the reason and no tools", status)
 	}
 }

@@ -70,14 +70,22 @@ func run(args []string, in io.Reader, out io.Writer) error {
 	case "version", "--version", "-v":
 		fmt.Fprintln(out, buildVersionString())
 		return nil
+	case "init":
+		return runInit(args[1:], in, out)
 	case "chat":
 		return runChat(args[1:], in, out)
 	case "run":
 		return runHeadless(args[1:], out)
 	case "config":
 		return runConfig(args[1:], out)
+	case "provider":
+		return runProvider(args[1:], out)
+	case "models":
+		return runModels(args[1:], out)
+	case "mcp":
+		return runMCP(args[1:], in, out)
 	default:
-		return fmt.Errorf("unknown command %q (try: travis chat, travis config, travis version)", args[0])
+		return fmt.Errorf("unknown command %q (try: travis init, travis chat, travis config, travis provider list, travis models, travis mcp list|add|remove, travis version)", args[0])
 	}
 }
 
@@ -94,6 +102,16 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	}
 	explicitFlags := map[string]bool{}
 	flags.Visit(func(f *flag.Flag) { explicitFlags[f.Name] = true })
+
+	if shouldOfferSetup(in) {
+		isFinished, err := runSetupWizard(in, out)
+		if err != nil {
+			return err
+		}
+		if !isFinished {
+			return nil // they quit setup; what they finished is saved, and chat can wait
+		}
+	}
 
 	cfg, diags, err := config.Load()
 	if err != nil {
@@ -137,7 +155,13 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	apiKey := config.ResolveProviderAPIKey(profile.Auth)
+	apiKey, err := config.ResolveProviderAPIKey(cfg.Provider.Active, profile.Auth)
+	if err != nil {
+		return err
+	}
+	if apiKey == "" && config.ReportIsCredentialRequired(profile) {
+		startupWarnings = append(startupWarnings, fmt.Sprintf("provider %q has no API key; /provider %s asks for one", cfg.Provider.Active, cfg.Provider.Active))
+	}
 	redactor := redact.New(apiKey)
 	bus := buildSessionBus(os.Stderr)
 	approvals := make(chan core.ApprovalRequest)
@@ -193,15 +217,30 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		startupWarnings = append(startupWarnings, voiceInputWarning)
 	}
 
+	switcher := &providerSwitcher{
+		profiles: cfg.Provider.Profiles, conversation: session.conversation, redactor: redactor,
+		resolveKey: config.ResolveProviderAPIKey, saveKey: config.SaveProviderAPIKey,
+		recordChoice: func(profile string) error { return config.SaveActiveProvider(paths, profile) },
+		buildProvider: func(baseURL, key string) modelListingProvider {
+			return openaicompat.BuildProvider(baseURL, key, nil, core.SystemClock{})
+		},
+		current: provider,
+		active:  cfg.Provider.Active,
+	}
 	actions := terminal.ChatActions{
-		RunTurn:      session.conversation.RunAssistantTurn,
-		ResetHistory: session.conversation.ResetHistory,
-		SelectModel:  session.conversation.SelectModel,
-		ListModels:   provider.ListModels,
-		ListTools:    session.reportToolNames,
-		ListSkills:   session.reportSkillSummaries,
-		ReadMemory:   session.memoryStore.ReadMemory,
-		Undo:         terminal.UndoActions{ListTurns: session.conversation.ListTurns, Rewind: session.conversation.Rewind},
+		RunTurn:               session.conversation.RunAssistantTurn,
+		ResetHistory:          session.conversation.ResetHistory,
+		SelectModel:           session.conversation.SelectModel,
+		SwitchProvider:        switcher.SwitchProvider,
+		SwitchProviderWithKey: switcher.SwitchProviderWithKey,
+		ListProviders:         switcher.ListProviders,
+		DescribeProviders:     switcher.DescribeProviders,
+		ListMCPServers:        session.listMCPServers,
+		ListModels:            switcher.ListModels,
+		ListTools:             session.reportToolNames,
+		ListSkills:            session.reportSkillSummaries,
+		ReadMemory:            session.memoryStore.ReadMemory,
+		Undo:                  terminal.UndoActions{ListTurns: session.conversation.ListTurns, Rewind: session.conversation.Rewind},
 
 		StartDictation: startDictation,
 	}
@@ -226,10 +265,20 @@ type chatSession struct {
 	conversation  *loop.AssistantConversation
 	bus           *core.Bus
 	closeMCP      func()
+	mcpManager    *mcp.Manager
 	toolRegistry  *registry.Registry
 	skillsCatalog *skills.Catalog
 	memoryStore   core.MemoryStore
 	waitForTrace  func()
+}
+
+// listMCPServers reports every configured MCP server's live state for /mcp.
+func (s *chatSession) listMCPServers() []terminal.MCPServerSummary {
+	var servers []terminal.MCPServerSummary
+	for _, status := range s.mcpManager.ReportServerStatuses() {
+		servers = append(servers, terminal.MCPServerSummary{Name: status.Name, State: string(status.State), Reason: status.Reason, ToolCount: status.ToolCount})
+	}
+	return servers
 }
 
 // reportToolNames lists every tool registered right now, live — not a startup snapshot, so
@@ -433,6 +482,7 @@ func assembleChatSession(deps chatSessionDeps) (*chatSession, error) {
 		conversation:  loop.BuildAssistantConversation(loopDeps, deps.Model, cfg.Brain.MaxSteps),
 		bus:           deps.Bus,
 		closeMCP:      mcpManager.Close,
+		mcpManager:    mcpManager,
 		toolRegistry:  toolRegistry,
 		skillsCatalog: skillsCatalog,
 		memoryStore:   deps.Memory,
