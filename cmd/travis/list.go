@@ -5,21 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"slices"
-	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
-	"github.com/Kzeezee/travis/internal/security/redact"
 )
 
 const (
 	providerUsage = "usage: travis provider list"
-	mcpUsage      = "usage: travis mcp list"
 	// listModelsTimeout bounds `travis models`, which waits on a remote endpoint.
 	listModelsTimeout = 30 * time.Second
 )
@@ -80,26 +76,4 @@ func runModels(args []string, out io.Writer) error {
 		fmt.Fprintln(out, name)
 	}
 	return nil
-}
-
-// runMCP lists configured MCP servers; whether each one started is only known inside a chat (/mcp).
-func runMCP(args []string, out io.Writer) error {
-	if len(args) != 1 || args[0] != "list" {
-		return errors.New(mcpUsage)
-	}
-	cfg, _, err := config.Load()
-	if err != nil {
-		return err
-	}
-	if len(cfg.MCP.Servers) == 0 {
-		fmt.Fprintln(out, "no MCP servers configured; add them under [mcp.servers] in your user config")
-		return nil
-	}
-	table := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	for _, name := range slices.Sorted(maps.Keys(cfg.MCP.Servers)) {
-		server := cfg.MCP.Servers[name]
-		// Args can carry a token, as `config show` assumes of env; scrub known secret formats before printing.
-		fmt.Fprintf(table, "%s\t%s\n", name, redact.New().RedactText(strings.Join(append([]string{server.Command}, server.Args...), " ")))
-	}
-	return table.Flush()
 }

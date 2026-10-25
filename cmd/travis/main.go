@@ -70,6 +70,8 @@ func run(args []string, in io.Reader, out io.Writer) error {
 	case "version", "--version", "-v":
 		fmt.Fprintln(out, buildVersionString())
 		return nil
+	case "init":
+		return runInit(args[1:], in, out)
 	case "chat":
 		return runChat(args[1:], in, out)
 	case "run":
@@ -81,9 +83,9 @@ func run(args []string, in io.Reader, out io.Writer) error {
 	case "models":
 		return runModels(args[1:], out)
 	case "mcp":
-		return runMCP(args[1:], out)
+		return runMCP(args[1:], in, out)
 	default:
-		return fmt.Errorf("unknown command %q (try: travis chat, travis config, travis provider list, travis models, travis mcp list, travis version)", args[0])
+		return fmt.Errorf("unknown command %q (try: travis init, travis chat, travis config, travis provider list, travis models, travis mcp list|add|remove, travis version)", args[0])
 	}
 }
 
@@ -100,6 +102,16 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	}
 	explicitFlags := map[string]bool{}
 	flags.Visit(func(f *flag.Flag) { explicitFlags[f.Name] = true })
+
+	if shouldOfferSetup(in) {
+		isFinished, err := runSetupWizard(in, out)
+		if err != nil {
+			return err
+		}
+		if !isFinished {
+			return nil // they quit setup; what they finished is saved, and chat can wait
+		}
+	}
 
 	cfg, diags, err := config.Load()
 	if err != nil {
@@ -208,7 +220,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	switcher := &providerSwitcher{
 		profiles: cfg.Provider.Profiles, conversation: session.conversation, redactor: redactor,
 		resolveKey: config.ResolveProviderAPIKey, saveKey: config.SaveProviderAPIKey,
-		recordChoice: func(profile string) error { return config.RecordProviderChoice(paths, profile) },
+		recordChoice: func(profile string) error { return config.SaveActiveProvider(paths, profile) },
 		buildProvider: func(baseURL, key string) modelListingProvider {
 			return openaicompat.BuildProvider(baseURL, key, nil, core.SystemClock{})
 		},

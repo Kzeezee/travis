@@ -239,7 +239,6 @@ func load(readFile fileReader, pathSet PathSet, extraPaths []string, lookup envL
 	if err != nil {
 		return nil, diags, err
 	}
-	diags = append(diags, applyProviderChoice(&cfg, readFile, pathSet)...)
 
 	for _, layerPath := range extraPaths {
 		layerDiags, err := decodeLayerFile(readFile, layerPath, &cfg)
