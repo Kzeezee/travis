@@ -182,11 +182,13 @@ Write it BOM-free instead:
 Use local models for day-to-day development; save a paid provider for quality
 benchmarking near the end.
 
-**Known gap:** `auth.ref` (e.g. `env://ANTHROPIC_API_KEY`) is parsed but not yet
-consulted — every profile currently shares the same `OPENAI_API_KEY` lookup
-(`config.ResolveProviderAPIKey()`). A profile needing a different credential source
-doesn't work yet; this lands with the broker in a later phase. There is also no
-config hot-reload: editing `.travis/config.toml` only takes effect on the next
+**Credentials.** A profile's `auth.ref` names where its key lives, never the key itself:
+`keyring://NAME` reads account `NAME` under service `travis` in the OS credential store
+(macOS Keychain, Windows Credential Manager, Linux Secret Service), and `env://NAME`
+reads one of `OPENAI_API_KEY`, `DEEPSEEK_API_KEY` or `GEMINI_API_KEY`; anything else
+falls back to `OPENAI_API_KEY`. Travis has no command to store a key yet (TRA-68); on
+macOS, `security add-generic-password -s travis -a openai -w` prompts for one. There is
+also no config hot-reload: editing `.travis/config.toml` only takes effect on the next
 `travis chat`, not the running session.
 
 ### Session traces
