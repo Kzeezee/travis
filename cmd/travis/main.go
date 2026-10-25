@@ -76,8 +76,14 @@ func run(args []string, in io.Reader, out io.Writer) error {
 		return runHeadless(args[1:], out)
 	case "config":
 		return runConfig(args[1:], out)
+	case "provider":
+		return runProvider(args[1:], out)
+	case "models":
+		return runModels(args[1:], out)
+	case "mcp":
+		return runMCP(args[1:], out)
 	default:
-		return fmt.Errorf("unknown command %q (try: travis chat, travis config, travis version)", args[0])
+		return fmt.Errorf("unknown command %q (try: travis chat, travis config, travis provider list, travis models, travis mcp list, travis version)", args[0])
 	}
 }
 
@@ -207,6 +213,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 			return openaicompat.BuildProvider(baseURL, key, nil, core.SystemClock{})
 		},
 		current: provider,
+		active:  cfg.Provider.Active,
 	}
 	actions := terminal.ChatActions{
 		RunTurn:               session.conversation.RunAssistantTurn,
@@ -215,6 +222,8 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		SwitchProvider:        switcher.SwitchProvider,
 		SwitchProviderWithKey: switcher.SwitchProviderWithKey,
 		ListProviders:         switcher.ListProviders,
+		DescribeProviders:     switcher.DescribeProviders,
+		ListMCPServers:        session.listMCPServers,
 		ListModels:            switcher.ListModels,
 		ListTools:             session.reportToolNames,
 		ListSkills:            session.reportSkillSummaries,
@@ -244,10 +253,20 @@ type chatSession struct {
 	conversation  *loop.AssistantConversation
 	bus           *core.Bus
 	closeMCP      func()
+	mcpManager    *mcp.Manager
 	toolRegistry  *registry.Registry
 	skillsCatalog *skills.Catalog
 	memoryStore   core.MemoryStore
 	waitForTrace  func()
+}
+
+// listMCPServers reports every configured MCP server's live state for /mcp.
+func (s *chatSession) listMCPServers() []terminal.MCPServerSummary {
+	var servers []terminal.MCPServerSummary
+	for _, status := range s.mcpManager.ReportServerStatuses() {
+		servers = append(servers, terminal.MCPServerSummary{Name: status.Name, State: string(status.State), Reason: status.Reason, ToolCount: status.ToolCount})
+	}
+	return servers
 }
 
 // reportToolNames lists every tool registered right now, live — not a startup snapshot, so
@@ -451,6 +470,7 @@ func assembleChatSession(deps chatSessionDeps) (*chatSession, error) {
 		conversation:  loop.BuildAssistantConversation(loopDeps, deps.Model, cfg.Brain.MaxSteps),
 		bus:           deps.Bus,
 		closeMCP:      mcpManager.Close,
+		mcpManager:    mcpManager,
 		toolRegistry:  toolRegistry,
 		skillsCatalog: skillsCatalog,
 		memoryStore:   deps.Memory,

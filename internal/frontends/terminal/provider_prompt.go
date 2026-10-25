@@ -17,6 +17,16 @@ type ProviderSwitch struct {
 	Warning string
 }
 
+// ProviderSummary is one provider profile as /provider lists it.
+type ProviderSummary struct {
+	Name, Model string
+	IsActive    bool
+	// IsKeyRequired is false for an endpoint on this machine; HasKey matters only when it is true.
+	IsKeyRequired, HasKey bool
+}
+
+type providersDescribedMsg struct{ providers []ProviderSummary }
+
 type providerSwitchedMsg struct {
 	profile string
 	result  ProviderSwitch
@@ -31,13 +41,46 @@ func (m chatModel) requestProviderSwitch(profile string) (chatModel, tea.Cmd) {
 		return m, nil
 	}
 	if profile == "" {
-		m.transcript.addNotice("provider profiles: " + strings.Join(m.listProviderNames(), ", ") + " · /provider <name> switches")
-		return m, nil
+		return m.requestProviderDescriptions()
 	}
 	switchProvider := m.actions.SwitchProvider
 	return m, func() tea.Msg {
 		result, err := switchProvider(profile)
 		return providerSwitchedMsg{profile: profile, result: result, err: err}
+	}
+}
+
+func (m chatModel) requestProviderDescriptions() (chatModel, tea.Cmd) {
+	if m.actions.DescribeProviders == nil {
+		m.transcript.addNotice("provider profiles: " + strings.Join(m.listProviderNames(), ", ") + " · /provider <name> switches")
+		return m, nil
+	}
+	describe := m.actions.DescribeProviders
+	return m, func() tea.Msg { return providersDescribedMsg{providers: describe()} }
+}
+
+func (m chatModel) showProviderDescriptions(msg providersDescribedMsg) (tea.Model, tea.Cmd) {
+	for _, provider := range msg.providers {
+		marker := "  "
+		if provider.IsActive {
+			marker = "▸ "
+		}
+		m.transcript.addNotice(marker + provider.Name + " · " + provider.Model + " · " + reportKeyState(provider))
+	}
+	m.transcript.addNotice("/provider <name> switches")
+	m.refreshTranscript()
+	m.viewport.GotoBottom()
+	return m, nil
+}
+
+func reportKeyState(provider ProviderSummary) string {
+	switch {
+	case !provider.IsKeyRequired:
+		return "local, no key needed"
+	case provider.HasKey:
+		return "key ✓"
+	default:
+		return "no key yet"
 	}
 }
 

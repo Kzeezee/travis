@@ -41,7 +41,7 @@ func TestFilterSlashCommandsByPrefix(t *testing.T) {
 		want   int
 	}{
 		{prefix: "", want: len(commands)},
-		{prefix: "m", want: 2}, // model, memory
+		{prefix: "m", want: 3}, // model, mcp, memory
 		{prefix: "t", want: 1},
 		{prefix: "x", want: 0},
 	}

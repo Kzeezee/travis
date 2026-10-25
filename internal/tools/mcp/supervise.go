@@ -64,6 +64,29 @@ type serverProcess struct {
 	mu          sync.Mutex
 	session     *mcpsdk.ClientSession
 	unavailable error
+	// startErr is why the first launch never produced a usable server; nothing retries it.
+	startErr error
+}
+
+func (p *serverProcess) recordStartFailure(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.startErr = err
+}
+
+func (p *serverProcess) reportState() (ServerState, string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch {
+	case p.unavailable != nil:
+		return ServerUnavailable, p.unavailable.Error()
+	case p.startErr != nil:
+		return ServerFailed, p.startErr.Error()
+	case p.session != nil:
+		return ServerRunning, ""
+	default:
+		return ServerStarting, ""
+	}
 }
 
 func buildServerProcess(name string, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, trust *trustStore, sandboxing Sandboxing, scratchDir string, unregisterTools func()) *serverProcess {

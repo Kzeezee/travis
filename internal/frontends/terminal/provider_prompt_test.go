@@ -89,12 +89,63 @@ func TestProviderKeyPromptCancelsOnEscape(t *testing.T) {
 	}
 }
 
-func TestProviderWithoutANameListsProfiles(t *testing.T) {
+func TestProviderWithoutANameDescribesEachProfile(t *testing.T) {
+	actions := (&providerActions{}).buildChatActions()
+	actions.DescribeProviders = func() []ProviderSummary {
+		return []ProviderSummary{
+			{Name: "cloud", Model: "gpt", IsActive: true, IsKeyRequired: true, HasKey: true},
+			{Name: "gemini", Model: "flash", IsKeyRequired: true},
+			{Name: "local", Model: "tiny"},
+		}
+	}
+	m := buildTestModel(actions)
+
+	m, cmd := pressKeys(m, append(typedKeys("/provider"), enterKey)...)
+	m = applyCmd(t, m, cmd)
+
+	view := renderPlainView(m)
+	for _, want := range []string{"▸ cloud · gpt · key ✓", "gemini · flash · no key yet", "local · tiny · local, no key needed"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("got view\n%s\nwant %q", view, want)
+		}
+	}
+}
+
+func TestMCPListsEachServerWithItsStateAndTools(t *testing.T) {
+	actions := (&providerActions{}).buildChatActions()
+	actions.ListMCPServers = func() []MCPServerSummary {
+		return []MCPServerSummary{
+			{Name: "github", State: "running", ToolCount: 12},
+			{Name: "notes", State: "failed to start", Reason: "denied by policy\nsecond line"},
+		}
+	}
+	m := buildTestModel(actions)
+
+	m, _ = pressKeys(m, append(typedKeys("/mcp"), enterKey)...)
+
+	view := renderPlainView(m)
+	if !strings.Contains(view, "github · running · 12 tools") || !strings.Contains(view, "notes · failed to start · 0 tools · denied by policy") || strings.Contains(view, "second line") {
+		t.Fatalf("got view\n%s\nwant each server, its state, its tools and the first line of its reason", view)
+	}
+}
+
+func TestMCPWithNoServersSaysHowToAddOne(t *testing.T) {
 	m := buildTestModel((&providerActions{}).buildChatActions())
 
-	m, _ = pressKeys(m, append(typedKeys("/provider"), enterKey)...)
+	m, _ = pressKeys(m, append(typedKeys("/mcp"), enterKey)...)
 
-	if view := renderPlainView(m); !strings.Contains(view, "provider profiles: cloud, local") {
-		t.Fatalf("got view\n%s\nwant the profile list", view)
+	if view := renderPlainView(m); !strings.Contains(view, "no servers configured") {
+		t.Fatalf("got view\n%s\nwant the empty-state hint", view)
+	}
+}
+
+func TestModelWithoutANameCountsTheEndpointsModels(t *testing.T) {
+	m := buildTestModel((&providerActions{}).buildChatActions())
+	m, _ = updateModel(m, modelsListedMsg{names: []string{"a", "b", "c"}})
+
+	m, _ = pressKeys(m, append(typedKeys("/model"), enterKey)...)
+
+	if view := renderPlainView(m); !strings.Contains(view, "model: test-model · 3 available") {
+		t.Fatalf("got view\n%s\nwant the model count", view)
 	}
 }

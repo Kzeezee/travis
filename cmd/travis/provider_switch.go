@@ -36,6 +36,7 @@ type providerSwitcher struct {
 
 	mu      sync.Mutex
 	current modelListingProvider
+	active  string
 }
 
 // SwitchProvider switches to profile, or reports that it needs a key and switches nothing.
@@ -81,7 +82,7 @@ func (s *providerSwitcher) activate(profile string, settings config.ProviderProf
 		return terminal.ProviderSwitch{}, err
 	}
 	s.mu.Lock()
-	s.current = provider
+	s.current, s.active = provider, profile
 	s.mu.Unlock()
 	result := terminal.ProviderSwitch{Model: settings.Model}
 	if err := s.recordChoice(profile); err != nil {
@@ -101,6 +102,23 @@ func (s *providerSwitcher) findProfile(profile string) (config.ProviderProfileCf
 // ListProviders names every configured provider profile, sorted.
 func (s *providerSwitcher) ListProviders() []string {
 	return slices.Sorted(maps.Keys(s.profiles))
+}
+
+// DescribeProviders reports every profile with whether a key is available, never the key itself.
+func (s *providerSwitcher) DescribeProviders() []terminal.ProviderSummary {
+	s.mu.Lock()
+	active := s.active
+	s.mu.Unlock()
+	summaries := make([]terminal.ProviderSummary, 0, len(s.profiles))
+	for _, name := range s.ListProviders() {
+		settings := s.profiles[name]
+		key, err := s.resolveKey(name, settings.Auth)
+		summaries = append(summaries, terminal.ProviderSummary{
+			Name: name, Model: settings.Model, IsActive: name == active,
+			IsKeyRequired: config.ReportIsCredentialRequired(settings), HasKey: err == nil && key != "",
+		})
+	}
+	return summaries
 }
 
 // ListModels asks whichever provider the chat is on right now.
