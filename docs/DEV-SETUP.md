@@ -193,6 +193,11 @@ state dir (`provider-choice`) and beats `[provider] active` on the next start, w
 `TRAVIS_PROVIDER_ACTIVE` still beats both. There is also no config hot-reload: editing
 `.travis/config.toml` only takes effect on the next `travis chat`, not the running session.
 
+**Seeing what is set up.** `travis provider list` shows each profile, the active one and
+whether it has a key; `travis models` lists what the active endpoint offers; `travis mcp
+list` shows configured MCP servers. In chat, `/provider` and `/mcp` show the same live,
+with each server's state and tool count, and `/model` says how many models are on offer.
+
 ### Session traces
 
 Every `travis chat` session records what happened (your prompts, streamed replies,
