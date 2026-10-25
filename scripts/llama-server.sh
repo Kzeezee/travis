@@ -77,4 +77,5 @@ exec "$LLAMA_BIN" \
   --ctx-size "$CONTEXT_SIZE" \
   --gpu-layers "$GPU_LAYERS" \
   --flash-attn "$FLASH_ATTENTION" \
+  --jinja \
   "$@"
