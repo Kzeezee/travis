@@ -635,27 +635,3 @@ func TestListModelsReturnsSortedIDsWithTheCredential(t *testing.T) {
 		t.Fatalf("got %v, want an auth ProviderError", err)
 	}
 }
-
-func TestChatAsksForNoReasoningOnlyWhenTheRequestSkipsIt(t *testing.T) {
-	for _, tc := range []struct {
-		shouldSkipReasoning bool
-		want                any
-	}{{false, nil}, {true, "none"}} {
-		var capturedRequestBody map[string]any
-		server := startEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
-			_ = json.NewDecoder(r.Body).Decode(&capturedRequestBody)
-			writeStream(w, "[DONE]")
-		})
-
-		provider := openaicompat.BuildProvider(server.URL+"/v1", testAPIKey, server.Client(), core.FixedClock{})
-		stream, err := provider.Chat(context.Background(), core.ProviderRequest{Model: "gpt-5", ShouldSkipReasoning: tc.shouldSkipReasoning})
-		if err != nil {
-			t.Fatalf("Chat returned %v, want nil", err)
-		}
-		_ = stream.Close()
-
-		if got := capturedRequestBody["reasoning_effort"]; got != tc.want {
-			t.Fatalf("skip=%v: reasoning_effort = %v, want %v", tc.shouldSkipReasoning, got, tc.want)
-		}
-	}
-}

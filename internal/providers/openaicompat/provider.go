@@ -58,7 +58,6 @@ type chatRequest struct {
 	Stream             bool           `json:"stream"`
 	StreamOptions      *streamOptions `json:"stream_options,omitempty"`
 	MaxTokens          int            `json:"max_tokens,omitempty"`
-	ReasoningEffort    string         `json:"reasoning_effort,omitempty"`
 }
 
 type chatMessage struct {
@@ -108,7 +107,6 @@ func (p *Provider) Chat(ctx context.Context, request core.ProviderRequest) (core
 		Stream:             true,
 		StreamOptions:      &streamOptions{IncludeUsage: true},
 		MaxTokens:          request.MaxTokens,
-		ReasoningEffort:    selectReasoningEffort(request.ShouldSkipReasoning),
 	})
 	if err != nil {
 		return nil, &core.ProviderError{Provider: providerName, Kind: core.ErrInvalid, Cause: err}
@@ -134,14 +132,6 @@ func (p *Provider) Chat(ctx context.Context, request core.ProviderRequest) (core
 		case <-p.clock.After(delay):
 		}
 	}
-}
-
-// selectReasoningEffort leaves the endpoint's own default unless reasoning should be skipped.
-func selectReasoningEffort(shouldSkipReasoning bool) string {
-	if shouldSkipReasoning {
-		return "none"
-	}
-	return ""
 }
 
 type modelListResponse struct {
