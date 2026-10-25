@@ -262,6 +262,22 @@ func TestSelectModelSendsLaterTurnsToTheNewModel(t *testing.T) {
 	}
 }
 
+func TestSelectProviderSendsLaterTurnsToTheNewProviderAndModel(t *testing.T) {
+	first, second := &fakeProvider{}, &fakeProvider{}
+	assistantConversation := buildAssistantConversation(t, first, nil, &recordingSink{})
+
+	if err := assistantConversation.SelectProvider(second, "y"); err != nil {
+		t.Fatalf("SelectProvider returned %v, want nil", err)
+	}
+	if err := assistantConversation.RunAssistantTurn(context.Background(), "hi"); err != nil {
+		t.Fatalf("RunAssistantTurn returned %v, want nil", err)
+	}
+
+	if len(first.requests) != 0 || len(second.requests) != 1 || second.requests[0].Model != "y" {
+		t.Fatalf("got %d requests to the old provider and %v to the new, want one to the new with model y", len(first.requests), second.requests)
+	}
+}
+
 func TestRunReportsAFailedProviderCall(t *testing.T) {
 	provider := &fakeProvider{chatErr: errProviderUnavailable}
 	sink := &recordingSink{}

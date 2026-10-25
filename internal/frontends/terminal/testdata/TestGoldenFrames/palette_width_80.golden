@@ -6,10 +6,10 @@
  › /quit            exit travis
    /new             start a new conversation
    /model [name]    show or switch the model
+   /provider [name] list or switch provider profiles
    /tools           list available tools
    /skills          list loaded skills
    /memory          show the current memory
-   /cost            show tokens used this session
 ────────────────────────────────────────────────────────────────────────────────
  › /                                                                            
 ────────────────────────────────────────────────────────────────────────────────

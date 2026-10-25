@@ -38,6 +38,20 @@ func TestRedactTextScrubsKnownValuesRegardlessOfShape(t *testing.T) {
 	}
 }
 
+func TestAddKnownValueReachesEveryCopyOfTheRedactor(t *testing.T) {
+	r := redact.New("short")
+	copied := r
+	r.AddKnownValue("typed-in-mid-session-key")
+	r.AddKnownValue("short-but-longer")
+
+	if got := copied.RedactText("typed-in-mid-session-key"); got != redact.Placeholder {
+		t.Fatalf("a copy made before the value was added left it exposed: %q", got)
+	}
+	if got := copied.RedactText("short-but-longer"); strings.Contains(got, "short") {
+		t.Fatalf("a value added later did not keep longest-first order: %q", got)
+	}
+}
+
 func TestRedactTextPrefersTheLongestOverlappingKnownValue(t *testing.T) {
 	r := redact.New("short", "short-but-longer")
 	got := r.RedactText("short-but-longer")

@@ -22,6 +22,9 @@ func buildSlashCommands() []slashCommand {
 		}},
 		{name: "new", usage: "/new", summary: "start a new conversation", run: startNewConversation},
 		{name: "model", usage: "/model [name]", summary: "show or switch the model", run: selectModel},
+		{name: "provider", usage: "/provider [name]", summary: "list or switch provider profiles", run: func(m chatModel, name string) (chatModel, tea.Cmd) {
+			return m.requestProviderSwitch(name)
+		}},
 		{name: "tools", usage: "/tools", summary: "list available tools", run: showTools},
 		{name: "skills", usage: "/skills", summary: "list loaded skills", run: showSkills},
 		{name: "memory", usage: "/memory", summary: "show the current memory", run: showMemory},

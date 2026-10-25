@@ -137,9 +137,12 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	apiKey, err := config.ResolveProviderAPIKey(profile.Auth)
+	apiKey, err := config.ResolveProviderAPIKey(cfg.Provider.Active, profile.Auth)
 	if err != nil {
 		return err
+	}
+	if apiKey == "" && config.ReportIsCredentialRequired(profile) {
+		startupWarnings = append(startupWarnings, fmt.Sprintf("provider %q has no API key; /provider %s asks for one", cfg.Provider.Active, cfg.Provider.Active))
 	}
 	redactor := redact.New(apiKey)
 	bus := buildSessionBus(os.Stderr)
@@ -196,15 +199,27 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		startupWarnings = append(startupWarnings, voiceInputWarning)
 	}
 
+	switcher := &providerSwitcher{
+		profiles: cfg.Provider.Profiles, conversation: session.conversation, redactor: redactor,
+		resolveKey: config.ResolveProviderAPIKey, saveKey: config.SaveProviderAPIKey,
+		recordChoice: func(profile string) error { return config.RecordProviderChoice(paths, profile) },
+		buildProvider: func(baseURL, key string) modelListingProvider {
+			return openaicompat.BuildProvider(baseURL, key, nil, core.SystemClock{})
+		},
+		current: provider,
+	}
 	actions := terminal.ChatActions{
-		RunTurn:      session.conversation.RunAssistantTurn,
-		ResetHistory: session.conversation.ResetHistory,
-		SelectModel:  session.conversation.SelectModel,
-		ListModels:   provider.ListModels,
-		ListTools:    session.reportToolNames,
-		ListSkills:   session.reportSkillSummaries,
-		ReadMemory:   session.memoryStore.ReadMemory,
-		Undo:         terminal.UndoActions{ListTurns: session.conversation.ListTurns, Rewind: session.conversation.Rewind},
+		RunTurn:               session.conversation.RunAssistantTurn,
+		ResetHistory:          session.conversation.ResetHistory,
+		SelectModel:           session.conversation.SelectModel,
+		SwitchProvider:        switcher.SwitchProvider,
+		SwitchProviderWithKey: switcher.SwitchProviderWithKey,
+		ListProviders:         switcher.ListProviders,
+		ListModels:            switcher.ListModels,
+		ListTools:             session.reportToolNames,
+		ListSkills:            session.reportSkillSummaries,
+		ReadMemory:            session.memoryStore.ReadMemory,
+		Undo:                  terminal.UndoActions{ListTurns: session.conversation.ListTurns, Rewind: session.conversation.Rewind},
 
 		StartDictation: startDictation,
 	}

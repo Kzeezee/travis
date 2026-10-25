@@ -412,7 +412,7 @@ func buildRecordedProvider(t *testing.T, cassetteName, profileName string) (*ope
 		baseURL, model, auth = profile.BaseURL, profile.Model, profile.Auth
 		t.Logf("recording against %s, model %s (provider profile %q)", baseURL, model, profileName)
 	}
-	apiKey, err := config.ResolveProviderAPIKey(auth)
+	apiKey, err := config.ResolveProviderAPIKey(profileName, auth)
 	if err != nil {
 		t.Fatal(err)
 	}

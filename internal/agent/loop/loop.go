@@ -221,6 +221,17 @@ func (c *AssistantConversation) SelectModel(name string) {
 	c.model = name
 }
 
+// SelectProvider sends every later turn to provider and model. Unlike SelectModel it can be
+// reached from a background command, so it refuses rather than race a running turn.
+func (c *AssistantConversation) SelectProvider(provider core.Provider, model string) error {
+	if !c.busy.TryLock() {
+		return fmt.Errorf("a turn is running; switch provider once it ends: %w", core.ErrInvalid)
+	}
+	defer c.busy.Unlock()
+	c.provider, c.model = provider, model
+	return nil
+}
+
 // runStep makes exactly one provider call; it exists so the stream closes every step.
 func (c *AssistantConversation) runStep(ctx context.Context, hint string) (stepReply, error) {
 	var sections []string
