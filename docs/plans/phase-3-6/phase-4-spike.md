@@ -101,6 +101,14 @@ regression test (`TestSandboxedTargetCanCaptureChildOutput`).
 not move, so the scratch env missed it. Fixed by pointing `APPDATA` and `LOCALAPPDATA` into
 scratch too.
 
+**Windows gap 4:** with gap 1 fixed, npx servers died at startup with
+`EPERM: lstat 'C:\Users\<user>\AppData'`. Node's `realpathSync` stats every folder above its
+script, and the user's profile grants only the user, SYSTEM and Administrators, so the
+restricted check fails. uv never stats parents. Fixed by granting the sandbox SID only
+`FILE_READ_ATTRIBUTES`, non-inherited, on each folder above a read or write path. That is
+enough to stat, not to list or read. It is set with `SetFileSecurity`, because
+`SetNamedSecurityInfo` re-propagates inheritance through the whole home folder.
+
 The grants persist: `icacls` shows the sandbox SID's inheritable `(RX)` ACE on `.local\bin`
 and `Python313` after the run. A uvx server also needs its Python in `read_paths` and passed
 with `--python`, or uv fails on the first registry Python it cannot read.

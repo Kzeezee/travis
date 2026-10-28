@@ -54,6 +54,8 @@ func runEscapeProbe(probe string, args []string) int {
 		err = os.WriteFile(target, []byte("escaped"), 0o600)
 	case "read":
 		_, err = os.ReadFile(target)
+	case "stat-parents":
+		err = statEveryParent(target)
 	case "connect", "connect-unix":
 		network := map[string]string{"connect": "tcp", "connect-unix": "unix"}[probe]
 		dialer := net.Dialer{Timeout: 2 * time.Second}
@@ -103,6 +105,16 @@ func spawnHeartbeatAndWait(heartbeatPath string) int {
 }
 
 const echoOutput = "echo from child"
+
+// statEveryParent stats each folder above path the way node's realpathSync does when it resolves a script.
+func statEveryParent(path string) error {
+	for dir := filepath.Dir(path); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		if _, err := os.Lstat(dir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // captureChildOutput reads a child's stdout through a pipe, the way uv queries its Python interpreter.
 func captureChildOutput() int {

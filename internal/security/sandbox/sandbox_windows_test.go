@@ -30,6 +30,17 @@ func TestSandboxReadsFolderUserCannotRepermission(t *testing.T) {
 	assertProbeAllowed(t, spec)
 }
 
+// Node resolves its main script by stat-ing every parent folder, and scratch sits under the user's private AppData.
+func TestSandboxStatsParentsOfScratchUnderPrivateFolders(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := buildProbeSpec(t, self, "stat-parents", "")
+	spec.Argv[1] = filepath.Join(spec.WritePaths[0], "server.js")
+	assertProbeAllowed(t, spec)
+}
+
 func lockFolderPermissions(t *testing.T, path, sddl string) {
 	t.Helper()
 	sd, err := windows.SecurityDescriptorFromString(sddl)

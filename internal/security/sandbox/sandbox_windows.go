@@ -27,6 +27,8 @@ const (
 const (
 	readAccessMask  = windows.FILE_GENERIC_READ | windows.FILE_GENERIC_EXECUTE
 	writeAccessMask = readAccessMask | windows.FILE_GENERIC_WRITE | windows.DELETE
+	// statAccessMask lets the target stat a parent folder without listing or reading what is inside it.
+	statAccessMask = windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE
 
 	inheritToChildren = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
 
@@ -35,7 +37,11 @@ const (
 	luaToken            = 0x4
 )
 
-var procCreateRestrictedToken = windows.NewLazySystemDLL("advapi32.dll").NewProc("CreateRestrictedToken")
+var (
+	advapi32                  = windows.NewLazySystemDLL("advapi32.dll")
+	procCreateRestrictedToken = advapi32.NewProc("CreateRestrictedToken")
+	procSetFileSecurity       = advapi32.NewProc("SetFileSecurityW")
+)
 
 // ResolveRunnerReadPaths grants only the executable's own folder: the restricting SID can open nothing it is not
 // granted, and each grant is a persistent ACL edit, so a whole install prefix would be rewritten for good.
@@ -54,16 +60,31 @@ func applyToSelf(spec Spec) error {
 	for _, path := range spec.ReadPaths {
 		// A folder the user cannot re-permission, like Program Files, is left as is: skipping a grant never widens
 		// access, Users can already read system installs, and a runner that truly cannot be read fails to start.
-		if err := grantSandboxAccess(path, readAccessMask); err != nil && !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		if err := grantSandboxAccess(path, readAccessMask, windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT); err != nil &&
+			!errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 			return err
 		}
 	}
 	for _, path := range spec.WritePaths {
-		if err := grantSandboxAccess(path, writeAccessMask); err != nil {
+		if err := grantSandboxAccess(path, writeAccessMask, windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT); err != nil {
 			return err
 		}
 		if err := labelLowIntegrity(path); err != nil {
 			return err
+		}
+	}
+	return grantParentStatAccess(append(spec.ReadPaths, spec.WritePaths...))
+}
+
+// grantParentStatAccess lets the target stat each folder above its paths, as node does resolving its main script
+// (`EPERM: lstat 'C:\Users\me\AppData'`); folders the user cannot re-permission, like C:\Users, Users can already stat.
+func grantParentStatAccess(paths []string) error {
+	for _, path := range paths {
+		for dir := filepath.Dir(path); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+			if err := grantSandboxAccess(dir, statAccessMask, windows.NO_INHERITANCE); err != nil &&
+				!errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+				return err
+			}
 		}
 	}
 	return nil
@@ -91,8 +112,8 @@ func confineSelfToJob() error {
 	return nil
 }
 
-// grantSandboxAccess adds a persistent inheritable ACE for the sandbox SID, skipping paths that already have one.
-func grantSandboxAccess(path string, mask windows.ACCESS_MASK) error {
+// grantSandboxAccess adds a persistent ACE for the sandbox SID, skipping paths that already have one.
+func grantSandboxAccess(path string, mask windows.ACCESS_MASK, inheritance uint32) error {
 	sandboxSID, err := windows.StringToSid(travisSandboxSIDString)
 	if err != nil {
 		return fmt.Errorf("parse sandbox sid: %w", err)
@@ -105,13 +126,13 @@ func grantSandboxAccess(path string, mask windows.ACCESS_MASK) error {
 	if err != nil {
 		return fmt.Errorf("read acl of %q: %w", path, err)
 	}
-	if hasSandboxACE(dacl, sandboxSID, mask) {
+	if hasSandboxACE(dacl, sandboxSID, mask, inheritance) {
 		return nil
 	}
 	grant := windows.EXPLICIT_ACCESS{
 		AccessPermissions: mask,
 		AccessMode:        windows.GRANT_ACCESS,
-		Inheritance:       windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+		Inheritance:       inheritance,
 		Trustee: windows.TRUSTEE{
 			TrusteeForm:  windows.TRUSTEE_IS_SID,
 			TrusteeType:  windows.TRUSTEE_IS_GROUP,
@@ -122,13 +143,44 @@ func grantSandboxAccess(path string, mask windows.ACCESS_MASK) error {
 	if err != nil {
 		return fmt.Errorf("build acl of %q: %w", path, err)
 	}
-	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, merged, nil); err != nil {
+	if inheritance == windows.NO_INHERITANCE {
+		err = setDACLOfFolderOnly(path, sd, merged)
+	} else {
+		err = windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, merged, nil)
+	}
+	if err != nil {
 		return fmt.Errorf("grant sandbox access to %q: %w", path, err)
 	}
 	return nil
 }
 
-func hasSandboxACE(dacl *windows.ACL, sandboxSID *windows.SID, mask windows.ACCESS_MASK) bool {
+// setDACLOfFolderOnly uses SetFileSecurity because SetNamedSecurityInfo re-propagates inheritance through the whole
+// subtree, which under a home folder walks every file the user owns.
+func setDACLOfFolderOnly(path string, sd *windows.SECURITY_DESCRIPTOR, dacl *windows.ACL) error {
+	absoluteSD, err := sd.ToAbsolute()
+	if err != nil {
+		return err
+	}
+	if err := absoluteSD.SetDACL(dacl, true, false); err != nil {
+		return err
+	}
+	pathPtr, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	isSet, _, err := procSetFileSecurity.Call(uintptr(unsafe.Pointer(pathPtr)), uintptr(windows.DACL_SECURITY_INFORMATION),
+		uintptr(unsafe.Pointer(absoluteSD)))
+	if isSet == 0 {
+		return err
+	}
+	return nil
+}
+
+func hasSandboxACE(dacl *windows.ACL, sandboxSID *windows.SID, mask windows.ACCESS_MASK, inheritance uint32) bool {
+	wantedFlags := uint8(0)
+	if inheritance != windows.NO_INHERITANCE {
+		wantedFlags = inheritToChildren
+	}
 	if dacl == nil {
 		return false
 	}
@@ -137,11 +189,11 @@ func hasSandboxACE(dacl *windows.ACL, sandboxSID *windows.SID, mask windows.ACCE
 		if windows.GetAce(dacl, i, &ace) != nil {
 			return false
 		}
-		isInheritableAllow := ace.Header.AceType == windows.ACCESS_ALLOWED_ACE_TYPE &&
-			ace.Header.AceFlags&inheritToChildren == inheritToChildren &&
+		isMatchingAllow := ace.Header.AceType == windows.ACCESS_ALLOWED_ACE_TYPE &&
+			ace.Header.AceFlags&wantedFlags == wantedFlags &&
 			ace.Header.AceFlags&windows.INHERIT_ONLY_ACE == 0
 		aceSID := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		if isInheritableAllow && ace.Mask&mask == mask && aceSID.Equals(sandboxSID) {
+		if isMatchingAllow && ace.Mask&mask == mask && aceSID.Equals(sandboxSID) {
 			return true
 		}
 	}
