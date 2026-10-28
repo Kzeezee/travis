@@ -174,12 +174,14 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		startupWarnings = append(startupWarnings, fmt.Sprintf("provider %q has no API key; /provider %s asks for one", cfg.Provider.Active, cfg.Provider.Active))
 	}
 	redactor := redact.New(apiKey)
-	bus := buildSessionBus(os.Stderr)
+	// Everything below keeps running under the chat screen, so its diagnostics must not write to the terminal directly.
+	diagnostics := terminal.BuildDiagnosticsWriter(os.Stderr)
+	bus := buildSessionBus(diagnostics)
 	approvals := make(chan core.ApprovalRequest)
 	questions := make(chan core.QuestionRequest)
 	approver := terminal.BuildApprover(approvals)
 	questioner := terminal.BuildQuestioner(questions)
-	narrator, voiceWarning := startVoiceOutput(cfg.Voice.Output, bus, os.Stderr)
+	narrator, voiceWarning := startVoiceOutput(cfg.Voice.Output, bus, diagnostics)
 	if voiceWarning != "" {
 		startupWarnings = append(startupWarnings, voiceWarning)
 	}
@@ -189,7 +191,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		questioner = voiceout.WrapQuestioner(questioner, narrator)
 	}
 	sessionID := id.BuildULIDGenerator(core.SystemClock{}).GenerateID()
-	sessionBroker, err := startSessionBroker(paths, sessionID, cfg.Session, os.Stderr, broker.RemoteOptions{
+	sessionBroker, err := startSessionBroker(paths, sessionID, cfg.Session, diagnostics, broker.RemoteOptions{
 		Events:   redact.WrapSink(bus, redactor),
 		Approver: approver,
 		Clock:    core.SystemClock{},
@@ -208,7 +210,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		Cfg: cfg, Paths: paths, Session: sessionID, Provider: provider, Model: profile.Model,
 		Files: sessionBroker.Remote, Log: sessionBroker.Remote,
 		Memory: sessionBroker.Remote, Commands: sessionBroker.Remote, Pages: sessionBroker.Remote,
-		Bus: bus, Diagnostics: os.Stderr, Redactor: redactor,
+		Bus: bus, Diagnostics: diagnostics, Redactor: redactor,
 		Questioner: questioner, Approver: approver, MCPPolicy: mcpPolicy, IsSpeechEnabled: narrator != nil,
 		MCPSandboxing: mcp.Sandboxing{
 			// travis-broker doubles as the sandbox launcher; its hash is checked again before every launch.
@@ -256,7 +258,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		StartDictation: startDictation,
 	}
 	chatErr := terminal.RunChat(context.Background(), events, approvals, actions,
-		terminal.Options{ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions, PushToTalkKey: cfg.Voice.Input.PushToTalkKey})
+		terminal.Options{ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions, Diagnostics: diagnostics, PushToTalkKey: cfg.Voice.Input.PushToTalkKey})
 	session.close()
 	return chatErr
 }
