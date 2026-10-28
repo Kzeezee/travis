@@ -106,10 +106,11 @@ func buildSandboxSpec(launcher, executable, scratchDir string, cfg config.MCPSer
 
 // buildScratchEnv points home, temp and package caches into scratch, so npx and uvx never write outside it;
 // prefer_offline lets a warm npm cache start with no network instead of waiting for the registry to time out.
+// APPDATA and LOCALAPPDATA move too, because Windows tools such as uv keep their data there rather than in home.
 func buildScratchEnv(scratchDir string) map[string]string {
 	tmp := filepath.Join(scratchDir, "tmp")
 	return map[string]string{
-		"HOME": scratchDir, "USERPROFILE": scratchDir,
+		"HOME": scratchDir, "USERPROFILE": scratchDir, "APPDATA": scratchDir, "LOCALAPPDATA": scratchDir,
 		"TMPDIR": tmp, "TEMP": tmp, "TMP": tmp,
 		"XDG_CACHE_HOME":            filepath.Join(scratchDir, "cache"),
 		"npm_config_cache":          filepath.Join(scratchDir, "npm-cache"),

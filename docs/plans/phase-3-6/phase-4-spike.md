@@ -7,7 +7,7 @@ merged, so it measures the shipped backends rather than prototypes. The harness 
 `cmd/sandboxspike` on the throwaway branch
 `feat/tra-45-phase-4-spike-sandbox-feasibility` (never merged): it launches a real server through
 `sandbox.BuildCommand` and completes `initialize` + `tools/list`. Linux ran in Docker (see
-below). Windows is **not run yet**; rerun the harness there before 4E closes.
+below). Windows ran later, through shipped travis after 4E merged (see below).
 
 ## What ran (seatbelt)
 
@@ -69,6 +69,50 @@ directories, even inside scratch, fails with `EXDEV`. uv renames from a temp dir
 its cache. Fix: `RWDirs(path).WithRefer()` on write paths. Tracked as TRA-61 (gap 1) and
 TRA-62 (gap 2), each with a regression test; both block 4E.
 
+## What ran (restricted token, Windows)
+
+Run 2026-10-23 on Windows 11 (26200), not elevated, Node 22.13 in `C:\Program Files\nodejs`,
+uv in `%UserProfile%\.local\bin`, Python 3.12 and 3.13 from python.org under
+`%LocalAppData%\Programs\Python`. The cmd/sandboxspike branch is gone, so servers ran
+through `make chat` and `travis-broker __sandbox-launch` directly. Tier `restricted-token`.
+
+| Case | Read paths | Result |
+|---|---|---|
+| `go test ./internal/security/sandbox/` | — | escape test passes; network cases skip (tier has no network containment) |
+| npx `server-everything` / `server-filesystem` | derived `C:\Program Files\nodejs` | `grant sandbox access to "C:\Program Files\nodejs": Access is denied` (**Windows gap 1**) |
+| uvx `mcp-server-time` | derived `.local\bin` | uv walks the registry Pythons; reading `Python313\python.exe` is denied |
+| same | + `Python313` | moves on to `Python312`, denied: uv stops at the first unreadable one |
+| same, `--python …\Python313\python.exe` | + `Python313` | `Failed to query Python interpreter: Access is denied` (**Windows gap 2**) |
+| launcher runs `python.exe -c "print(1)"` directly | `Python313` | prints `1`, exit 0 |
+| uvx through `make chat`, gap 2 fixed | + `Python313` | `failed to create directory …\AppData\Roaming\uv\tools` (**Windows gap 3**) |
+| uvx, `--python`, gaps 2 and 3 fixed | `.local\bin`, `Python313` | installs into scratch, **`initialize` + `tools/list` pass** |
+
+**Windows gap 1:** the derived read path is an ACL edit, and a standard user cannot edit
+the ACL on `Program Files`. npx servers cannot start unless travis runs elevated, which
+would leave the ACE there for good. Fix candidate: skip the grant where the restricting SIDs
+(Users, Everyone) can already read. Open as a ticket.
+
+**Windows gap 2:** the restricted token kept the default DACL, which names only the user and
+SYSTEM, so the target could not open the pipes it created (`pipe: Access is denied`). Fixed
+by granting the user, the sandbox SID and SYSTEM in the token's default DACL, with a
+regression test (`TestSandboxedTargetCanCaptureChildOutput`).
+
+**Windows gap 3:** uv keeps its tools under `%APPDATA%`, which `HOME` and `USERPROFILE` do
+not move, so the scratch env missed it. Fixed by pointing `APPDATA` and `LOCALAPPDATA` into
+scratch too.
+
+**Windows gap 4:** with gap 1 fixed, npx servers died at startup with
+`EPERM: lstat 'C:\Users\<user>\AppData'`. Node's `realpathSync` stats every folder above its
+script, and the user's profile grants only the user, SYSTEM and Administrators, so the
+restricted check fails. uv never stats parents. Fixed by granting the sandbox SID only
+`FILE_READ_ATTRIBUTES`, non-inherited, on each folder above a read or write path. That is
+enough to stat, not to list or read. It is set with `SetFileSecurity`, because
+`SetNamedSecurityInfo` re-propagates inheritance through the whole home folder.
+
+The grants persist: `icacls` shows the sandbox SID's inheritable `(RX)` ACE on `.local\bin`
+and `Python313` after the run. A uvx server also needs its Python in `read_paths` and passed
+with `--python`, or uv fails on the first registry Python it cannot read.
+
 ## Findings
 
 1. **npm cache writes were the expected failure. Redirecting them fixes it.** With the
@@ -114,7 +158,10 @@ TRA-62 (gap 2), each with a regression test; both block 4E.
   low-integrity access, so the derived prefix (for example
   `C:\Program Files\nodejs`) gets its ACL changed persistently. Measure this on Windows
   before 4E derives a read set there. 4E may need to skip the derived prefix on Windows,
-  where low integrity can already read it.
+  where low integrity can already read it. **Seen after 4E shipped:** `make chat` on Windows
+  failed with `grant sandbox access to "C:\Program Files\nodejs": Access is denied`, since
+  a normal user cannot edit that ACL. The launcher now skips a read grant it is denied;
+  `Users` can already read Program Files, and skipping never widens access.
 - **Linux ran only in Docker on arm64**, not on a distro host or CI. nvm installs were not
   tried, but the `~/.local` (uv) case confirms the prefix rule.
 - **`server-everything` is a toy.** Servers that need credentials (GitHub token via env)

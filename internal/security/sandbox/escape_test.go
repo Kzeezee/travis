@@ -54,6 +54,8 @@ func runEscapeProbe(probe string, args []string) int {
 		err = os.WriteFile(target, []byte("escaped"), 0o600)
 	case "read":
 		_, err = os.ReadFile(target)
+	case "stat-parents":
+		err = statEveryParent(target)
 	case "connect", "connect-unix":
 		network := map[string]string{"connect": "tcp", "connect-unix": "unix"}[probe]
 		dialer := net.Dialer{Timeout: 2 * time.Second}
@@ -68,6 +70,11 @@ func runEscapeProbe(probe string, args []string) int {
 		_, err = net.DefaultResolver.LookupHost(context.Background(), target)
 	case "spawn-heartbeat":
 		return spawnHeartbeatAndWait(target)
+	case "pipe-child":
+		return captureChildOutput()
+	case "echo":
+		fmt.Print(echoOutput)
+		return 0
 	case "heartbeat":
 		return writeHeartbeat(target)
 	default:
@@ -95,6 +102,38 @@ func spawnHeartbeatAndWait(heartbeatPath string) int {
 	}
 	time.Sleep(time.Minute)
 	return 2
+}
+
+const echoOutput = "echo from child"
+
+// statEveryParent stats each folder above path the way node's realpathSync does when it resolves a script.
+func statEveryParent(path string) error {
+	for dir := filepath.Dir(path); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		if _, err := os.Lstat(dir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// captureChildOutput reads a child's stdout through a pipe, the way uv queries its Python interpreter.
+func captureChildOutput() int {
+	self, err := os.Executable()
+	if err != nil {
+		return 2
+	}
+	child := exec.Command(self, "") //nolint:noctx // the probe re-runs itself; the sandbox bounds it
+	child.Env = append(os.Environ(), escapeProbeEnv+"=echo")
+	output, err := child.Output()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "escape probe: capture child output:", err)
+		return deniedExitCode
+	}
+	if string(output) != echoOutput {
+		fmt.Fprintf(os.Stderr, "escape probe: child wrote %q\n", output)
+		return 2
+	}
+	return 0
 }
 
 // writeHeartbeat appends a byte every few milliseconds; it stops on its own so a failed test leaks nothing for long.
@@ -161,6 +200,27 @@ func TestSandboxEscape(t *testing.T) {
 		spec.Argv[1] = heartbeatPath
 		assertTreeDiesOnCancel(t, spec, heartbeatPath)
 	})
+}
+
+// TestSandboxedTargetCanCaptureChildOutput covers servers such as uvx that start a helper and read its stdout.
+func TestSandboxedTargetCanCaptureChildOutput(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	cmd, tier, err := sandbox.BuildCommand(ctx, buildProbeSpec(t, self, "pipe-child", ""))
+	if errors.Is(err, core.ErrUnsupported) {
+		t.Skipf("sandbox on %s: %v", runtime.GOOS, err)
+	} else if err != nil {
+		t.Fatalf("BuildCommand: %v", err)
+	}
+	var output bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("tier %s target could not capture a child's output (%v):\n%s", tier, err, output.String())
+	}
 }
 
 func listenOnLoopbackTCP(t *testing.T) string {
