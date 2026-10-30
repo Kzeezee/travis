@@ -139,12 +139,15 @@ contains = "buy milk"
 # 4E regression: an MCP server runs inside the OS sandbox under the real wiring, with
 # require_sandbox on, and its tool answers the model. The runner waits for mcp_fake_echo to
 # register, which only happens once the sandboxed process has answered tools/list.
+# 4B-4D regression (TRA-74): the reported tier is a real one, never "none" — the exact tier
+# name is OS- and kernel-version-dependent, so this checks only that sandboxing engaged.
 [[scenario]]
 name = "sandboxed MCP server answers a tool call"
 fixture = "notes"
 mcp_fake_server = true
 turns = ["Echo hello through the MCP server."]
 assert_tools_called = ["mcp_fake_echo"]
+assert_sandbox_tier_engaged = true
 
 [[scenario.step]]
 tool = "mcp_fake_echo"
