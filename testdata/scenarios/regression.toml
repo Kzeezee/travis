@@ -152,3 +152,44 @@ arguments = '{"message":"hello"}'
 
 [[scenario.step]]
 final_text = "The MCP server echoed hello."
+
+# 5A regression (TRA-73): a <speak> span is removed from the shown text but its words stay in
+# it, and the same text is also published as SpeechRequested. IsSpeechEnabled defaults to
+# false, so a scenario must opt in with voice_output_enabled to observe any of this.
+[[scenario]]
+name = "a tagged speak span is shown without its tags and also spoken"
+fixture = "notes"
+voice_output_enabled = true
+turns = ["Is the dentist appointment confirmed?"]
+assert_answer_contains = ["The appointment is confirmed for 10:15."]
+assert_speech_contains = ["The appointment is confirmed for 10:15."]
+
+[[scenario.step]]
+final_text = "All set. <speak>The appointment is confirmed for 10:15.</speak>"
+
+# 5A regression (TRA-73): with voice output off, an untagged reply publishes no speech at
+# all — the tier-3 fallback never fires without IsSpeechEnabled.
+[[scenario]]
+name = "an untagged reply publishes no speech when voice output is off"
+fixture = "notes"
+turns = ["Is the dentist appointment confirmed?"]
+assert_answer_contains = ["The appointment is confirmed."]
+assert_no_speech = true
+
+[[scenario.step]]
+final_text = "The appointment is confirmed."
+
+# 5A regression (TRA-73): with voice on and no <speak> tags, the tier-3 fallback speaks only
+# the reply's first sentence (TRA-72) instead of sending a second model call for a summary —
+# this scenario's scripted provider has exactly one step, so a second call would fail it
+# outright.
+[[scenario]]
+name = "an untagged reply speaks only its first sentence when voice output is on"
+fixture = "notes"
+voice_output_enabled = true
+turns = ["Is the dentist appointment confirmed?"]
+assert_answer_contains = ["The appointment is confirmed for 10:15. I also wrote a summary."]
+assert_speech_contains = ["The appointment is confirmed for 10:15."]
+
+[[scenario.step]]
+final_text = "The appointment is confirmed for 10:15. I also wrote a summary."
