@@ -19,6 +19,9 @@ type Result struct {
 	SystemPrompt string
 	// Answer is the assistant's streamed text, concatenated across every turn.
 	Answer string
+	// Spoken is every SpeechRequested event's text, concatenated across every turn, in the
+	// order published. Empty means no speech fired at all.
+	Spoken string
 	// Files holds the content of exactly the paths named in the scenario's AssertFiles.
 	Files map[string]string
 }
@@ -59,6 +62,14 @@ func CheckAssertions(sc Scenario, result Result) error {
 		if strings.Contains(result.SystemPrompt, unwanted) {
 			return fmt.Errorf("%q: system prompt contains %q", sc.Name, unwanted)
 		}
+	}
+	for _, want := range sc.AssertSpeechContains {
+		if !strings.Contains(result.Spoken, want) {
+			return fmt.Errorf("%q: spoken text %q lacks %q", sc.Name, result.Spoken, want)
+		}
+	}
+	if sc.AssertNoSpeech && result.Spoken != "" {
+		return fmt.Errorf("%q: spoken text %q, want none", sc.Name, result.Spoken)
 	}
 	for _, assertFile := range sc.AssertFiles {
 		if assertFile.IsAbsent {

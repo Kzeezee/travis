@@ -42,6 +42,9 @@ type Scenario struct {
 	// ToolsMaxExposed overrides tools.max_exposed for this scenario's session; 0 falls back
 	// to the runner's own default. Lets a scenario prove pruning behavior (3C) end to end.
 	ToolsMaxExposed      int            `toml:"tools_max_exposed"`
+	// VoiceOutputEnabled turns on IsSpeechEnabled for this scenario's session; it defaults to
+	// false, same as production, so a scenario must opt in to observe any SpeechRequested event.
+	VoiceOutputEnabled   bool           `toml:"voice_output_enabled"`
 	Steps                []ScriptedStep `toml:"step"`
 	Turns                []string       `toml:"turns"`
 	AssertToolsCalled    []string       `toml:"assert_tools_called"`
@@ -53,6 +56,11 @@ type Scenario struct {
 	AssertToolsOffered   []string     `toml:"assert_tools_offered"`
 	AssertAnswerContains []string     `toml:"assert_answer_contains"`
 	AssertFiles          []AssertFile `toml:"assert_files"`
+	// AssertSpeechContains checks the concatenated text of every SpeechRequested event the
+	// turns produced, the same substring match AssertAnswerContains uses for the shown text.
+	AssertSpeechContains []string `toml:"assert_speech_contains"`
+	// AssertNoSpeech checks that no SpeechRequested event fired at all.
+	AssertNoSpeech bool `toml:"assert_no_speech"`
 
 	// AssertPromptLacks checks the first call's system prompt; scripted runner only, like
 	// AssertToolsOffered.
@@ -124,6 +132,9 @@ func validateScenario(sc Scenario) error {
 		if assertFile.IsAbsent == (assertFile.Contains != "") {
 			return fmt.Errorf("%q: assert_files %q must set exactly one of contains or absent", sc.Name, assertFile.Path)
 		}
+	}
+	if sc.AssertNoSpeech && len(sc.AssertSpeechContains) > 0 {
+		return fmt.Errorf("%q: assert_no_speech and assert_speech_contains cannot both be set", sc.Name)
 	}
 	return nil
 }

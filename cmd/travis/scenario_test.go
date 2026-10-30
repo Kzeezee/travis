@@ -120,6 +120,7 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 		Files: remote, Log: remote, Memory: remote, Commands: remote, Pages: remote,
 		Bus: bus, Diagnostics: &diagnostics, Redactor: redact.New(),
 		Approver: approver, MCPPolicy: mcpPolicy, MCPSandboxing: testMCPSandboxing,
+		IsSpeechEnabled: sc.VoiceOutputEnabled,
 	})
 	if err != nil {
 		return scenario.Result{}, err
@@ -143,7 +144,7 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 
 	isCalled := map[string]bool{}
 	var called []string
-	var answer strings.Builder
+	var answer, spoken strings.Builder
 	for event := range events {
 		switch fact := event.(type) {
 		case core.ToolCallStarted:
@@ -153,6 +154,8 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 			}
 		case core.AssistantTextStreamed:
 			answer.WriteString(fact.Text)
+		case core.SpeechRequested:
+			spoken.WriteString(fact.Text)
 		}
 	}
 
@@ -174,7 +177,7 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 		}
 		systemPrompt = scripted.requests[0].System
 	}
-	return scenario.Result{ToolsCalled: called, ToolsOffered: offered, SystemPrompt: systemPrompt, Answer: answer.String(), Files: files}, nil
+	return scenario.Result{ToolsCalled: called, ToolsOffered: offered, SystemPrompt: systemPrompt, Answer: answer.String(), Spoken: spoken.String(), Files: files}, nil
 }
 
 // buildScriptedProviderFromSteps turns a scenario's fixed steps into the same scriptedProvider

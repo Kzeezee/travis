@@ -52,3 +52,15 @@ final_text = "Wrote summary.md."
 [[scenario.assert_files]]
 path = "summary.md"
 absent = true
+
+# Known bad (TRA-73): asserts spoken text the reply never contains, proving
+# assert_speech_contains is actually checked rather than passing vacuously.
+[[scenario]]
+name = "known bad: asserts speech that was never spoken"
+fixture = "notes"
+voice_output_enabled = true
+turns = ["Is the dentist appointment confirmed?"]
+assert_speech_contains = ["this text was never spoken"]
+
+[[scenario.step]]
+final_text = "All set. <speak>The appointment is confirmed for 10:15.</speak>"
