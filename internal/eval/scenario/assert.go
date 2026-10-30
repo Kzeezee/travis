@@ -22,6 +22,9 @@ type Result struct {
 	// Spoken is every SpeechRequested event's text, concatenated across every turn, in the
 	// order published. Empty means no speech fired at all.
 	Spoken string
+	// SandboxTier is the tier an MCPServerStarted event reported, empty when no sandboxed
+	// server started during the run.
+	SandboxTier string
 	// Files holds the content of exactly the paths named in the scenario's AssertFiles.
 	Files map[string]string
 }
@@ -70,6 +73,9 @@ func CheckAssertions(sc Scenario, result Result) error {
 	}
 	if sc.AssertNoSpeech && result.Spoken != "" {
 		return fmt.Errorf("%q: spoken text %q, want none", sc.Name, result.Spoken)
+	}
+	if sc.AssertSandboxTierEngaged && (result.SandboxTier == "" || result.SandboxTier == "none") {
+		return fmt.Errorf("%q: sandbox tier %q, want a real tier engaged", sc.Name, result.SandboxTier)
 	}
 	for _, assertFile := range sc.AssertFiles {
 		if assertFile.IsAbsent {

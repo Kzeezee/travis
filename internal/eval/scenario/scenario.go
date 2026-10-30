@@ -61,6 +61,10 @@ type Scenario struct {
 	AssertSpeechContains []string `toml:"assert_speech_contains"`
 	// AssertNoSpeech checks that no SpeechRequested event fired at all.
 	AssertNoSpeech bool `toml:"assert_no_speech"`
+	// AssertSandboxTierEngaged checks that an MCPServerStarted event reported a real tier,
+	// never "none" or absent — the exact tier name is OS- and kernel-version-dependent
+	// (TRA-63), so this checks sandboxing engaged at all rather than pinning one tier string.
+	AssertSandboxTierEngaged bool `toml:"assert_sandbox_tier_engaged"`
 
 	// AssertPromptLacks checks the first call's system prompt; scripted runner only, like
 	// AssertToolsOffered.

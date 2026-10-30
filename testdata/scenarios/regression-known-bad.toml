@@ -64,3 +64,18 @@ assert_speech_contains = ["this text was never spoken"]
 
 [[scenario.step]]
 final_text = "All set. <speak>The appointment is confirmed for 10:15.</speak>"
+
+# Known bad (TRA-74): asserts a sandboxed server engaged when this scenario never starts an
+# MCP server at all, proving assert_sandbox_tier_engaged is actually checked.
+[[scenario]]
+name = "known bad: asserts a sandbox tier that was never reported"
+fixture = "notes"
+turns = ["Write a short todo list."]
+assert_sandbox_tier_engaged = true
+
+[[scenario.step]]
+tool = "fs_write"
+arguments = '{"path":"todo.md","content":"- buy milk\n"}'
+
+[[scenario.step]]
+final_text = "Wrote todo.md."

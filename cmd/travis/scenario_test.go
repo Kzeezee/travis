@@ -100,6 +100,9 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 		}
 	}
 	remote, _ := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus, Approver: approver})
+	// Subscribed before assembleChatSession, not after: the MCP manager it starts publishes
+	// MCPServerStarted during its own startup, and Bus.Publish never replays to a late subscriber.
+	events, _ := bus.Subscribe(nil)
 
 	model := sc.Model
 	if model == "" {
@@ -128,7 +131,6 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 	if sc.MCPFakeServer {
 		waitForRegisteredTool(t, session, "mcp_fake_echo")
 	}
-	events, _ := session.bus.Subscribe(nil)
 
 	var runErr error
 	for _, turn := range sc.Turns {
@@ -145,6 +147,7 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 	isCalled := map[string]bool{}
 	var called []string
 	var answer, spoken strings.Builder
+	var sandboxTier string
 	for event := range events {
 		switch fact := event.(type) {
 		case core.ToolCallStarted:
@@ -156,6 +159,8 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 			answer.WriteString(fact.Text)
 		case core.SpeechRequested:
 			spoken.WriteString(fact.Text)
+		case core.MCPServerStarted:
+			sandboxTier = fact.Tier
 		}
 	}
 
@@ -177,7 +182,10 @@ func runScenario(t *testing.T, sc scenario.Scenario) (scenario.Result, error) {
 		}
 		systemPrompt = scripted.requests[0].System
 	}
-	return scenario.Result{ToolsCalled: called, ToolsOffered: offered, SystemPrompt: systemPrompt, Answer: answer.String(), Spoken: spoken.String(), Files: files}, nil
+	return scenario.Result{
+		ToolsCalled: called, ToolsOffered: offered, SystemPrompt: systemPrompt,
+		Answer: answer.String(), Spoken: spoken.String(), SandboxTier: sandboxTier, Files: files,
+	}, nil
 }
 
 // buildScriptedProviderFromSteps turns a scenario's fixed steps into the same scriptedProvider
