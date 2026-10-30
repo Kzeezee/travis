@@ -41,7 +41,7 @@ type Scenario struct {
 	MaxSteps int    `toml:"max_steps"`
 	// ToolsMaxExposed overrides tools.max_exposed for this scenario's session; 0 falls back
 	// to the runner's own default. Lets a scenario prove pruning behavior (3C) end to end.
-	ToolsMaxExposed      int            `toml:"tools_max_exposed"`
+	ToolsMaxExposed int `toml:"tools_max_exposed"`
 	// VoiceOutputEnabled turns on IsSpeechEnabled for this scenario's session; it defaults to
 	// false, same as production, so a scenario must opt in to observe any SpeechRequested event.
 	VoiceOutputEnabled   bool           `toml:"voice_output_enabled"`
