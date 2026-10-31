@@ -19,7 +19,15 @@ func TestProviderErrorMatchesKindAndUnwrapsCause(t *testing.T) {
 	if !errors.Is(err, cause) {
 		t.Fatalf("ProviderError should unwrap cause %v", cause)
 	}
-	if got, want := err.Error(), "openai: exhausted"; got != want {
+	if got, want := err.Error(), "openai: exhausted: http 429"; got != want {
+		t.Fatalf("ProviderError.Error() = %q, want %q", got, want)
+	}
+}
+
+func TestProviderErrorWithNoCauseOmitsIt(t *testing.T) {
+	err := &ProviderError{Provider: "openai", Kind: ErrAuth}
+
+	if got, want := err.Error(), "openai: auth"; got != want {
 		t.Fatalf("ProviderError.Error() = %q, want %q", got, want)
 	}
 }

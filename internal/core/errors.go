@@ -35,6 +35,8 @@ func (e *ProviderError) Error() string {
 	switch {
 	case e == nil:
 		return "<nil>"
+	case e.Provider != "" && e.Kind != nil && e.Cause != nil:
+		return e.Provider + ": " + e.Kind.Error() + ": " + e.Cause.Error()
 	case e.Provider != "" && e.Kind != nil:
 		return e.Provider + ": " + e.Kind.Error()
 	case e.Provider != "":
