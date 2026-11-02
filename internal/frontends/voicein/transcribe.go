@@ -1,18 +1,17 @@
 package voicein
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
-	"mime/multipart"
-	"net/http"
-	"net/url"
-	"regexp"
+	"os"
+	"os/exec"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/Kzeezee/travis/internal/core"
 )
@@ -23,85 +22,76 @@ type Transcriber interface {
 }
 
 const (
-	// A transcript is a prompt, not a document; anything larger is a misbehaving server.
-	maxTranscriptResponseBytes = 1 << 20
-	maxErrorDetailBytes        = 2 << 10
+	// A transcript is a prompt, not a document; anything larger is a misbehaving engine.
+	maxTranscriptBytes = 1 << 20
+	// A stuck engine leaves the input box empty rather than the status bar saying
+	// "transcribing" forever.
+	maxTranscriptionTime = 60 * time.Second
 )
 
-// whisper.cpp marks non-speech as "[BLANK_AUDIO]", "(music)" and the like; none of it is dictation.
-var nonSpeechMarker = regexp.MustCompile(`\[[^\]]*\]|\([^)]*\)`)
-
-// BuildHTTPTranscriber speaks to an OpenAI-style POST {baseURL}/audio/transcriptions, which
-// whisper.cpp's server offers locally (§5.10: whisper_server is the default backend).
-func BuildHTTPTranscriber(baseURL, model string, client *http.Client) Transcriber {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	return httpTranscriber{baseURL: strings.TrimSuffix(baseURL, "/"), model: model, client: client}
+// BuildWhistleTranscriber transcribes with Cactus Compute's Whistle model, run by its needle
+// engine as one process per recording on this machine, so the room's audio never leaves it (D-15).
+func BuildWhistleTranscriber(enginePath, modelPath string) Transcriber {
+	return engineTranscriber{path: enginePath, modelPath: modelPath}
 }
 
-type httpTranscriber struct {
-	baseURL string
-	model   string
-	client  *http.Client
+type engineTranscriber struct {
+	path string
+	// args come before needle's own flags; only tests set them, to run a fake engine.
+	args      []string
+	modelPath string
 }
 
-func (t httpTranscriber) Transcribe(ctx context.Context, pcm []byte) (string, error) {
-	endpoint, err := url.JoinPath(t.baseURL, "audio", "transcriptions")
-	if err != nil {
-		return "", fmt.Errorf("speech-to-text address %q: %w", t.baseURL, core.ErrInvalid)
-	}
-	body, contentType, err := buildTranscriptionForm(pcm, t.model)
+func (t engineTranscriber) Transcribe(ctx context.Context, pcm []byte) (string, error) {
+	recording, err := writeRecordingFile(pcm)
 	if err != nil {
 		return "", err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
-	if err != nil {
-		return "", fmt.Errorf("speech-to-text request: %w", err)
-	}
-	request.Header.Set("Content-Type", contentType)
+	defer func() { _ = os.Remove(recording) }()
 
-	response, err := t.client.Do(request)
-	if err != nil {
-		return "", fmt.Errorf("speech-to-text server at %s is not reachable: %w", t.baseURL, err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		detail, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorDetailBytes))
-		return "", fmt.Errorf("speech-to-text server: %s: %s", response.Status, strings.TrimSpace(string(detail)))
+	ctx, cancel := context.WithTimeout(ctx, maxTranscriptionTime)
+	defer cancel()
+	// #nosec G204 -- path is the engine installed beside travis; the other args are its model and our own temp file.
+	cmd := exec.CommandContext(ctx, t.path, append(slices.Clone(t.args), "--model", t.modelPath, "--audio", recording)...)
+	stdout := &cappedBuffer{limit: maxTranscriptBytes}
+	stderr := &cappedBuffer{limit: maxHelperErrorBytes}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	if err := cmd.Run(); err != nil {
+		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+			return "", fmt.Errorf("speech engine: %s: %w", detail, err)
+		}
+		return "", fmt.Errorf("speech engine: %w", err)
 	}
 
 	var result struct {
-		Text string `json:"text"`
+		Text *string `json:"text"`
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, maxTranscriptResponseBytes)).Decode(&result); err != nil {
-		return "", fmt.Errorf("speech-to-text server sent no transcript: %w", core.ErrProviderMalformed)
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || result.Text == nil {
+		return "", fmt.Errorf("speech engine sent no transcript: %w", core.ErrProviderMalformed)
 	}
-	return strings.Join(strings.Fields(nonSpeechMarker.ReplaceAllString(result.Text, " ")), " "), nil
+	// Whistle returns "" for silence and steady noise, so there are no non-speech markers to strip.
+	return strings.Join(strings.Fields(*result.Text), " "), nil
 }
 
-func buildTranscriptionForm(pcm []byte, model string) (io.Reader, string, error) {
-	var body bytes.Buffer
-	form := multipart.NewWriter(&body)
-	file, err := form.CreateFormFile("file", "speech.wav")
+// writeRecordingFile puts the recording where the engine can read it. It is room audio, so the
+// file is private to this user (CreateTemp's 0600) and the caller removes it once transcribed.
+func writeRecordingFile(pcm []byte) (string, error) {
+	file, err := os.CreateTemp("", "travis-speech-*.wav")
 	if err != nil {
-		return nil, "", err
+		return "", fmt.Errorf("save the recording: %w", err)
 	}
-	if err := writeWAV(file, pcm); err != nil {
-		return nil, "", err
+	writeErr := writeWAV(file, pcm)
+	if closeErr := file.Close(); writeErr == nil {
+		writeErr = closeErr
 	}
-	for name, value := range map[string]string{"model": model, "response_format": "json"} {
-		if err := form.WriteField(name, value); err != nil {
-			return nil, "", err
-		}
+	if writeErr != nil {
+		_ = os.Remove(file.Name())
+		return "", fmt.Errorf("save the recording: %w", writeErr)
 	}
-	if err := form.Close(); err != nil {
-		return nil, "", err
-	}
-	return &body, form.FormDataContentType(), nil
+	return file.Name(), nil
 }
 
-// writeWAV wraps raw PCM in the 44-byte RIFF header every transcription server accepts.
+// writeWAV wraps raw PCM in the 44-byte RIFF header the engine reads.
 func writeWAV(w io.Writer, pcm []byte) error {
 	const headerSize, formatChunkSize, pcmFormat, bitsPerSample = 36, 16, 1, BytesPerSample * 8
 	if uint64(len(pcm)) > math.MaxUint32-headerSize {

@@ -250,7 +250,7 @@ func (m setupModel) renderStep() []string {
 			choice = " off  [ on ]"
 		}
 		return []string{" Speak replies aloud?", "", "   " + choice, "",
-			dimStyle.Render(" Push-to-talk dictation also needs travis-audio and a local whisper server (docs/DEV-SETUP.md).")}
+			dimStyle.Render(" Push-to-talk dictation also needs the voice module: make install-voice (docs/DEV-SETUP.md).")}
 	case setupMCP:
 		lines := []string{" MCP servers give travis more tools.", ""}
 		servers := m.actions.ListMCPServers()

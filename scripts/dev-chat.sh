@@ -17,5 +17,6 @@ fi
 
 cd "$REPO_ROOT"
 # Not `go run`: travis only starts a broker whose hash `make build` stamped into it (R-23).
-make --no-print-directory -s build
+# `voice` puts the voice module beside it, since dev runs with voice on.
+make --no-print-directory -s build voice
 exec ./bin/travis chat -base-url "$BASE_URL" -model "$MODEL_NAME" "$@"

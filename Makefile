@@ -24,7 +24,7 @@ build: ## Build every package, then bin/travis with bin/travis-broker's hash sta
 	go build -o bin/travis$(GOEXE) -ldflags "-X main.brokerSHA256=$$( (sha256sum bin/travis-broker$(GOEXE) 2>/dev/null || shasum -a 256 bin/travis-broker$(GOEXE)) | cut -d' ' -f1)" ./cmd/travis
 
 .PHONY: chat
-chat: build ## Build, then run `travis chat` against the current directory (pass flags with ARGS="...")
+chat: build voice ## Build with the voice module, then run `travis chat` against the current directory (pass flags with ARGS="...")
 	./bin/travis$(GOEXE) chat $(ARGS)
 
 .PHONY: dev-config
@@ -33,14 +33,23 @@ dev-config: build ## Install scripts/dev-config.toml as your user config (permis
 	if [ -e "$$user_file" ]; then echo "$$user_file already exists; not overwriting (compare with scripts/dev-config.toml)"; exit 1; fi; \
 	mkdir -p "$$(dirname "$$user_file")" && install -m 600 scripts/dev-config.toml "$$user_file" && echo "wrote $$user_file"
 
-.PHONY: audio
-audio: ## Build bin/travis-audio, the optional voice-input helper; needs cgo and a C compiler (§5.10)
+# Where the Whistle speech model is kept, beside the other local models; bin/ links to it.
+MODELS_DIR ?= $(HOME)/ai
+
+.PHONY: voice
+voice: ## Build the optional voice-input module into bin/: travis-audio (needs cgo and a C compiler), the needle engine, and a link to $(MODELS_DIR)/whistle.cact
 	CGO_ENABLED=1 go build -o bin/travis-audio$(GOEXE) ./cmd/travis-audio
+	scripts/fetch-voice.sh bin "$(MODELS_DIR)"
 
 .PHONY: install
 install: ## Install travis and travis-broker to $(go env GOPATH)/bin with the hash stamped in, so `travis chat` works from any directory
 	go build -o $(GOBIN)/travis-broker$(GOEXE) ./cmd/travis-broker
 	go build -o $(GOBIN)/travis$(GOEXE) -ldflags "-X main.brokerSHA256=$$( (sha256sum $(GOBIN)/travis-broker$(GOEXE) 2>/dev/null || shasum -a 256 $(GOBIN)/travis-broker$(GOEXE)) | cut -d' ' -f1)" ./cmd/travis
+
+.PHONY: install-voice
+install-voice: voice ## Add the optional voice-input module beside the installed travis; then set [voice.input] enabled = true
+	cp bin/travis-audio$(GOEXE) bin/needle$(GOEXE) $(GOBIN)/
+	cp -P bin/whistle.cact $(GOBIN)/
 
 .PHONY: test
 test: ## Run the unit tests

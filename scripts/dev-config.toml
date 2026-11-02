@@ -22,3 +22,10 @@ host_allow = ["*"]
 command   = "npx"
 args      = ["-y", "@modelcontextprotocol/server-everything"]
 allow_net = true
+
+# Dev runs with everything on. Voice input needs the voice module: `make chat` builds it.
+[voice.input]
+enabled = true
+
+[voice.output]
+enabled = true
