@@ -251,10 +251,25 @@ point `TRAVIS_HOME` at another directory; config, state and traces all move unde
 
 Voice output needs nothing extra: set `[voice.output] enabled = true` in the user config and
 travis speaks through the OS (`say` on macOS, `espeak-ng` or `espeak` on Linux, SAPI on
-Windows). Voice input records through a separate helper, `travis-audio`, kept out of the main
-binary because it needs cgo. Build it with `make audio` (a C compiler is required: Xcode
-command line tools, `gcc`, or MinGW on Windows). To check it reaches a microphone, record two
-seconds of 16 kHz mono PCM:
+Windows).
+
+Voice input is an optional module of three files that sit beside `travis`:
+
+- `travis-audio`, the microphone helper, kept out of the main binary because it needs cgo
+- `needle`, Cactus Compute's speech engine
+- `whistle.cact`, the 16.9 MB Whistle speech-to-text model, a link to the copy kept with your
+  other local models in `~/ai` (override with `make voice MODELS_DIR=...`)
+
+`make voice` builds and fetches all three into `bin/`, checking each download against a pinned
+SHA-256; building `travis-audio` needs a C compiler (Xcode command line tools or `gcc`).
+Engines are published for Linux x86_64 and arm64 and for Apple-silicon macOS. Dev has
+everything on: `make chat` and `scripts/dev-chat.sh` build the module, and
+`scripts/dev-config.toml` turns voice input and output on. Prod is opt-in: `make install`
+leaves voice out, `make install-voice` adds the module beside the installed `travis`, and the
+user config turns it on. Speech-to-text runs on this machine, one `needle` process per
+recording, so audio from the room never leaves it (D-15).
+
+To check `travis-audio` reaches a microphone, record two seconds of 16 kHz mono PCM:
 
 ```
 bin/travis-audio capture | head -c 64000 > /tmp/two-seconds.pcm
@@ -263,16 +278,13 @@ bin/travis-audio capture | head -c 64000 > /tmp/two-seconds.pcm
 macOS asks the terminal app for microphone access the first time; a denied permission can
 record silence rather than fail, so check the file is not all zeros.
 
-Speech-to-text runs in a local whisper.cpp server, so audio from the room never leaves the
-machine (D-15). On macOS:
+To check the engine and model, transcribe any WAV (`needle` reads any RIFF WAV):
 
 ```
-brew install whisper-cpp
-curl -L -o ~/ai/ggml-base.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
-whisper-server -m ~/ai/ggml-base.en.bin --port 8178 --inference-path /v1/audio/transcriptions
+bin/needle --model bin/whistle.cact --audio clip.wav
 ```
 
-Then turn it on in the user config:
+Outside dev, turn voice input on in the user config:
 
 ```toml
 [voice.input]
@@ -293,9 +305,11 @@ CI's order: `build vet lint test-race tidy vuln`. Run it before pushing.
 | Target | What it is |
 | --- | --- |
 | `make build` | `go build ./...`, then `bin/travis` and `bin/travis-broker` with the broker's hash stamped in |
-| `make chat` | `make build`, then runs `bin/travis chat` here; pass flags with `ARGS="--model foo"` |
+| `make chat` | `make build` and `make voice`, then runs `bin/travis chat` here; pass flags with `ARGS="--model foo"` |
+| `make voice` | builds `bin/travis-audio` (needs a C compiler) and fetches the `needle` engine and the Whistle model, hash-checked; see Voice above |
 | `make dev-config` | installs `scripts/dev-config.toml` as your user config if you have none: local llama-server provider, every command allowed (each still asks), the `everything` MCP server. Dev only; release builds keep the deny-by-default config |
 | `make install` | installs `travis` and `travis-broker` to `$(go env GOPATH)/bin` with the hash stamped in, so plain `travis chat` works from any directory once that's on your PATH |
+| `make install-voice` | adds the optional voice-input module beside the installed `travis`; then set `[voice.input] enabled = true` |
 | `make test` / `make test-race` | unit tests; `-race` is what CI runs |
 | `make lint` | `golangci-lint run` at the version pinned in `.golangci-lint-version` |
 | `make fmt` | `gofmt` + `goimports` — the same formatters gopls applies on save |
