@@ -268,6 +268,7 @@ type chatModel struct {
 	width           int
 	height          int
 	paletteIndex    int
+	selection       textSelection
 	pendingApproval *core.ApprovalRequest
 	pendingQuestion *core.QuestionRequest
 	// undoPicker is open while the user chooses what /undo takes back; it takes every key.
@@ -357,6 +358,8 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleDictationFinished(msg)
 	case tea.PasteMsg:
 		return m.handlePaste(msg)
+	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
+		return m.handleMouseSelection(msg.(tea.MouseMsg))
 	case tea.MouseWheelMsg:
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -616,6 +619,7 @@ func (m chatModel) listPaletteRows() []paletteRow {
 func (m chatModel) submitPrompt() (tea.Model, tea.Cmd) {
 	prompt := strings.TrimSpace(m.input.Value())
 	m.input.Reset()
+	m.selection = textSelection{} // commands and new turns can reshape the transcript under it
 	m.paletteIndex = 0
 	m.fitViewport()
 	if prompt == "" {
@@ -674,6 +678,7 @@ func (m chatModel) finishTurn(msg turnFinishedMsg) (tea.Model, tea.Cmd) {
 
 func (m *chatModel) resize(width, height int) {
 	m.width, m.height = max(width, 1), height
+	m.selection = textSelection{} // rows reflow, so the selected cells no longer mean the same text
 	m.viewport.SetWidth(m.width)
 	m.fitViewport()
 	m.input.SetWidth(max(m.width-lipgloss.Width(m.input.Prompt)-1, 1))

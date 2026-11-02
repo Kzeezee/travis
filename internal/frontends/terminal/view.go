@@ -57,9 +57,13 @@ func (m chatModel) renderStatusBar() string {
 		outcomeStyle = warningStyle
 	case turnPending:
 	}
+	copied := ""
+	if m.selection.isActive && !m.selection.isDragging {
+		copied = dimStyle.Render(" · ") + assistantLabelStyle.Render("⧉ copied")
+	}
 	return assistantLabelStyle.Render(" ◆") + " " + lipgloss.NewStyle().Bold(true).Render(m.modelName) +
 		dimStyle.Render(" · ") + stateStyle.Render(state) +
-		dimStyle.Render(" · last turn: ") + outcomeStyle.Render(reportOutcome(m.lastTurnOutcome)) +
+		dimStyle.Render(" · last turn: ") + outcomeStyle.Render(reportOutcome(m.lastTurnOutcome)) + copied +
 		dimStyle.Render(reportSandboxStatus(m.sandboxTier)+m.reportDictationStatus())
 }
 
@@ -77,7 +81,7 @@ func (m chatModel) View() tea.View {
 		statusLine = failureBarStyle.Width(m.width).Render(ansi.Truncate(failure, m.width, ellipsis))
 	}
 	rows := m.listPaletteRows()
-	sections := []string{m.viewport.View()}
+	sections := []string{highlightSelection(m.viewport.View(), m.selection, m.viewport.YOffset())}
 	if m.undoPicker != nil {
 		sections[0] = renderUndoPicker(*m.undoPicker, m.width, m.viewport.Height())
 	}
