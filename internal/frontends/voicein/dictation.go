@@ -2,12 +2,12 @@ package voicein
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/Kzeezee/travis/internal/core"
 )
@@ -51,23 +51,47 @@ func (d *Dictation) StartDictation(ctx context.Context) (finish func() (string, 
 	}, nil
 }
 
-// ResolveHelperExecutable finds travis-audio next to the running travis, where `make audio`
-// and an install put it. Missing is ErrNotFound: voice input is an optional extra.
-func ResolveHelperExecutable() (string, error) {
+// ModuleFiles are the optional voice-input module, which `make voice` (dev) and
+// `make install-voice` put beside travis: the microphone helper, the speech engine, and its model.
+type ModuleFiles struct {
+	AudioHelper  string
+	SpeechEngine string
+	SpeechModel  string
+}
+
+// ResolveModuleFiles finds the voice-input module beside the running travis. Any part missing is
+// ErrNotFound: voice input is an optional extra.
+func ResolveModuleFiles() (ModuleFiles, error) {
 	travisExecutable, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("locate the travis binary: %w", err)
+		return ModuleFiles{}, fmt.Errorf("locate the travis binary: %w", err)
 	}
 	if travisExecutable, err = filepath.EvalSymlinks(travisExecutable); err != nil {
-		return "", fmt.Errorf("locate the travis binary: %w", err)
+		return ModuleFiles{}, fmt.Errorf("locate the travis binary: %w", err)
 	}
-	name := "travis-audio"
+	return resolveModuleFilesIn(filepath.Dir(travisExecutable))
+}
+
+func resolveModuleFilesIn(dir string) (ModuleFiles, error) {
+	executableSuffix := ""
 	if runtime.GOOS == "windows" {
-		name += ".exe"
+		executableSuffix = ".exe"
 	}
-	helper := filepath.Join(filepath.Dir(travisExecutable), name)
-	if _, err := os.Stat(helper); err != nil {
-		return "", fmt.Errorf("voice input needs %s next to travis (build it with `make audio`): %w", name, errors.Join(core.ErrNotFound, err))
+	files := ModuleFiles{
+		AudioHelper:  filepath.Join(dir, "travis-audio"+executableSuffix),
+		SpeechEngine: filepath.Join(dir, "needle"+executableSuffix),
+		SpeechModel:  filepath.Join(dir, "whistle.cact"),
 	}
-	return helper, nil
+	var missing []string
+	for _, path := range []string{files.AudioHelper, files.SpeechEngine, files.SpeechModel} {
+		// Stat follows links, so a model link whose target was deleted counts as missing.
+		if _, err := os.Stat(path); err != nil {
+			missing = append(missing, filepath.Base(path))
+		}
+	}
+	if len(missing) > 0 {
+		return ModuleFiles{}, fmt.Errorf("voice input needs %s beside travis (run `make voice`, or `make install-voice` for an installed travis): %w",
+			strings.Join(missing, ", "), core.ErrNotFound)
+	}
+	return files, nil
 }

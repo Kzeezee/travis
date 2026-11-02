@@ -5,76 +5,97 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"flag"
+	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Kzeezee/travis/internal/core"
 )
 
-type receivedForm struct {
-	path   string
-	model  string
-	wav    []byte
-	format string
-}
+const fakeEngineModeEnv = "TRAVIS_VOICEIN_FAKE_ENGINE"
 
-func startTranscriptionServer(t *testing.T, status int, reply string) (string, *receivedForm) {
-	t.Helper()
-	received := &receivedForm{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received.path = r.URL.Path
-		if err := r.ParseMultipartForm(1 << 20); err == nil {
-			received.model = r.FormValue("model")
-			received.format = r.FormValue("response_format")
-			if file, _, err := r.FormFile("file"); err == nil {
-				received.wav, _ = io.ReadAll(file)
-			}
+// TestFakeSpeechEngine is not a test: it stands in for needle in the tests below.
+func TestFakeSpeechEngine(t *testing.T) {
+	mode := os.Getenv(fakeEngineModeEnv)
+	if mode == "" {
+		t.Skip("only runs as a child process")
+	}
+	flags := map[string]string{}
+	for args := flag.Args(); len(args) >= 2; args = args[2:] {
+		flags[args[0]] = args[1]
+	}
+	switch mode {
+	case "transcribe":
+		wav, err := os.ReadFile(flags["--audio"])
+		if err != nil || !bytes.HasPrefix(wav, []byte("RIFF")) || binary.LittleEndian.Uint32(wav[24:28]) != SampleRate {
+			fmt.Fprintln(os.Stderr, "cannot read the audio (RIFF WAV)")
+			os.Exit(1)
 		}
-		w.WriteHeader(status)
-		_, _ = io.WriteString(w, reply)
-	}))
-	t.Cleanup(server.Close)
-	return server.URL + "/v1", received
+		fmt.Printf(`{"text":"  heard   %x from %s ","language":"en"}`, wav[44:], filepath.Base(flags["--model"]))
+	case "silence":
+		fmt.Print(`{"text":"","language":""}`)
+	case "garbage":
+		fmt.Print("not json")
+	case "fail":
+		fmt.Fprintln(os.Stderr, "cannot read whistle.cact")
+		os.Exit(1)
+	}
+	os.Exit(0)
 }
 
-func TestHTTPTranscriberSendsAWAVAndReturnsTheText(t *testing.T) {
-	baseURL, received := startTranscriptionServer(t, http.StatusOK, `{"text":"  hello   travis "}`)
-	pcm := []byte{1, 0, 2, 0}
+// transcribeWithFakeEngine also points the temp dir somewhere empty, so the test can see the
+// recording file was removed.
+func transcribeWithFakeEngine(t *testing.T, mode string, pcm []byte) (text, tempDir string, err error) {
+	t.Helper()
+	tempDir = t.TempDir()
+	for _, name := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(name, tempDir)
+	}
+	t.Setenv(fakeEngineModeEnv, mode)
+	engine := engineTranscriber{path: os.Args[0], args: []string{"-test.run=^TestFakeSpeechEngine$", "--"}, modelPath: filepath.Join("models", "whistle.cact")}
+	text, err = engine.Transcribe(context.Background(), pcm)
+	return text, tempDir, err
+}
 
-	text, err := BuildHTTPTranscriber(baseURL, "whisper-1", nil).Transcribe(context.Background(), pcm)
+func TestWhistleTranscriberSendsAWAVAndReturnsTheText(t *testing.T) {
+	text, tempDir, err := transcribeWithFakeEngine(t, "transcribe", []byte{1, 0, 2, 0})
 
-	if err != nil || text != "hello travis" {
+	if err != nil || text != "heard 01000200 from whistle.cact" {
 		t.Fatalf("text = %q, err = %v", text, err)
 	}
-	if received.path != "/v1/audio/transcriptions" || received.model != "whisper-1" || received.format != "json" {
-		t.Fatalf("request = %+v", received)
-	}
-	if !bytes.HasPrefix(received.wav, []byte("RIFF")) || !bytes.HasSuffix(received.wav, pcm) {
-		t.Fatalf("file is not a WAV of the recording: % x", received.wav)
-	}
-	if rate := binary.LittleEndian.Uint32(received.wav[24:28]); rate != SampleRate {
-		t.Fatalf("WAV sample rate = %d, want %d", rate, SampleRate)
+	if left, _ := os.ReadDir(tempDir); len(left) != 0 {
+		t.Fatalf("recording left behind: %v", left)
 	}
 }
 
-func TestHTTPTranscriberDropsNonSpeechMarkers(t *testing.T) {
-	baseURL, _ := startTranscriptionServer(t, http.StatusOK, `{"text":" [BLANK_AUDIO] (music) "}`)
-
-	text, err := BuildHTTPTranscriber(baseURL, "whisper-1", nil).Transcribe(context.Background(), []byte{0, 0})
+func TestWhistleTranscriberTurnsSilenceIntoNothing(t *testing.T) {
+	text, _, err := transcribeWithFakeEngine(t, "silence", []byte{0, 0})
 
 	if err != nil || text != "" {
 		t.Fatalf("text = %q, err = %v; want silence to transcribe as nothing", text, err)
 	}
 }
 
-func TestHTTPTranscriberReportsTheServersError(t *testing.T) {
-	baseURL, _ := startTranscriptionServer(t, http.StatusBadRequest, "model not loaded")
+func TestWhistleTranscriberReportsTheEnginesError(t *testing.T) {
+	_, tempDir, err := transcribeWithFakeEngine(t, "fail", []byte{0, 0})
 
-	_, err := BuildHTTPTranscriber(baseURL, "whisper-1", nil).Transcribe(context.Background(), []byte{0, 0})
+	if err == nil || !strings.Contains(err.Error(), "cannot read whistle.cact") {
+		t.Fatalf("err = %v, want the engine's own words", err)
+	}
+	if left, _ := os.ReadDir(tempDir); len(left) != 0 {
+		t.Fatalf("recording left behind after a failure: %v", left)
+	}
+}
 
-	if err == nil || !strings.Contains(err.Error(), "model not loaded") {
-		t.Fatalf("err = %v, want the server's own words", err)
+func TestWhistleTranscriberRejectsOutputWithNoTranscript(t *testing.T) {
+	_, _, err := transcribeWithFakeEngine(t, "garbage", []byte{0, 0})
+
+	if !errors.Is(err, core.ErrProviderMalformed) {
+		t.Fatalf("err = %v, want ErrProviderMalformed", err)
 	}
 }
 
@@ -108,7 +129,7 @@ func TestDictationTranscribesWhatWasRecorded(t *testing.T) {
 	}
 }
 
-func TestDictationOfNothingSkipsTheServer(t *testing.T) {
+func TestDictationOfNothingSkipsTheEngine(t *testing.T) {
 	transcriber := &recordingTranscriber{}
 	finish, _ := BuildDictation(fixedCapturer{}, transcriber).StartDictation(context.Background())
 

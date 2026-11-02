@@ -7,12 +7,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
-	"time"
 
 	"github.com/Kzeezee/travis/internal/agent/loop"
 	"github.com/Kzeezee/travis/internal/config"
@@ -43,9 +41,6 @@ const (
 	defaultMaxReadBytes = 256 << 10
 	// defaultMaxWriteBytes matches the read cap and fits inside broker.MaxWriteFileBytes.
 	defaultMaxWriteBytes = 256 << 10
-	// transcriptionTimeout bounds one dictation's trip to the speech-to-text server; a stuck
-	// server leaves the input box empty rather than the status bar saying "transcribing" forever.
-	transcriptionTimeout = 60 * time.Second
 )
 
 // Overridden at release time via: go build -ldflags "-X main.version=v0.1.0"
@@ -330,7 +325,7 @@ func startVoiceOutput(cfg config.VoiceOutputCfg, bus *core.Bus, diagnostics io.W
 	return narrator, ""
 }
 
-// buildDictation is push-to-talk when voice input is on. A missing travis-audio, or an OS with no
+// buildDictation is push-to-talk when voice input is on. A missing voice module, or an OS with no
 // capture backend, keeps the chat and turns voice input off, saying why (R-19).
 func buildDictation(cfg config.VoiceInputCfg) (func(context.Context) (func() (string, error), error), string) {
 	if !cfg.Enabled {
@@ -339,12 +334,12 @@ func buildDictation(cfg config.VoiceInputCfg) (func(context.Context) (func() (st
 	if !voicein.ReportIsCaptureSupported() {
 		return nil, "voice: this OS has no microphone support; voice input is off"
 	}
-	helper, err := voicein.ResolveHelperExecutable()
+	module, err := voicein.ResolveModuleFiles()
 	if err != nil {
 		return nil, fmt.Sprintf("voice: %v; voice input is off", err)
 	}
-	client := &http.Client{Timeout: transcriptionTimeout}
-	dictation := voicein.BuildDictation(voicein.BuildHelperCapturer(helper), voicein.BuildHTTPTranscriber(cfg.BaseURL, cfg.Model, client))
+	dictation := voicein.BuildDictation(voicein.BuildHelperCapturer(module.AudioHelper),
+		voicein.BuildWhistleTranscriber(module.SpeechEngine, module.SpeechModel))
 	return dictation.StartDictation, ""
 }
 

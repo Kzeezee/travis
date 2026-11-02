@@ -216,7 +216,7 @@ are scorecard metrics tracked per PR.
 
 ## 8. Voice
 
-- **In:** push-to-talk (hold `ctrl+space`, requires Bubble Tea v2) or VAD → whisper.
+- **In:** push-to-talk (hold `ctrl+t`, requires Bubble Tea v2) → Whistle, on this machine.
   Transcript lands **in the input box** where you can edit it. You press enter.
 - **Out:** *selective* — the model marks what to speak via structured output or
   `<speak>` tags; when a small model forgets, the reply's first sentence is spoken.

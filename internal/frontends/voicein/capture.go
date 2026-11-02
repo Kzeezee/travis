@@ -11,7 +11,7 @@ import (
 )
 
 // The PCM format travis-audio streams: signed 16-bit little-endian, mono, 16 kHz. It is what
-// whisper expects, so a transcriber can send it on without resampling.
+// Whistle expects, so a transcriber can send it on without resampling.
 const (
 	SampleRate     = 16000
 	ChannelCount   = 1
