@@ -304,6 +304,10 @@ func buildChatModel(
 ) chatModel {
 	input := textinput.New()
 	input.Prompt = " › "
+	inputStyles := input.Styles()
+	inputStyles.Focused.Prompt = assistantLabelStyle
+	inputStyles.Cursor.Color = lantern
+	input.SetStyles(inputStyles)
 	input.SetVirtualCursor(false)
 	input.Focus()
 

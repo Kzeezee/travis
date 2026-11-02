@@ -7,8 +7,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
-	glamouransi "charm.land/glamour/v2/ansi"
-	glamourstyles "charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -16,17 +14,6 @@ import (
 )
 
 const ellipsis = "…"
-
-// Colours only add emphasis; Bubble Tea downsamples them to what the terminal supports.
-var (
-	userLabelStyle      = lipgloss.NewStyle().Bold(true)
-	assistantLabelStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
-	dimStyle            = lipgloss.NewStyle().Faint(true)
-	errorStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	warningStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	failureBarStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("1"))
-	selectedRowStyle    = lipgloss.NewStyle().Reverse(true)
-)
 
 // unsandboxedTier is the tier name for an MCP server running unconfined (require_sandbox = false).
 const unsandboxedTier = "none"
@@ -44,21 +31,46 @@ func reportSandboxStatus(tier string) string {
 	case "":
 		return ""
 	case unsandboxedTier:
-		return " · ⚠ sandbox: none"
+		return " · " + warningStyle.Render("⚠ sandbox: none")
 	default:
 		return " · sandbox: " + tier
 	}
 }
 
+// renderStatusBar leads with the lantern mark and tints only the words that change: turn state and outcome.
+func (m chatModel) renderStatusBar() string {
+	state := m.reportTurnState()
+	stateStyle := dimStyle
+	switch state {
+	case "streaming":
+		stateStyle = assistantLabelStyle
+	case "interrupted":
+		stateStyle = warningStyle
+	}
+	outcomeStyle := dimStyle
+	switch m.lastTurnOutcome {
+	case turnSucceeded:
+		outcomeStyle = successStyle
+	case turnFailed:
+		outcomeStyle = errorStyle
+	case turnInterrupted:
+		outcomeStyle = warningStyle
+	case turnPending:
+	}
+	return assistantLabelStyle.Render(" ◆") + " " + lipgloss.NewStyle().Bold(true).Render(m.modelName) +
+		dimStyle.Render(" · ") + stateStyle.Render(state) +
+		dimStyle.Render(" · last turn: ") + outcomeStyle.Render(reportOutcome(m.lastTurnOutcome)) +
+		dimStyle.Render(reportSandboxStatus(m.sandboxTier)+m.reportDictationStatus())
+}
+
 func (m chatModel) View() tea.View {
-	separator := dimStyle.Render(strings.Repeat("─", m.width))
-	statusBar := fmt.Sprintf(" %s · %s · last turn: %s%s", m.modelName, m.reportTurnState(), reportOutcome(m.lastTurnOutcome), reportSandboxStatus(m.sandboxTier)) + m.reportDictationStatus()
+	separator := ruleStyle.Render(strings.Repeat("─", m.width))
 
 	inputLine := m.input.View()
 	if m.pendingApproval != nil {
 		inputLine = renderApprovalModal(*m.pendingApproval, m.width)
 	}
-	statusLine := dimStyle.Render(ansi.Truncate(statusBar, m.width, ellipsis))
+	statusLine := ansi.Truncate(m.renderStatusBar(), m.width, ellipsis)
 	if m.brokerFailure != "" {
 		// Fail closed, visibly (§5.12.5): the red bar replaces the status bar for the rest of the session.
 		failure := " security broker unreachable, every tool will fail; restart travis · " + m.brokerFailure
@@ -166,6 +178,9 @@ func renderTranscript(t transcript, width int, replies *replyRenderer) string {
 	if len(t.notices) > 0 {
 		sections = append(sections, renderNotices(t.notices, width))
 	}
+	if len(t.turns) == 0 && len(t.notices) == 0 {
+		sections = append(sections, renderWelcome(width))
+	}
 	for _, turn := range t.turns {
 		switch {
 		case !turn.isRewound:
@@ -211,6 +226,12 @@ func renderTurn(turn chatTurn, width int, replies *replyRenderer) string {
 	return strings.Join(lines, "\n")
 }
 
+// renderWelcome fills the empty transcript with the mark and the gestures nothing else on screen teaches.
+func renderWelcome(width int) string {
+	return wrapWithMargin(assistantLabelStyle.Render("◆ travis"), width) + "\n" +
+		wrapWithMargin(dimStyle.Render("  / for commands · drag to copy · wheel or PgUp/PgDn to scroll"), width)
+}
+
 func renderNotices(notices []string, width int) string {
 	lines := make([]string, 0, len(notices))
 	for _, notice := range notices {
@@ -221,15 +242,16 @@ func renderNotices(notices []string, width int) string {
 
 // renderCollapsedThought flattens reasoning onto one line; the caller truncates it to fit (DESIGN.md §5.9 show_reasoning = "collapsed").
 func renderCollapsedThought(thought string) string {
-	return dimStyle.Render("  ∴ thinking: " + strings.Join(strings.Fields(thought), " "))
+	return thoughtStyle.Render("  ∴ thinking: " + strings.Join(strings.Fields(thought), " "))
 }
 
+// renderToolCard tints the status glyph and tool name; the detail stays steel so cards never outshine replies.
 func renderToolCard(card toolCard) string {
 	switch card.status {
 	case toolRunning:
-		return dimStyle.Render("  ⚙ " + card.name + " (running…)")
+		return toolStyle.Render("  ⚙ "+card.name) + dimStyle.Render(" (running…)")
 	case toolSucceeded:
-		return dimStyle.Render("  ✓ " + cmp.Or(card.detail, card.name))
+		return successStyle.Render("  ✓ ") + dimStyle.Render(cmp.Or(card.detail, card.name))
 	case toolFailed:
 		return errorStyle.Render("  ✗ " + card.name + ": " + card.detail)
 	}
@@ -237,17 +259,6 @@ func renderToolCard(card toolCard) string {
 }
 
 const assistantLabel = "travis ›"
-
-// replyMarkdownStyle is glamour's dark style with the document margin and surrounding blank lines
-// removed, so a reply fits beside the label. It is fixed, never auto-detected, so frames are reproducible.
-var replyMarkdownStyle = func() glamouransi.StyleConfig {
-	style := glamourstyles.DarkStyleConfig
-	noMargin := uint(0)
-	style.Document.Margin = &noMargin
-	style.Document.BlockPrefix = ""
-	style.Document.BlockSuffix = ""
-	return style
-}()
 
 // ponytail: cache dropped wholesale at this size (each streamed frame adds a dead entry); LRU if re-rendering history after a drop is ever felt.
 const maxCachedReplies = 256
