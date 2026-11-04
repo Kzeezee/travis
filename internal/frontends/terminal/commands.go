@@ -159,7 +159,11 @@ func showMemory(m chatModel, _ string) (chatModel, tea.Cmd) {
 
 func showCost(m chatModel, _ string) (chatModel, tea.Cmd) {
 	usage := m.transcript.usage
-	m.transcript.addNotice(fmt.Sprintf("tokens: in %d · out %d", usage.InputTokens, usage.OutputTokens))
+	notice := fmt.Sprintf("tokens: in %d · out %d", usage.InputTokens, usage.OutputTokens)
+	if m.isPriced {
+		notice += fmt.Sprintf(" · ~$%.2f", m.transcript.costUSD)
+	}
+	m.transcript.addNotice(notice)
 	return m, nil
 }
 

@@ -44,7 +44,10 @@ type Options struct {
 	// MaxTurnCostUSD and MaxDailyCostUSD are the spending ceilings for the status bar; 0 means off.
 	MaxTurnCostUSD, MaxDailyCostUSD float64
 	// SpentTodayUSD is today's spend before this session's first turn.
-	SpentTodayUSD   float64
+	SpentTodayUSD float64
+	// IsPriced is true when the active profile has a per-token price, so the status bar and
+	// /cost may show a dollar figure even with no spending ceiling configured.
+	IsPriced        bool
 	StartupWarnings []string
 	Input           io.Reader
 	Output          io.Writer
@@ -268,6 +271,8 @@ type chatModel struct {
 	contextLength, contextTokens int
 	// maxTurnCostUSD and maxDailyCostUSD are the ceilings; turnCostUSD and spentTodayUSD are the latest turn's spend and the day's total.
 	maxTurnCostUSD, maxDailyCostUSD, turnCostUSD, spentTodayUSD float64
+	// isPriced is true when the active profile has a per-token price (terminal.Options.IsPriced).
+	isPriced bool
 	// modelNames are the /model suggestions, empty until the endpoint's listing arrives.
 	modelNames []string
 
@@ -324,7 +329,7 @@ func buildChatModel(
 
 	m := chatModel{
 		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, actions: actions, commands: buildSlashCommands(), modelName: opts.ModelName, contextLength: opts.ContextLength,
-		maxTurnCostUSD: opts.MaxTurnCostUSD, maxDailyCostUSD: opts.MaxDailyCostUSD, spentTodayUSD: opts.SpentTodayUSD,
+		maxTurnCostUSD: opts.MaxTurnCostUSD, maxDailyCostUSD: opts.MaxDailyCostUSD, spentTodayUSD: opts.SpentTodayUSD, isPriced: opts.IsPriced,
 		viewport: viewport.New(), input: input, replies: &replyRenderer{}, pushToTalkKey: opts.PushToTalkKey,
 	}
 	if m.pushToTalkKey == "" {

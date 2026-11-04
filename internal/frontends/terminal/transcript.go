@@ -16,6 +16,8 @@ type transcript struct {
 	turns   []chatTurn
 	// usage totals TurnCompleted facts across the session for /cost.
 	usage core.Usage
+	// costUSD totals TurnCompleted.CostUSD across the session for /cost and the status bar.
+	costUSD float64
 	// observedTurns counts UserMessageSubmitted facts. Streamed events belong to that turn, so a
 	// chunk that arrives after its turn finished can never land in the next one.
 	observedTurns int
@@ -95,6 +97,7 @@ func (t *transcript) applyEvent(event core.Event) {
 	if completed, isCompleted := event.(core.TurnCompleted); isCompleted {
 		t.usage.InputTokens += completed.Usage.InputTokens
 		t.usage.OutputTokens += completed.Usage.OutputTokens
+		t.costUSD += completed.CostUSD
 		if completed.Reason == core.StopBudget {
 			t.addNotice("turn stopped: it reached its step or spending limit")
 		}

@@ -102,6 +102,7 @@ func TestGoldenFrames(t *testing.T) {
 	}{
 		{"status_spend_daily_width_100", Options{MaxTurnCostUSD: 1, MaxDailyCostUSD: 5, SpentTodayUSD: 0.30}},
 		{"status_spend_turn_only_width_100", Options{MaxTurnCostUSD: 1}},
+		{"status_spend_session_width_100", Options{IsPriced: true}},
 	}
 	for _, tt := range spendCases {
 		t.Run(tt.name, func(t *testing.T) {

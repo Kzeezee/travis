@@ -184,6 +184,35 @@ func TestSlashCommandsDispatch(t *testing.T) {
 			t.Fatalf("got view\n%s\nwant the summed usage", view)
 		}
 	})
+
+	t.Run("/cost adds the session spend when the active profile is priced", func(t *testing.T) {
+		recorder := &recordingActions{}
+		m := buildChatModel(context.Background(), make(chan core.Event), nil, recorder.buildChatActions(), Options{ModelName: "test-model", IsPriced: true})
+		m, _ = updateModel(m, eventBatchMsg{events: []core.Event{
+			core.TurnCompleted{Usage: core.Usage{InputTokens: 10, OutputTokens: 3}, CostUSD: 0.10},
+			core.TurnCompleted{Usage: core.Usage{InputTokens: 5, OutputTokens: 2}, CostUSD: 0.02},
+		}})
+
+		m, _ = pressKeys(m, append(typedKeys("/cost"), enterKey)...)
+
+		if view := renderPlainView(m); !strings.Contains(view, "tokens: in 15 · out 5 · ~$0.12") {
+			t.Fatalf("got view\n%s\nwant the summed usage and spend", view)
+		}
+	})
+
+	t.Run("/cost shows no dollar figure when the active profile is unpriced", func(t *testing.T) {
+		recorder := &recordingActions{}
+		m := buildTestModel(recorder.buildChatActions())
+		m, _ = updateModel(m, eventBatchMsg{events: []core.Event{
+			core.TurnCompleted{Usage: core.Usage{InputTokens: 10, OutputTokens: 3}},
+		}})
+
+		m, _ = pressKeys(m, append(typedKeys("/cost"), enterKey)...)
+
+		if view := renderPlainView(m); strings.Contains(view, "$") {
+			t.Fatalf("got view\n%s\nwant no dollar figure", view)
+		}
+	})
 }
 
 func runTestTurn(t *testing.T, m chatModel, prompt string) chatModel {

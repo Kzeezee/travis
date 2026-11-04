@@ -258,7 +258,12 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		StartDictation: startDictation,
 	}
 	chatErr := terminal.RunChat(context.Background(), events, approvals, actions,
-		terminal.Options{ModelName: profile.Model, ContextLength: profile.ContextLength, MaxTurnCostUSD: cfg.Brain.MaxTurnCostUSD, MaxDailyCostUSD: cfg.Brain.MaxDailyCostUSD, SpentTodayUSD: spentToday, StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions, Diagnostics: diagnostics, PushToTalkKey: cfg.Voice.Input.PushToTalkKey})
+		terminal.Options{
+			ModelName: profile.Model, ContextLength: profile.ContextLength,
+			MaxTurnCostUSD: cfg.Brain.MaxTurnCostUSD, MaxDailyCostUSD: cfg.Brain.MaxDailyCostUSD, SpentTodayUSD: spentToday,
+			IsPriced:        profile.InputUSDPerMTok > 0 || profile.OutputUSDPerMTok > 0,
+			StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions, Diagnostics: diagnostics, PushToTalkKey: cfg.Voice.Input.PushToTalkKey,
+		})
 	session.close()
 	return chatErr
 }
