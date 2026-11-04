@@ -75,6 +75,8 @@ func (m chatModel) reportSpendStatus() string {
 		return fmt.Sprintf(" · $%.2f/$%.2f", m.spentTodayUSD, m.maxDailyCostUSD)
 	case m.maxTurnCostUSD > 0:
 		return fmt.Sprintf(" · $%.2f/$%.2f turn", m.turnCostUSD, m.maxTurnCostUSD)
+	case m.isPriced:
+		return fmt.Sprintf(" · ~$%.2f", m.transcript.costUSD)
 	default:
 		return ""
 	}
