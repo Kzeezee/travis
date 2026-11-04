@@ -40,7 +40,11 @@ var ErrNotInteractive = errors.New("chat needs an interactive terminal (non-inte
 type Options struct {
 	ModelName string
 	// ContextLength is the model's context window in tokens for the status bar; 0 means unknown.
-	ContextLength   int
+	ContextLength int
+	// MaxTurnCostUSD and MaxDailyCostUSD are the spending ceilings for the status bar; 0 means off.
+	MaxTurnCostUSD, MaxDailyCostUSD float64
+	// SpentTodayUSD is today's spend before this session's first turn.
+	SpentTodayUSD   float64
 	StartupWarnings []string
 	Input           io.Reader
 	Output          io.Writer
@@ -262,6 +266,8 @@ type chatModel struct {
 	modelName   string
 	// contextLength is the active model's window; contextTokens is the size of the latest provider call's input.
 	contextLength, contextTokens int
+	// maxTurnCostUSD and maxDailyCostUSD are the ceilings; turnCostUSD and spentTodayUSD are the latest turn's spend and the day's total.
+	maxTurnCostUSD, maxDailyCostUSD, turnCostUSD, spentTodayUSD float64
 	// modelNames are the /model suggestions, empty until the endpoint's listing arrives.
 	modelNames []string
 
@@ -318,6 +324,7 @@ func buildChatModel(
 
 	m := chatModel{
 		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, actions: actions, commands: buildSlashCommands(), modelName: opts.ModelName, contextLength: opts.ContextLength,
+		maxTurnCostUSD: opts.MaxTurnCostUSD, maxDailyCostUSD: opts.MaxDailyCostUSD, spentTodayUSD: opts.SpentTodayUSD,
 		viewport: viewport.New(), input: input, replies: &replyRenderer{}, pushToTalkKey: opts.PushToTalkKey,
 	}
 	if m.pushToTalkKey == "" {
@@ -375,6 +382,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if stepDone, isStepDone := event.(core.StepCompleted); isStepDone {
 				m.contextTokens = stepDone.Usage.InputTokens
+			}
+			if turnDone, isTurnDone := event.(core.TurnCompleted); isTurnDone {
+				m.turnCostUSD, m.spentTodayUSD = turnDone.CostUSD, turnDone.SpentTodayUSD
 			}
 			if started, isStarted := event.(core.MCPServerStarted); isStarted {
 				m.sandboxTier = recordSandboxTier(m.sandboxTier, started.Tier)

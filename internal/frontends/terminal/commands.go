@@ -68,6 +68,7 @@ func startNewConversation(m chatModel, _ string) (chatModel, tea.Cmd) {
 	m.transcript.resetTranscript()
 	m.lastTurnOutcome = turnPending
 	m.contextTokens = 0
+	m.turnCostUSD = 0
 	m.transcript.addNotice("new conversation")
 	return m, nil
 }

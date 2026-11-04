@@ -270,7 +270,7 @@ func TestSelectProviderSendsLaterTurnsToTheNewProviderAndModel(t *testing.T) {
 	first, second := &fakeProvider{}, &fakeProvider{}
 	assistantConversation := buildAssistantConversation(t, first, nil, &recordingSink{})
 
-	if err := assistantConversation.SelectProvider(second, "y"); err != nil {
+	if err := assistantConversation.SelectProvider(second, "y", loop.Pricing{}); err != nil {
 		t.Fatalf("SelectProvider returned %v, want nil", err)
 	}
 	if err := assistantConversation.RunAssistantTurn(context.Background(), "hi"); err != nil {

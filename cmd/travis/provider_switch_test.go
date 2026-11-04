@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Kzeezee/travis/internal/agent/loop"
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/security/redact"
@@ -27,7 +28,7 @@ type recordingConversation struct {
 	err      error
 }
 
-func (c *recordingConversation) SelectProvider(provider core.Provider, model string) error {
+func (c *recordingConversation) SelectProvider(provider core.Provider, model string, _ loop.Pricing) error {
 	if c.err != nil {
 		return c.err
 	}

@@ -81,6 +81,9 @@ type ProviderProfileCfg struct {
 	// ContextLength is the model's context window in tokens; 0 means unknown.
 	ContextLength int     `toml:"context_length"`
 	Auth          AuthCfg `toml:"auth"`
+	// Both prices unset means unpriced (a local model): no cost ceiling can be enforced on it.
+	InputUSDPerMTok  float64 `toml:"input_usd_per_mtok"`
+	OutputUSDPerMTok float64 `toml:"output_usd_per_mtok"`
 }
 
 // MCPCfg lists every local MCP server a user has defined, keyed by whatever name they
@@ -127,7 +130,9 @@ type AuthCfg struct {
 type BrainCfg struct {
 	MaxSteps       int     `toml:"max_steps"`
 	MaxTurnCostUSD float64 `toml:"max_turn_cost_usd"`
-	MaxTurnTokens  int     `toml:"max_turn_tokens"`
+	// MaxDailyCostUSD is user-config only: decodeWorkspaceLayerFile discards the workspace's value.
+	MaxDailyCostUSD float64 `toml:"max_daily_cost_usd"`
+	MaxTurnTokens   int     `toml:"max_turn_tokens"`
 }
 
 // ToolsCfg bounds what the registry exposes to the model each step (DESIGN.md 5.5).
@@ -372,6 +377,7 @@ func decodeWorkspaceLayerFile(readFile fileReader, path string, cfg *Config) (Di
 	if err := toml.Unmarshal(data, &seed); err != nil {
 		return diags, fmt.Errorf("config %s: %w", path, err)
 	}
+	seed.Brain.MaxDailyCostUSD = cfg.Brain.MaxDailyCostUSD // a cloned repo must not raise the user's daily limit
 	cfg.Profile, cfg.Brain, cfg.Tools = seed.Profile, seed.Brain, seed.Tools
 	return diags, nil
 }
@@ -492,6 +498,9 @@ func (c *Config) Validate() Diagnostics {
 		if profile.Model == "" {
 			diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("provider.profiles.%s.model is empty", name)})
 		}
+		if profile.InputUSDPerMTok < 0 || profile.OutputUSDPerMTok < 0 {
+			diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("provider.profiles.%s prices must not be negative", name)})
+		}
 		if profile.ContextLength < 0 {
 			diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("provider.profiles.%s.context_length must not be negative", name)})
 		}
@@ -499,6 +508,20 @@ func (c *Config) Validate() Diagnostics {
 
 	if c.Brain.MaxSteps <= 0 {
 		diags = append(diags, Diagnostic{Severity: SeverityError, Message: "brain.max_steps must be positive"})
+	}
+	activeProfile, hasActiveProfile := c.Provider.Profiles[c.Provider.Active]
+	isActiveProfileUnpriced := hasActiveProfile && activeProfile.InputUSDPerMTok == 0 && activeProfile.OutputUSDPerMTok == 0
+	for _, ceiling := range []struct {
+		key   string
+		limit float64
+	}{{"max_turn_cost_usd", c.Brain.MaxTurnCostUSD}, {"max_daily_cost_usd", c.Brain.MaxDailyCostUSD}} {
+		switch {
+		case ceiling.limit < 0:
+			diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("brain.%s must not be negative", ceiling.key)})
+		case ceiling.limit > 0 && isActiveProfileUnpriced:
+			// A ceiling on an unpriced model would otherwise never trigger, silently.
+			diags = append(diags, Diagnostic{Severity: SeverityWarning, Message: fmt.Sprintf("%s is set but profile %q has no price; the ceiling cannot be enforced", ceiling.key, c.Provider.Active)})
+		}
 	}
 
 	if c.Session.SnapshotMaxBytes <= 0 {

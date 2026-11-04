@@ -26,6 +26,7 @@ import (
 	"github.com/Kzeezee/travis/internal/security/policy"
 	"github.com/Kzeezee/travis/internal/security/redact"
 	"github.com/Kzeezee/travis/internal/state/memory"
+	"github.com/Kzeezee/travis/internal/state/spend"
 	"github.com/Kzeezee/travis/internal/tools/builtin"
 	"github.com/Kzeezee/travis/internal/tools/mcp"
 	"github.com/Kzeezee/travis/internal/tools/registry"
@@ -235,6 +236,10 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		current: provider,
 		active:  cfg.Provider.Active,
 	}
+	spentToday, spendErr := session.spendLedger.ReportSpentToday(context.Background())
+	if spendErr != nil {
+		startupWarnings = append(startupWarnings, "spend: today's total is unknown: "+spendErr.Error())
+	}
 	actions := terminal.ChatActions{
 		RunTurn:               session.conversation.RunAssistantTurn,
 		ResetHistory:          session.conversation.ResetHistory,
@@ -253,7 +258,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		StartDictation: startDictation,
 	}
 	chatErr := terminal.RunChat(context.Background(), events, approvals, actions,
-		terminal.Options{ModelName: profile.Model, ContextLength: profile.ContextLength, StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions, Diagnostics: diagnostics, PushToTalkKey: cfg.Voice.Input.PushToTalkKey})
+		terminal.Options{ModelName: profile.Model, ContextLength: profile.ContextLength, MaxTurnCostUSD: cfg.Brain.MaxTurnCostUSD, MaxDailyCostUSD: cfg.Brain.MaxDailyCostUSD, SpentTodayUSD: spentToday, StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions, Diagnostics: diagnostics, PushToTalkKey: cfg.Voice.Input.PushToTalkKey})
 	session.close()
 	return chatErr
 }
@@ -277,6 +282,7 @@ type chatSession struct {
 	toolRegistry  *registry.Registry
 	skillsCatalog *skills.Catalog
 	memoryStore   core.MemoryStore
+	spendLedger   *spend.Ledger
 	waitForTrace  func()
 }
 
@@ -481,7 +487,16 @@ func assembleChatSession(deps chatSessionDeps) (*chatSession, error) {
 	mcpManager := mcp.BuildManager(cfg.MCP, deps.MCPPolicy, deps.Approver, clock, redactedEvents, deps.Diagnostics, toolRegistry, paths.StateDir, deps.MCPSandboxing)
 
 	ids := id.BuildULIDGenerator(clock)
-	loopDeps := loop.Dependencies{Provider: deps.Provider, Tools: toolRegistry, Events: redactedEvents, Clock: clock, IDs: ids, Skills: skillsCatalog, IsSpeechEnabled: deps.IsSpeechEnabled}
+	activeProfile := cfg.Provider.Profiles[cfg.Provider.Active]
+	spendLedger := spend.BuildLedger(filepath.Join(paths.StateDir, "spend"), clock)
+	loopDeps := loop.Dependencies{
+		Provider: deps.Provider, Tools: toolRegistry, Events: redactedEvents, Clock: clock, IDs: ids, Skills: skillsCatalog, IsSpeechEnabled: deps.IsSpeechEnabled,
+		Spend: spendLedger,
+		Budget: loop.Budget{
+			MaxTurnUSD: cfg.Brain.MaxTurnCostUSD, MaxDailyUSD: cfg.Brain.MaxDailyCostUSD,
+			Pricing: loop.Pricing{InputUSDPerMTok: activeProfile.InputUSDPerMTok, OutputUSDPerMTok: activeProfile.OutputUSDPerMTok},
+		},
+	}
 	if deps.Log != nil {
 		loopDeps.Log = redact.WrapSessionLog(deps.Log, deps.Redactor)
 	}
@@ -494,6 +509,7 @@ func assembleChatSession(deps chatSessionDeps) (*chatSession, error) {
 		toolRegistry:  toolRegistry,
 		skillsCatalog: skillsCatalog,
 		memoryStore:   deps.Memory,
+		spendLedger:   spendLedger,
 		waitForTrace:  func() {},
 	}
 	if cfg.Eval.Traces {

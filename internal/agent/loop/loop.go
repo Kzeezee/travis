@@ -37,6 +37,9 @@ type Dependencies struct {
 	Clock    core.Clock
 	IDs      core.IDGenerator
 	Skills   SkillsIndex
+	Budget   Budget
+	// Spend is nil when nothing tracks the day's spend, which leaves MaxDailyUSD unenforced.
+	Spend SpendLedger
 	// IsSpeechEnabled asks the model to mark what to say aloud and publishes each marked span
 	// as SpeechRequested. Off, <speak> is ordinary text, so a reply about the tag itself survives.
 	IsSpeechEnabled bool
@@ -68,6 +71,8 @@ type AssistantConversation struct {
 	clock    core.Clock
 	ids      core.IDGenerator
 	skills   SkillsIndex
+	budget   Budget
+	spend    SpendLedger
 	model    string
 
 	isSpeechEnabled bool
@@ -80,6 +85,9 @@ type AssistantConversation struct {
 	entries []core.SessionEntry
 	// turnID is minted when a turn starts and stamped on every event it publishes.
 	turnID core.ID
+	// turnCostUSD is this turn's spend so far; spentTodayUSD is the last day total the ledger reported.
+	turnCostUSD   float64
+	spentTodayUSD float64
 	// isNextStepUntrusted carries untrusted intake into the next turn's first step when the turn
 	// ended (budget, error) before any step could follow it (§5.12.4).
 	isNextStepUntrusted bool
@@ -96,6 +104,8 @@ func BuildAssistantConversation(deps Dependencies, model string, maxSteps int) *
 		clock:    deps.Clock,
 		ids:      deps.IDs,
 		skills:   deps.Skills,
+		budget:   deps.Budget,
+		spend:    deps.Spend,
 		model:    model,
 		maxSteps: maxSteps,
 
@@ -120,6 +130,7 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 	defer c.busy.Unlock()
 	c.turnID = c.ids.GenerateID()
 	c.hasSpokenThisTurn = false
+	c.turnCostUSD = 0
 	userMessage := core.Message{Role: core.RoleUser, Parts: []core.Part{core.TextPart{Text: prompt}}}
 	c.events.Publish(ctx, core.UserMessageSubmitted{EventHeader: c.buildEventHeader(), Message: userMessage})
 	if err := c.recordMessage(ctx, userMessage); err != nil {
@@ -130,6 +141,16 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 	var usage core.Usage
 	hasUntrustedIntake := c.isNextStepUntrusted
 	for step := 0; step < c.maxSteps; step++ {
+		if c.isBudgetExhausted(ctx) {
+			if step == 0 {
+				if err := c.recordMessage(ctx, buildSpendingLimitMessage()); err != nil {
+					c.completeTurn(ctx, core.StopError, usage)
+					return err
+				}
+			}
+			c.completeTurn(ctx, core.StopBudget, usage)
+			return nil
+		}
 		stepContext := ctx
 		if hasUntrustedIntake {
 			stepContext = core.MarkUntrustedStep(ctx)
@@ -143,6 +164,7 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 		usage.InputTokens += reply.usage.InputTokens
 		usage.OutputTokens += reply.usage.OutputTokens
 		c.events.Publish(ctx, core.StepCompleted{EventHeader: c.buildEventHeader(), Usage: reply.usage})
+		c.chargeStep(ctx, reply.usage)
 
 		if err := c.recordMessage(ctx, buildAssistantMessage(reply)); err != nil {
 			c.completeTurn(ctx, core.StopError, usage)
@@ -225,14 +247,14 @@ func (c *AssistantConversation) SelectModel(name string) {
 	c.model = name
 }
 
-// SelectProvider sends every later turn to provider and model. Unlike SelectModel it can be
+// SelectProvider sends every later turn to provider and model, priced as pricing says. Unlike SelectModel it can be
 // reached from a background command, so it refuses rather than race a running turn.
-func (c *AssistantConversation) SelectProvider(provider core.Provider, model string) error {
+func (c *AssistantConversation) SelectProvider(provider core.Provider, model string, pricing Pricing) error {
 	if !c.busy.TryLock() {
 		return fmt.Errorf("a turn is running; switch provider once it ends: %w", core.ErrInvalid)
 	}
 	defer c.busy.Unlock()
-	c.provider, c.model = provider, model
+	c.provider, c.model, c.budget.Pricing = provider, model, pricing
 	return nil
 }
 
@@ -450,7 +472,11 @@ func (c *AssistantConversation) appendToLog(ctx context.Context, entry core.Sess
 }
 
 func (c *AssistantConversation) completeTurn(ctx context.Context, reason core.StopReason, usage core.Usage) {
-	c.events.Publish(ctx, core.TurnCompleted{EventHeader: c.buildEventHeader(), Reason: reason, Usage: usage})
+	_ = c.refreshSpentToday(ctx) // on failure the last known total is reported
+	c.events.Publish(ctx, core.TurnCompleted{
+		EventHeader: c.buildEventHeader(), Reason: reason, Usage: usage,
+		CostUSD: c.turnCostUSD, SpentTodayUSD: c.spentTodayUSD,
+	})
 }
 
 func (c *AssistantConversation) buildEventHeader() core.EventHeader {
