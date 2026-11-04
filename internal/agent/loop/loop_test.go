@@ -190,8 +190,12 @@ func TestRunStreamsTextAndCompletesTheTurn(t *testing.T) {
 		core.EventUserMessageSubmitted,
 		core.EventAssistantTextStreamed,
 		core.EventAssistantTextStreamed,
+		core.EventStepCompleted,
 		core.EventTurnCompleted,
 	})
+	if step, _ := sink.events[3].(core.StepCompleted); step.Usage != (core.Usage{InputTokens: 7, OutputTokens: 2}) {
+		t.Fatalf("got step usage %+v, want the provider's reported usage", step.Usage)
+	}
 	completed := assertTurnCompleted(t, sink, core.StopEndTurn)
 	if completed.Usage.OutputTokens != 2 {
 		t.Fatalf("got output tokens %d, want 2", completed.Usage.OutputTokens)
@@ -417,12 +421,14 @@ func TestRunDispatchesAToolCallAndSendsTheResultBack(t *testing.T) {
 
 	assertEventTypes(t, sink, []core.EventType{
 		core.EventUserMessageSubmitted,
+		core.EventStepCompleted,
 		core.EventToolCallStarted,
 		core.EventToolCallFinished,
 		core.EventAssistantTextStreamed,
+		core.EventStepCompleted,
 		core.EventTurnCompleted,
 	})
-	finished, _ := sink.events[2].(core.ToolCallFinished)
+	finished, _ := sink.events[3].(core.ToolCallFinished)
 	if finished.Display != "echoed pong" {
 		t.Fatalf("got display %q, want the tool's display text", finished.Display)
 	}
@@ -685,6 +691,8 @@ func reportEventHeader(t *testing.T, event core.Event) core.EventHeader {
 	case core.ToolCallStarted:
 		return fact.EventHeader
 	case core.ToolCallFinished:
+		return fact.EventHeader
+	case core.StepCompleted:
 		return fact.EventHeader
 	case core.TurnCompleted:
 		return fact.EventHeader

@@ -11,6 +11,8 @@ import (
 // terminal never imports config or provider packages to render it.
 type ProviderSwitch struct {
 	Model string
+	// ContextLength is the model's context window in tokens; 0 means unknown.
+	ContextLength int
 	// IsKeyNeeded means nothing switched: the profile needs a key the user has not given yet.
 	IsKeyNeeded bool
 	// Warning is something the user should know although the switch succeeded.
@@ -105,6 +107,7 @@ func (m chatModel) finishProviderSwitch(msg providerSwitchedMsg) (tea.Model, tea
 		m, cmd = m.muteDictationForModal()
 	default:
 		m.modelName = msg.result.Model
+		m.contextLength = msg.result.ContextLength
 		m.modelNames = nil
 		m.transcript.addNotice("provider → " + msg.profile + " (" + msg.result.Model + ")")
 		if msg.result.Warning != "" {

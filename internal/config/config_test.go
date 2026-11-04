@@ -350,6 +350,41 @@ func TestValidateRejectsActiveProfileWithNoDefinition(t *testing.T) {
 	}
 }
 
+func TestLoadReadsProfileContextLength(t *testing.T) {
+	pathSet := testPathSet()
+	files := map[string]string{
+		testUserConfigFile(pathSet): `
+[provider]
+active = "local"
+[provider.profiles.local]
+base_url       = "http://localhost:11434/v1"
+model          = "qwen3:14b"
+context_length = 32768
+`,
+	}
+
+	cfg, diags, err := load(buildFileReaderFromMap(files), pathSet, nil, buildEnvLookupFromMap(nil))
+	if err != nil {
+		t.Fatalf("load() error = %v, diags = %v", err, diags)
+	}
+	if got := cfg.Provider.Profiles["local"].ContextLength; got != 32768 {
+		t.Fatalf("ContextLength = %d, want 32768", got)
+	}
+}
+
+func TestValidateRejectsNegativeContextLength(t *testing.T) {
+	cfg := Config{
+		Provider: ProviderCfg{Active: "a", Profiles: map[string]ProviderProfileCfg{"a": {BaseURL: "u", Model: "m", ContextLength: -1}}},
+		Brain:    BrainCfg{MaxSteps: 1},
+		Tools:    ToolsCfg{ApprovalDefault: "ask", MaxExposed: 1},
+		Session:  SessionCfg{SnapshotMaxBytes: 1},
+	}
+
+	if diags := cfg.Validate(); !diags.HasErrors() {
+		t.Fatalf("Validate() = %v, want an error for a negative context_length", diags)
+	}
+}
+
 func TestValidateRejectsNonPositiveLimits(t *testing.T) {
 	tests := []struct {
 		name string

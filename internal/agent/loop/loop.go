@@ -142,6 +142,7 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 		}
 		usage.InputTokens += reply.usage.InputTokens
 		usage.OutputTokens += reply.usage.OutputTokens
+		c.events.Publish(ctx, core.StepCompleted{EventHeader: c.buildEventHeader(), Usage: reply.usage})
 
 		if err := c.recordMessage(ctx, buildAssistantMessage(reply)); err != nil {
 			c.completeTurn(ctx, core.StopError, usage)

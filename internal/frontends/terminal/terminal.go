@@ -38,7 +38,9 @@ var ErrNotInteractive = errors.New("chat needs an interactive terminal (non-inte
 
 // Options carries the runtime choices for one chat session.
 type Options struct {
-	ModelName       string
+	ModelName string
+	// ContextLength is the model's context window in tokens for the status bar; 0 means unknown.
+	ContextLength   int
 	StartupWarnings []string
 	Input           io.Reader
 	Output          io.Writer
@@ -258,6 +260,8 @@ type chatModel struct {
 	actions     ChatActions
 	commands    []slashCommand
 	modelName   string
+	// contextLength is the active model's window; contextTokens is the size of the latest provider call's input.
+	contextLength, contextTokens int
 	// modelNames are the /model suggestions, empty until the endpoint's listing arrives.
 	modelNames []string
 
@@ -313,7 +317,7 @@ func buildChatModel(
 	input.Focus()
 
 	m := chatModel{
-		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, actions: actions, commands: buildSlashCommands(), modelName: opts.ModelName,
+		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, actions: actions, commands: buildSlashCommands(), modelName: opts.ModelName, contextLength: opts.ContextLength,
 		viewport: viewport.New(), input: input, replies: &replyRenderer{}, pushToTalkKey: opts.PushToTalkKey,
 	}
 	if m.pushToTalkKey == "" {
@@ -368,6 +372,9 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, event := range msg.events {
 			if unavailable, isUnavailable := event.(core.BrokerUnavailable); isUnavailable {
 				m.brokerFailure = unavailable.Reason
+			}
+			if stepDone, isStepDone := event.(core.StepCompleted); isStepDone {
+				m.contextTokens = stepDone.Usage.InputTokens
 			}
 			if started, isStarted := event.(core.MCPServerStarted); isStarted {
 				m.sandboxTier = recordSandboxTier(m.sandboxTier, started.Tier)
