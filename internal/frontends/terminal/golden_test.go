@@ -71,6 +71,31 @@ func TestGoldenFrames(t *testing.T) {
 		})
 	}
 
+	statusCases := []struct {
+		name          string
+		width         int
+		contextLength int
+		inputTokens   int
+	}{
+		{"status_low_fill_width_100", 100, 32768, 3200},
+		{"status_high_fill_width_100", 100, 32768, 31000},
+		{"status_narrow_width_80", 80, 32768, 24100},
+		{"status_no_limit_width_100", 100, 0, 24100},
+	}
+	for _, tt := range statusCases {
+		t.Run(tt.name, func(t *testing.T) {
+			m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "gpt-4o-mini", ContextLength: tt.contextLength})
+			m.resize(tt.width, 8)
+			m, _ = updateModel(m, eventBatchMsg{events: []core.Event{
+				core.UserMessageSubmitted{},
+				core.AssistantTextStreamed{Text: "Done."},
+				core.StepCompleted{Usage: core.Usage{InputTokens: tt.inputTokens, OutputTokens: 450}},
+				core.TurnCompleted{Reason: core.StopEndTurn, Usage: core.Usage{InputTokens: 12300, OutputTokens: 4500}},
+			}})
+			teatest.RequireEqualOutput(t, []byte(renderPlainView(m)))
+		})
+	}
+
 	t.Run("palette_width_80", func(t *testing.T) {
 		m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "gpt-4o-mini"})
 		m.resize(80, 16)

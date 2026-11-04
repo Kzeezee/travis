@@ -291,6 +291,24 @@ func buildTestModel(actions ChatActions) chatModel {
 	return buildChatModel(context.Background(), make(chan core.Event), nil, actions, Options{ModelName: "test-model"})
 }
 
+func TestContextFillFollowsTheLatestStepNotTheSum(t *testing.T) {
+	m := buildTestModel(ChatActions{ResetHistory: func() {}})
+	m.resize(120, 8)
+	m, _ = updateModel(m, eventBatchMsg{events: []core.Event{
+		core.StepCompleted{Usage: core.Usage{InputTokens: 1000}},
+		core.StepCompleted{Usage: core.Usage{InputTokens: 1500}},
+	}})
+
+	if status := ansi.Strip(m.renderStatusBar()); !strings.Contains(status, "ctx 1.5k") {
+		t.Fatalf("got status %q, want the context fill at the latest step's 1.5k, not 2.5k", status)
+	}
+
+	m, _ = pressKeys(m, append(typedKeys("/new"), enterKey)...)
+	if status := ansi.Strip(m.renderStatusBar()); strings.Contains(status, "ctx") {
+		t.Fatalf("got status %q, want no context segment after /new", status)
+	}
+}
+
 func updateModel(m chatModel, msg tea.Msg) (chatModel, tea.Cmd) {
 	next, cmd := m.Update(msg)
 	return next.(chatModel), cmd

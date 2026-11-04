@@ -61,10 +61,45 @@ func (m chatModel) renderStatusBar() string {
 	if m.selection.isActive && !m.selection.isDragging {
 		copied = dimStyle.Render(" · ") + assistantLabelStyle.Render("⧉ copied")
 	}
-	return assistantLabelStyle.Render(" ◆") + " " + lipgloss.NewStyle().Bold(true).Render(m.modelName) +
+	status := assistantLabelStyle.Render(" ◆") + " " + lipgloss.NewStyle().Bold(true).Render(m.modelName) +
 		dimStyle.Render(" · ") + stateStyle.Render(state) +
 		dimStyle.Render(" · last turn: ") + outcomeStyle.Render(reportOutcome(m.lastTurnOutcome)) + copied +
 		dimStyle.Render(reportSandboxStatus(m.sandboxTier)+m.reportDictationStatus())
+	return status + dimStyle.Render(m.reportTokenUsage(ansi.StringWidth(status)))
+}
+
+const contextBarCells = 10
+
+// reportTokenUsage is the context-fill and session-total segment; the bar is the first thing
+// dropped when it would not fit beside the rest of the status bar, which is usedWidth wide.
+func (m chatModel) reportTokenUsage(usedWidth int) string {
+	if m.contextTokens == 0 {
+		return ""
+	}
+	fill := formatTokenCount(m.contextTokens)
+	if m.contextLength > 0 {
+		fill += "/" + formatTokenCount(m.contextLength)
+	}
+	session := fmt.Sprintf(" · ↑%s ↓%s", formatTokenCount(m.transcript.usage.InputTokens), formatTokenCount(m.transcript.usage.OutputTokens))
+	compact := " · ctx " + fill + session
+	if m.contextLength <= 0 {
+		return compact
+	}
+	filledCells := min(contextBarCells, (m.contextTokens*contextBarCells+m.contextLength/2)/m.contextLength)
+	bar := strings.Repeat("█", filledCells) + strings.Repeat("░", contextBarCells-filledCells)
+	withBar := " · ctx " + bar + " " + fill + session
+	if usedWidth+ansi.StringWidth(withBar) > m.width {
+		return compact
+	}
+	return withBar
+}
+
+// formatTokenCount abbreviates thousands to one decimal, dropping a trailing ".0": 24100 is "24.1k", 32000 is "32k".
+func formatTokenCount(tokens int) string {
+	if tokens < 1000 {
+		return fmt.Sprint(tokens)
+	}
+	return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(tokens)/1000), ".0") + "k"
 }
 
 func (m chatModel) View() tea.View {

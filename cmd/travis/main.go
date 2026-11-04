@@ -253,7 +253,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		StartDictation: startDictation,
 	}
 	chatErr := terminal.RunChat(context.Background(), events, approvals, actions,
-		terminal.Options{ModelName: profile.Model, StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions, Diagnostics: diagnostics, PushToTalkKey: cfg.Voice.Input.PushToTalkKey})
+		terminal.Options{ModelName: profile.Model, ContextLength: profile.ContextLength, StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions, Diagnostics: diagnostics, PushToTalkKey: cfg.Voice.Input.PushToTalkKey})
 	session.close()
 	return chatErr
 }

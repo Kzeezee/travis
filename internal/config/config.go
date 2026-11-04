@@ -74,11 +74,13 @@ type ProviderCfg struct {
 }
 
 type ProviderProfileCfg struct {
-	Kind      string  `toml:"kind"`
-	BaseURL   string  `toml:"base_url"`
-	Model     string  `toml:"model"`
-	MaxTokens int     `toml:"max_tokens"`
-	Auth      AuthCfg `toml:"auth"`
+	Kind      string `toml:"kind"`
+	BaseURL   string `toml:"base_url"`
+	Model     string `toml:"model"`
+	MaxTokens int    `toml:"max_tokens"`
+	// ContextLength is the model's context window in tokens; 0 means unknown.
+	ContextLength int     `toml:"context_length"`
+	Auth          AuthCfg `toml:"auth"`
 }
 
 // MCPCfg lists every local MCP server a user has defined, keyed by whatever name they
@@ -489,6 +491,9 @@ func (c *Config) Validate() Diagnostics {
 		}
 		if profile.Model == "" {
 			diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("provider.profiles.%s.model is empty", name)})
+		}
+		if profile.ContextLength < 0 {
+			diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("provider.profiles.%s.context_length must not be negative", name)})
 		}
 	}
 

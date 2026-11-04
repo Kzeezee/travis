@@ -84,7 +84,7 @@ func (s *providerSwitcher) activate(profile string, settings config.ProviderProf
 	s.mu.Lock()
 	s.current, s.active = provider, profile
 	s.mu.Unlock()
-	result := terminal.ProviderSwitch{Model: settings.Model}
+	result := terminal.ProviderSwitch{Model: settings.Model, ContextLength: settings.ContextLength}
 	if err := s.recordChoice(profile); err != nil {
 		result.Warning = "next chat starts on the old provider: " + err.Error()
 	}

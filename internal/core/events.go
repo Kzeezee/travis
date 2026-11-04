@@ -14,6 +14,7 @@ const (
 	EventThoughtStreamed       EventType = "thought.streamed"
 	EventToolCallStarted       EventType = "tool_call.started"
 	EventToolCallFinished      EventType = "tool_call.finished"
+	EventStepCompleted         EventType = "step.completed"
 	EventTurnCompleted         EventType = "turn.completed"
 	EventPolicyDenied          EventType = "policy.denied"
 	EventBrokerUnavailable     EventType = "broker.unavailable"
@@ -92,6 +93,17 @@ type ToolCallFinished struct {
 
 func (ToolCallFinished) ReportEventType() EventType {
 	return EventToolCallFinished
+}
+
+// StepCompleted records the token usage of one provider call; Usage.InputTokens is the
+// size of the conversation that call was sent.
+type StepCompleted struct {
+	EventHeader
+	Usage Usage `json:"usage"`
+}
+
+func (StepCompleted) ReportEventType() EventType {
+	return EventStepCompleted
 }
 
 // TurnCompleted records why an assistant turn stopped.
