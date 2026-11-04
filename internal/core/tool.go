@@ -85,4 +85,6 @@ type ToolResult struct {
 	Name    string `json:"name"`
 	Content string `json:"content,omitempty"`
 	IsError bool   `json:"is_error,omitempty"`
+	// IsUntrusted marks content from outside the trust boundary; compaction drops it (D-26).
+	IsUntrusted bool `json:"is_untrusted,omitempty"`
 }

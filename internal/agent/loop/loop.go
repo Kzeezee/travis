@@ -8,11 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/Kzeezee/travis/internal/core"
-	"github.com/Kzeezee/travis/internal/state/session"
 )
 
 // ToolLookup is the loop's view of the registry: what to offer the model this step,
@@ -38,6 +38,8 @@ type Dependencies struct {
 	IDs      core.IDGenerator
 	Skills   SkillsIndex
 	Budget   Budget
+	// ContextLength is the model's window in tokens; 0 means unknown, which turns compaction off.
+	ContextLength int
 	// Spend is nil when nothing tracks the day's spend, which leaves MaxDailyUSD unenforced.
 	Spend SpendLedger
 	// IsSpeechEnabled asks the model to mark what to say aloud and publishes each marked span
@@ -75,6 +77,13 @@ type AssistantConversation struct {
 	spend    SpendLedger
 	model    string
 
+	contextLength     int
+	compactAtFraction float64
+	// summary stands in for the entries before compactedUntil, and preserved is what compaction kept verbatim.
+	summary        string
+	preserved      []string
+	compactedUntil int
+
 	isSpeechEnabled bool
 	// hasSpokenThisTurn records whether the model marked any speech, so a silent reply gets a fallback.
 	hasSpokenThisTurn bool
@@ -108,6 +117,9 @@ func BuildAssistantConversation(deps Dependencies, model string, maxSteps int) *
 		spend:    deps.Spend,
 		model:    model,
 		maxSteps: maxSteps,
+
+		contextLength:     deps.ContextLength,
+		compactAtFraction: initialCompactAtFraction,
 
 		isSpeechEnabled: deps.IsSpeechEnabled,
 	}
@@ -218,6 +230,7 @@ func (c *AssistantConversation) Rewind(ctx context.Context, fromTurn core.ID, mo
 		return core.RewindReport{}, err
 	}
 
+	firstEntry := slices.IndexFunc(c.entries, func(e core.SessionEntry) bool { return e.Turn == fromTurn })
 	header := core.EventHeader{ID: c.ids.GenerateID(), At: c.clock.ReportCurrentTime()}
 	if mode.IsRevertingFiles() {
 		record := core.RewindRecord{FromTurn: fromTurn, Mode: mode, Files: report.Files}
@@ -227,6 +240,9 @@ func (c *AssistantConversation) Rewind(ctx context.Context, fromTurn core.ID, mo
 	if mode.IsRewindingConversation() {
 		record := core.RewindRecord{FromTurn: fromTurn, Mode: mode}
 		c.entries = append(c.entries, core.SessionEntry{Kind: core.EntryRewound, Rewind: &record})
+		if firstEntry < c.compactedUntil { // also true when not found: the turn is unknown, so the summary is stale
+			c.discardSummary()
+		}
 		header.ID = c.ids.GenerateID()
 		c.events.Publish(ctx, core.ConversationRewound{EventHeader: header, FromTurn: fromTurn, Mode: mode})
 	}
@@ -239,6 +255,7 @@ func (c *AssistantConversation) Rewind(ctx context.Context, fromTurn core.ID, mo
 // The session log keeps them; only this conversation's copy is dropped.
 func (c *AssistantConversation) ResetHistory() {
 	c.entries = nil
+	c.discardSummary()
 	c.isNextStepUntrusted = false
 }
 
@@ -247,14 +264,16 @@ func (c *AssistantConversation) SelectModel(name string) {
 	c.model = name
 }
 
-// SelectProvider sends every later turn to provider and model, priced as pricing says. Unlike SelectModel it can be
-// reached from a background command, so it refuses rather than race a running turn.
-func (c *AssistantConversation) SelectProvider(provider core.Provider, model string, pricing Pricing) error {
+// SelectProvider sends every later turn to provider and model, priced as pricing says and compacted to fit
+// contextLength. Unlike SelectModel it can be reached from a background command, so it refuses rather than
+// race a running turn.
+func (c *AssistantConversation) SelectProvider(provider core.Provider, model string, pricing Pricing, contextLength int) error {
 	if !c.busy.TryLock() {
 		return fmt.Errorf("a turn is running; switch provider once it ends: %w", core.ErrInvalid)
 	}
 	defer c.busy.Unlock()
-	c.provider, c.model, c.budget.Pricing = provider, model, pricing
+	c.provider, c.model, c.budget.Pricing, c.contextLength = provider, model, pricing, contextLength
+	c.compactAtFraction = initialCompactAtFraction // a lowered threshold was learned from the old model
 	return nil
 }
 
@@ -269,12 +288,27 @@ func (c *AssistantConversation) runStep(ctx context.Context, hint string) (stepR
 		}
 	}
 	tools := c.buildToolSpecs(ctx, hint)
-	request := core.ProviderRequest{
-		Model:    c.model,
-		System:   buildSystemPrompt(c.clock.ReportCurrentTime(), sections, c.isSpeechEnabled),
-		Messages: session.BuildHistory(c.entries),
-		Tools:    tools,
+	system := buildSystemPrompt(c.clock.ReportCurrentTime(), sections, c.isSpeechEnabled)
+	request := c.buildRequest(system, tools)
+	if c.shouldCompact(request) && c.compactHistory(ctx) {
+		request = c.buildRequest(system, tools)
 	}
+	reply, err := c.exchangeRequest(ctx, request)
+	if errors.Is(err, core.ErrContextLength) && c.contextLength > 0 {
+		c.lowerCompactionThreshold(request)
+		if c.compactHistory(ctx) {
+			return c.exchangeRequest(ctx, c.buildRequest(system, tools))
+		}
+	}
+	return reply, err
+}
+
+func (c *AssistantConversation) buildRequest(system string, tools []core.ToolSpec) core.ProviderRequest {
+	return core.ProviderRequest{Model: c.model, System: system, Messages: c.buildHistory(), Tools: tools}
+}
+
+// exchangeRequest makes one provider call and reads its stream to the end.
+func (c *AssistantConversation) exchangeRequest(ctx context.Context, request core.ProviderRequest) (stepReply, error) {
 	stream, err := c.provider.Chat(ctx, request)
 	if err != nil {
 		return stepReply{}, err
@@ -395,7 +429,7 @@ func (c *AssistantConversation) runToolCalls(ctx context.Context, calls []core.T
 		if err != nil {
 			output = core.ToolOutput{Content: toolAbortedResult, Display: err.Error(), IsError: true}
 		}
-		result := core.ToolResult{CallID: call.ID, Name: call.Name, Content: output.Content, IsError: output.IsError}
+		result := core.ToolResult{CallID: call.ID, Name: call.Name, Content: output.Content, IsError: output.IsError, IsUntrusted: output.IsUntrusted}
 		c.events.Publish(ctx, core.ToolCallFinished{EventHeader: c.buildEventHeader(), Result: result, Display: output.Display})
 		parts = append(parts, core.ToolResultPart{ToolResult: result})
 

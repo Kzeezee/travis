@@ -184,7 +184,7 @@ func TestSelectProviderPricesLaterTurns(t *testing.T) {
 	sink := &recordingSink{}
 	conversation := buildBudgetedConversation(&fakeProvider{}, sink, &fakeLedger{}, loop.Budget{MaxTurnUSD: 5})
 
-	if err := conversation.SelectProvider(cheap, "priced", onePerThousandInputTokens); err != nil {
+	if err := conversation.SelectProvider(cheap, "priced", onePerThousandInputTokens, 0); err != nil {
 		t.Fatalf("SelectProvider returned %v, want nil", err)
 	}
 	if err := conversation.RunAssistantTurn(context.Background(), "go"); err != nil {

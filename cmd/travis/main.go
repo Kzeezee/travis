@@ -491,7 +491,7 @@ func assembleChatSession(deps chatSessionDeps) (*chatSession, error) {
 	spendLedger := spend.BuildLedger(filepath.Join(paths.StateDir, "spend"), clock)
 	loopDeps := loop.Dependencies{
 		Provider: deps.Provider, Tools: toolRegistry, Events: redactedEvents, Clock: clock, IDs: ids, Skills: skillsCatalog, IsSpeechEnabled: deps.IsSpeechEnabled,
-		Spend: spendLedger,
+		Spend: spendLedger, ContextLength: activeProfile.ContextLength,
 		Budget: loop.Budget{
 			MaxTurnUSD: cfg.Brain.MaxTurnCostUSD, MaxDailyUSD: cfg.Brain.MaxDailyCostUSD,
 			Pricing: loop.Pricing{InputUSDPerMTok: activeProfile.InputUSDPerMTok, OutputUSDPerMTok: activeProfile.OutputUSDPerMTok},
