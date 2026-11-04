@@ -302,6 +302,77 @@ func TestRunReportsAFailureMidStream(t *testing.T) {
 	assertTurnCompleted(t, sink, core.StopError)
 }
 
+func assertStubFollowsUser(t *testing.T, messages []core.Message, wantText string) {
+	t.Helper()
+	if len(messages) != 3 || messages[0].Role != core.RoleUser || messages[1].Role != core.RoleAssistant || messages[2].Role != core.RoleUser {
+		t.Fatalf("got %+v, want user, assistant stub, user", messages)
+	}
+	if stub, ok := messages[1].Parts[0].(core.TextPart); !ok || stub.Text != wantText {
+		t.Fatalf("got stub %v, want %q", messages[1].Parts[0], wantText)
+	}
+}
+
+func TestRunAnswersAFailedTurnSoTheNextRequestDoesNotRepeatTheUser(t *testing.T) {
+	provider := &fakeProvider{streams: []*fakeStream{{failAt: 0}, buildTextStream(core.Chunk{Text: "ok"})}}
+	assistantConversation := buildAssistantConversation(t, provider, nil, &recordingSink{})
+
+	if err := assistantConversation.RunAssistantTurn(context.Background(), "first"); !errors.Is(err, errProviderUnavailable) {
+		t.Fatalf("got %v, want errProviderUnavailable", err)
+	}
+	if err := assistantConversation.RunAssistantTurn(context.Background(), "second"); err != nil {
+		t.Fatalf("second RunAssistantTurn returned %v, want nil", err)
+	}
+
+	assertStubFollowsUser(t, provider.requests[1].Messages, "[travis] This turn failed before a reply.")
+}
+
+func TestRunAnswersACancelledTurnSoTheNextRequestDoesNotRepeatTheUser(t *testing.T) {
+	provider := &fakeProvider{chatErr: context.Canceled}
+	assistantConversation := buildAssistantConversation(t, provider, nil, &recordingSink{})
+
+	if err := assistantConversation.RunAssistantTurn(context.Background(), "first"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want context.Canceled", err)
+	}
+	provider.chatErr = nil
+	if err := assistantConversation.RunAssistantTurn(context.Background(), "second"); err != nil {
+		t.Fatalf("second RunAssistantTurn returned %v, want nil", err)
+	}
+
+	assertStubFollowsUser(t, provider.requests[1].Messages, "[travis] The user interrupted this turn before a reply.")
+}
+
+func TestRunKeepsToolCallsAnsweredWhenALaterStepFails(t *testing.T) {
+	provider := &fakeProvider{streams: []*fakeStream{
+		buildToolCallStream(core.ToolCall{ID: "call-1", Name: "echo", Arguments: json.RawMessage(`{"text":"pong"}`)}),
+		{failAt: 0},
+		buildTextStream(core.Chunk{Text: "ok"}),
+	}}
+	assistantConversation := buildAssistantConversation(t, provider, &fakeToolLookup{tools: []core.Tool{&echoTool{}}}, &recordingSink{})
+
+	if err := assistantConversation.RunAssistantTurn(context.Background(), "first"); !errors.Is(err, errProviderUnavailable) {
+		t.Fatalf("got %v, want errProviderUnavailable", err)
+	}
+	if err := assistantConversation.RunAssistantTurn(context.Background(), "second"); err != nil {
+		t.Fatalf("second RunAssistantTurn returned %v, want nil", err)
+	}
+
+	answered := map[core.ID]bool{}
+	var calls []core.ID
+	for _, message := range provider.requests[2].Messages {
+		for _, part := range message.Parts {
+			switch part := part.(type) {
+			case core.ToolCallPart:
+				calls = append(calls, part.ToolCall.ID)
+			case core.ToolResultPart:
+				answered[part.ToolResult.CallID] = true
+			}
+		}
+	}
+	if len(calls) != 1 || !answered[calls[0]] {
+		t.Fatalf("got calls %v and answers %v, want every call answered", calls, answered)
+	}
+}
+
 func TestRunDispatchesAToolCallAndSendsTheResultBack(t *testing.T) {
 	echo := &echoTool{}
 	firstStream := buildToolCallStream(core.ToolCall{ID: "call-1", Name: "echo", Arguments: json.RawMessage(`{"text":"pong"}`)})
