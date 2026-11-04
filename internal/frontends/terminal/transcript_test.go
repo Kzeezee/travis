@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Kzeezee/travis/internal/core"
@@ -96,5 +97,16 @@ func TestTranscriptTotalsUsageAndKeepsItAcrossReset(t *testing.T) {
 	history.resetTranscript()
 	if len(history.turns) != 0 || history.observedTurns != 0 || history.usage.InputTokens != 13 {
 		t.Fatalf("got %+v after reset, want empty conversation with usage kept", history)
+	}
+}
+
+func TestTranscriptExplainsATurnStoppedByItsBudget(t *testing.T) {
+	var history transcript
+	history.startTurn("hi")
+	history.applyEvent(core.UserMessageSubmitted{})
+	history.applyEvent(core.TurnCompleted{Reason: core.StopBudget})
+
+	if notices := history.turns[0].notices; len(notices) != 1 || !strings.Contains(notices[0], "limit") {
+		t.Fatalf("got notices %q, want one naming the limit", notices)
 	}
 }

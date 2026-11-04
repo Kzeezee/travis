@@ -537,3 +537,63 @@ func TestLoadSnapshotMaxBytesDefaultsTo16MiBAndOnlyTrustedLayersChangeIt(t *test
 		})
 	}
 }
+
+func TestLoadWarnsWhenACostCeilingIsSetOnAnUnpricedProfile(t *testing.T) {
+	pathSet := testPathSet()
+	files := map[string]string{testUserConfigFile(pathSet): "[brain]\nmax_turn_cost_usd = 1\n"}
+
+	_, diags, err := load(buildFileReaderFromMap(files), pathSet, nil, buildEnvLookupFromMap(nil))
+	if err != nil {
+		t.Fatalf("load() error = %v, diags = %v", err, diags)
+	}
+	want := `max_turn_cost_usd is set but profile "cloud" has no price; the ceiling cannot be enforced`
+	if len(diags) != 1 || diags[0].Severity != SeverityWarning || diags[0].Message != want {
+		t.Fatalf("diagnostics = %v, want one warning %q", diags, want)
+	}
+}
+
+func TestLoadAcceptsACostCeilingOnAPricedProfileWithoutWarning(t *testing.T) {
+	pathSet := testPathSet()
+	files := map[string]string{testUserConfigFile(pathSet): `
+[brain]
+max_daily_cost_usd = 5
+[provider.profiles.cloud]
+base_url = "https://api.openai.com/v1"
+model = "gpt-4o-mini"
+input_usd_per_mtok = 0.15
+output_usd_per_mtok = 0.6
+`}
+
+	cfg, diags, err := load(buildFileReaderFromMap(files), pathSet, nil, buildEnvLookupFromMap(nil))
+	if err != nil || len(diags) != 0 {
+		t.Fatalf("load() error = %v, diags = %v, want neither", err, diags)
+	}
+	if cfg.Brain.MaxDailyCostUSD != 5 || cfg.Provider.Profiles["cloud"].OutputUSDPerMTok != 0.6 {
+		t.Fatalf("daily ceiling %v, output price %v; want 5 and 0.6", cfg.Brain.MaxDailyCostUSD, cfg.Provider.Profiles["cloud"].OutputUSDPerMTok)
+	}
+}
+
+func TestLoadWorkspaceLayerCannotSetTheDailyCostCeiling(t *testing.T) {
+	pathSet := testPathSet()
+	for _, tc := range []struct {
+		name      string
+		files     map[string]string
+		wantDaily float64
+	}{
+		{"workspace alone", map[string]string{pathSet.WorkspaceConfigFile: "[brain]\nmax_daily_cost_usd = 999\n"}, 0},
+		{"workspace over user", map[string]string{
+			testUserConfigFile(pathSet): "[brain]\nmax_daily_cost_usd = 5\n",
+			pathSet.WorkspaceConfigFile: "[brain]\nmax_daily_cost_usd = 999\nmax_turn_cost_usd = 2\n",
+		}, 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, _, err := load(buildFileReaderFromMap(tc.files), pathSet, nil, buildEnvLookupFromMap(nil))
+			if err != nil {
+				t.Fatalf("load() error = %v", err)
+			}
+			if cfg.Brain.MaxDailyCostUSD != tc.wantDaily {
+				t.Fatalf("MaxDailyCostUSD = %v, want %v", cfg.Brain.MaxDailyCostUSD, tc.wantDaily)
+			}
+		})
+	}
+}

@@ -96,6 +96,27 @@ func TestGoldenFrames(t *testing.T) {
 		})
 	}
 
+	spendCases := []struct {
+		name    string
+		options Options
+	}{
+		{"status_spend_daily_width_100", Options{MaxTurnCostUSD: 1, MaxDailyCostUSD: 5, SpentTodayUSD: 0.30}},
+		{"status_spend_turn_only_width_100", Options{MaxTurnCostUSD: 1}},
+	}
+	for _, tt := range spendCases {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.options.ModelName = "gpt-4o-mini"
+			m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, tt.options)
+			m.resize(100, 8)
+			m, _ = updateModel(m, eventBatchMsg{events: []core.Event{
+				core.UserMessageSubmitted{},
+				core.AssistantTextStreamed{Text: "Done."},
+				core.TurnCompleted{Reason: core.StopEndTurn, CostUSD: 0.12, SpentTodayUSD: 0.42},
+			}})
+			teatest.RequireEqualOutput(t, []byte(renderPlainView(m)))
+		})
+	}
+
 	t.Run("palette_width_80", func(t *testing.T) {
 		m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "gpt-4o-mini"})
 		m.resize(80, 16)

@@ -64,8 +64,20 @@ func (m chatModel) renderStatusBar() string {
 	status := assistantLabelStyle.Render(" ◆") + " " + lipgloss.NewStyle().Bold(true).Render(m.modelName) +
 		dimStyle.Render(" · ") + stateStyle.Render(state) +
 		dimStyle.Render(" · last turn: ") + outcomeStyle.Render(reportOutcome(m.lastTurnOutcome)) + copied +
-		dimStyle.Render(reportSandboxStatus(m.sandboxTier)+m.reportDictationStatus())
+		dimStyle.Render(reportSandboxStatus(m.sandboxTier)+m.reportDictationStatus()+m.reportSpendStatus())
 	return status + dimStyle.Render(m.reportTokenUsage(ansi.StringWidth(status)))
+}
+
+// reportSpendStatus shows today against the daily ceiling, or the last turn against the turn ceiling when only that is set.
+func (m chatModel) reportSpendStatus() string {
+	switch {
+	case m.maxDailyCostUSD > 0:
+		return fmt.Sprintf(" · $%.2f/$%.2f", m.spentTodayUSD, m.maxDailyCostUSD)
+	case m.maxTurnCostUSD > 0:
+		return fmt.Sprintf(" · $%.2f/$%.2f turn", m.turnCostUSD, m.maxTurnCostUSD)
+	default:
+		return ""
+	}
 }
 
 const contextBarCells = 10

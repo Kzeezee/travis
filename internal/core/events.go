@@ -111,6 +111,9 @@ type TurnCompleted struct {
 	EventHeader
 	Reason StopReason `json:"reason"`
 	Usage  Usage      `json:"usage"`
+	// CostUSD is this turn's spend; SpentTodayUSD is the day's total across sessions, 0 without a ledger.
+	CostUSD       float64 `json:"cost_usd"`
+	SpentTodayUSD float64 `json:"spent_today_usd"`
 }
 
 func (TurnCompleted) ReportEventType() EventType {

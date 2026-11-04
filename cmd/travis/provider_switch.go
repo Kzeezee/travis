@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Kzeezee/travis/internal/agent/loop"
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
@@ -26,7 +27,7 @@ type modelListingProvider interface {
 type providerSwitcher struct {
 	profiles     map[string]config.ProviderProfileCfg
 	conversation interface {
-		SelectProvider(core.Provider, string) error
+		SelectProvider(core.Provider, string, loop.Pricing) error
 	}
 	redactor      redact.Redactor
 	resolveKey    func(profile string, auth config.AuthCfg) (string, error)
@@ -78,7 +79,7 @@ func (s *providerSwitcher) SwitchProviderWithKey(profile, key string) (terminal.
 func (s *providerSwitcher) activate(profile string, settings config.ProviderProfileCfg, key string) (terminal.ProviderSwitch, error) {
 	s.redactor.AddKnownValue(key)
 	provider := s.buildProvider(settings.BaseURL, key)
-	if err := s.conversation.SelectProvider(provider, settings.Model); err != nil {
+	if err := s.conversation.SelectProvider(provider, settings.Model, loop.Pricing{InputUSDPerMTok: settings.InputUSDPerMTok, OutputUSDPerMTok: settings.OutputUSDPerMTok}); err != nil {
 		return terminal.ProviderSwitch{}, err
 	}
 	s.mu.Lock()

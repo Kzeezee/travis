@@ -95,6 +95,9 @@ func (t *transcript) applyEvent(event core.Event) {
 	if completed, isCompleted := event.(core.TurnCompleted); isCompleted {
 		t.usage.InputTokens += completed.Usage.InputTokens
 		t.usage.OutputTokens += completed.Usage.OutputTokens
+		if completed.Reason == core.StopBudget {
+			t.addNotice("turn stopped: it reached its step or spending limit")
+		}
 		return
 	}
 	if t.observedTurns < 1 || t.observedTurns > len(t.turns) {
