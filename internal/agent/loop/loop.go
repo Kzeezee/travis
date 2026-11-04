@@ -136,6 +136,7 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 		}
 		reply, err := c.runStep(stepContext, prompt)
 		if err != nil {
+			err = errors.Join(err, c.recordMessage(ctx, buildUnansweredTurnMessage(err)))
 			c.completeTurn(ctx, core.StopError, usage)
 			return err
 		}
@@ -344,6 +345,16 @@ func buildAssistantMessage(reply stepReply) core.Message {
 		parts = append(parts, core.ToolCallPart{ToolCall: call})
 	}
 	return core.Message{Role: core.RoleAssistant, Parts: parts}
+}
+
+// buildUnansweredTurnMessage stands in for the reply a failed step never produced, so the next
+// request does not carry two user messages in a row; it names no error text because the model sees it.
+func buildUnansweredTurnMessage(stepErr error) core.Message {
+	text := "[travis] This turn failed before a reply."
+	if errors.Is(stepErr, context.Canceled) {
+		text = "[travis] The user interrupted this turn before a reply."
+	}
+	return core.Message{Role: core.RoleAssistant, Parts: []core.Part{core.TextPart{Text: text}}}
 }
 
 // runToolCalls preserves order and escalates remaining effects after any untrusted result.

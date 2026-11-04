@@ -91,6 +91,31 @@ func TestRunRecordsEveryMessageOfTheTurnInOrder(t *testing.T) {
 	}
 }
 
+func TestRunRecordsTheStubReplyOfAFailedTurn(t *testing.T) {
+	provider := &fakeProvider{streams: []*fakeStream{{failAt: 0}}}
+	log := &recordingLog{}
+
+	if err := buildLoggedConversation(provider, nil, log).RunAssistantTurn(context.Background(), "hello"); !errors.Is(err, errProviderUnavailable) {
+		t.Fatalf("RunAssistantTurn = %v, want the provider's error", err)
+	}
+
+	want := []core.Role{core.RoleUser, core.RoleAssistant}
+	if got := log.reportRoles(); !slices.Equal(got, want) {
+		t.Fatalf("recorded roles = %v, want %v", got, want)
+	}
+}
+
+func TestRunReportsBothErrorsWhenTheLogRefusesTheStubReply(t *testing.T) {
+	provider := &fakeProvider{streams: []*fakeStream{{failAt: 0}}}
+	log := &recordingLog{failAfter: 1}
+
+	err := buildLoggedConversation(provider, nil, log).RunAssistantTurn(context.Background(), "hello")
+
+	if !errors.Is(err, errProviderUnavailable) || !errors.Is(err, errLogUnavailable) {
+		t.Fatalf("RunAssistantTurn = %v, want the provider's and the log's error", err)
+	}
+}
+
 func TestRunEndsTheTurnWhenTheLogRefusesAMessage(t *testing.T) {
 	provider := &fakeProvider{streams: []*fakeStream{buildTextStream(core.Chunk{Text: "hi"})}}
 	log := &recordingLog{failAfter: 1}
