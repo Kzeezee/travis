@@ -243,6 +243,9 @@ func runHeadless(args []string, out io.Writer) error {
 		return err
 	}
 
+	// The scripted approver needs no event loop, so a single turn can wait for every MCP tool
+	// instead of racing the first model request against the servers' handshakes.
+	session.mcpManager.WaitUntilStarted()
 	events, unsubscribe := session.bus.Subscribe(nil)
 	outcome := make(chan core.StopReason, 1)
 	go func() { outcome <- printHeadlessEvents(events, out) }()
