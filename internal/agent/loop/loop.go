@@ -79,10 +79,8 @@ type AssistantConversation struct {
 
 	contextLength     int
 	compactAtFraction float64
-	// summary stands in for the entries before compactedUntil, and preserved is what compaction kept verbatim.
-	summary        string
-	preserved      []string
-	compactedUntil int
+	// blocks stand in, in order, for the oldest entries; the request carries every entry after them.
+	blocks []foldBlock
 
 	isSpeechEnabled bool
 	// hasSpokenThisTurn records whether the model marked any speech, so a silent reply gets a fallback.
@@ -240,9 +238,7 @@ func (c *AssistantConversation) Rewind(ctx context.Context, fromTurn core.ID, mo
 	if mode.IsRewindingConversation() {
 		record := core.RewindRecord{FromTurn: fromTurn, Mode: mode}
 		c.entries = append(c.entries, core.SessionEntry{Kind: core.EntryRewound, Rewind: &record})
-		if firstEntry < c.compactedUntil { // also true when not found: the turn is unknown, so the summary is stale
-			c.discardSummary()
-		}
+		c.dropBlocksFrom(firstEntry) // not found (-1) drops them all: the turn is unknown, so they are stale
 		header.ID = c.ids.GenerateID()
 		c.events.Publish(ctx, core.ConversationRewound{EventHeader: header, FromTurn: fromTurn, Mode: mode})
 	}
@@ -255,7 +251,7 @@ func (c *AssistantConversation) Rewind(ctx context.Context, fromTurn core.ID, mo
 // The session log keeps them; only this conversation's copy is dropped.
 func (c *AssistantConversation) ResetHistory() {
 	c.entries = nil
-	c.discardSummary()
+	c.blocks = nil
 	c.isNextStepUntrusted = false
 }
 
@@ -290,13 +286,13 @@ func (c *AssistantConversation) runStep(ctx context.Context, hint string) (stepR
 	tools := c.buildToolSpecs(ctx, hint)
 	system := buildSystemPrompt(c.clock.ReportCurrentTime(), sections, c.isSpeechEnabled)
 	request := c.buildRequest(system, tools)
-	if c.shouldCompact(request) && c.compactHistory(ctx) {
+	if c.shouldCompact(request) && c.compactHistory(ctx, false) {
 		request = c.buildRequest(system, tools)
 	}
 	reply, err := c.exchangeRequest(ctx, request)
 	if errors.Is(err, core.ErrContextLength) && c.contextLength > 0 {
 		c.lowerCompactionThreshold(request)
-		if c.compactHistory(ctx) {
+		if c.compactHistory(ctx, true) {
 			return c.exchangeRequest(ctx, c.buildRequest(system, tools))
 		}
 	}
