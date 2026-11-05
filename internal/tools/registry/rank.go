@@ -8,9 +8,9 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 )
 
-// hintWordPattern splits a hint into the words scored against each tool's name and
+// queryWordPattern splits a query into the words scored against each tool's name and
 // description; punctuation and case carry no signal here.
-var hintWordPattern = regexp.MustCompile(`[a-zA-Z0-9]+`)
+var queryWordPattern = regexp.MustCompile(`[a-zA-Z0-9]+`)
 
 // estimateToolSpecTokens is a rough, documented heuristic (~4 characters per token, a
 // common rule of thumb) over the bytes a tool's spec actually costs the model: there is no
@@ -21,20 +21,14 @@ func estimateToolSpecTokens(spec core.ToolSpec) int {
 	return size / 4
 }
 
-// rankToolsByHintOverlap orders tools by how many of hint's words appear in their own name
-// or description, highest first; ties keep tools' relative order (sort.SliceStable), so a
-// zero-overlap hint — today's production default, hint="" — leaves tools exactly as List
-// already sorted them. Pure: no registry state, independently testable.
-func rankToolsByHintOverlap(tools []core.Tool, hint string) []core.Tool {
-	ranked := make([]core.Tool, len(tools))
-	copy(ranked, tools)
-	if hint == "" {
-		return ranked
-	}
-
-	words := hintWordPattern.FindAllString(strings.ToLower(hint), -1)
-	scores := make(map[string]int, len(ranked))
-	for _, tool := range ranked {
+// rankToolsByQueryOverlap returns the tools sharing at least one of query's words with their own
+// name or description, most shared words first; ties keep tools' relative order (sort.SliceStable).
+// Pure: no registry state, independently testable.
+func rankToolsByQueryOverlap(tools []core.Tool, query string) []core.Tool {
+	words := queryWordPattern.FindAllString(strings.ToLower(query), -1)
+	scores := make(map[string]int, len(tools))
+	ranked := make([]core.Tool, 0, len(tools))
+	for _, tool := range tools {
 		spec := tool.Describe()
 		haystack := strings.ToLower(spec.Name + " " + spec.Description)
 		score := 0
@@ -43,7 +37,10 @@ func rankToolsByHintOverlap(tools []core.Tool, hint string) []core.Tool {
 				score++
 			}
 		}
-		scores[tool.Name()] = score
+		if score > 0 {
+			scores[tool.Name()] = score
+			ranked = append(ranked, tool)
+		}
 	}
 
 	sort.SliceStable(ranked, func(i, j int) bool {

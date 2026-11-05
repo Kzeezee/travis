@@ -148,7 +148,7 @@ type fakeToolLookup struct {
 	tools []core.Tool
 }
 
-func (l *fakeToolLookup) Prune(context.Context, int, string) []core.Tool {
+func (l *fakeToolLookup) Prune(context.Context, int) []core.Tool {
 	return l.tools
 }
 
