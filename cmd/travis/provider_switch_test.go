@@ -23,16 +23,17 @@ func (p fakeListingProvider) ListModels(context.Context) ([]string, error) {
 }
 
 type recordingConversation struct {
-	provider core.Provider
-	model    string
-	err      error
+	provider      core.Provider
+	model         string
+	contextLength int
+	err           error
 }
 
-func (c *recordingConversation) SelectProvider(provider core.Provider, model string, _ loop.Pricing) error {
+func (c *recordingConversation) SelectProvider(provider core.Provider, model string, _ loop.Pricing, contextLength int) error {
 	if c.err != nil {
 		return c.err
 	}
-	c.provider, c.model = provider, model
+	c.provider, c.model, c.contextLength = provider, model, contextLength
 	return nil
 }
 
@@ -42,7 +43,7 @@ func buildTestSwitcher(keys map[string]string) (*providerSwitcher, *recordingCon
 	var remembered []string
 	return &providerSwitcher{
 		profiles: map[string]config.ProviderProfileCfg{
-			"cloud": {BaseURL: "https://api.example/v1", Model: "cloud-model"},
+			"cloud": {BaseURL: "https://api.example/v1", Model: "cloud-model", ContextLength: 32768},
 			"local": {BaseURL: "http://127.0.0.1:8080/v1", Model: "local-model"},
 		},
 		conversation: conversation,
@@ -73,6 +74,9 @@ func TestSwitchProviderSwitchesWhenTheKeyIsAvailable(t *testing.T) {
 	}
 	if conversation.provider.(fakeListingProvider).key != "sk-stored" || conversation.model != "cloud-model" {
 		t.Fatalf("conversation got %+v / %q, want the stored key and cloud-model", conversation.provider, conversation.model)
+	}
+	if conversation.contextLength != 32768 {
+		t.Fatalf("conversation got context length %d, want the profile's 32768", conversation.contextLength)
 	}
 	if models, _ := switcher.ListModels(context.Background()); models[0] != "https://api.example/v1" {
 		t.Fatalf("ListModels asked %v, want the new provider", models)
