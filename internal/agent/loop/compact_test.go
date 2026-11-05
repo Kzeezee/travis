@@ -579,3 +579,19 @@ func TestCompactionDoesNotMergeBecauseOfKeptPaths(t *testing.T) {
 		t.Fatalf("note = %.300q..., want several blocks with their paths kept", note.Text)
 	}
 }
+
+func TestCompactionBatchesFoldsWhenTurnsAreSmallNextToTheWindow(t *testing.T) {
+	provider := &compactingProvider{}
+	conversation := buildCompactingConversation(provider, nil, nil, 8000)
+
+	for i := range 40 {
+		runTurns(t, conversation, buildLongPrompt(fmt.Sprintf("turn %d ", i), 1500))
+	}
+
+	if got := len(provider.listSummariserRequests()); got == 0 || got > 5 {
+		t.Fatalf("got %d summariser calls over 40 turns, want a few: each fold takes every finished turn, so calls stay rare", got)
+	}
+	if got := estimateTokens(provider.lastRequest()); got > 8000*6/10 {
+		t.Fatalf("last request is about %d tokens, want it kept under the 60%% threshold", got)
+	}
+}
