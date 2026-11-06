@@ -1,15 +1,19 @@
-"""Summarises committed eval results (6E, 6D; 6F extends it). Reads files only and makes no model
-calls, and its output does not depend on when it runs."""
+"""Turns committed eval results into docs/EVAL.md (6E, 6D, 6F). Reads files only, makes no model
+calls, and writes nothing that depends on when it runs, so regenerating it gives no diff."""
 
 import csv
 import json
 import math
+import statistics
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).parent
 RESULTS = HERE.parent / "results"
 LABELS = HERE.parent / "judge" / "labels.csv"
+FAILURES = RESULTS / "published" / "failures.csv"
+REPORT = HERE.parent.parent / "docs" / "EVAL.md"
 KAPPA_THRESHOLD = 0.6
 
 
@@ -44,9 +48,65 @@ def load_rows(folder: str) -> list[dict]:
     return sorted(rows, key=lambda r: (r["transcript"], r["task"], r["trial"]))
 
 
+def link_transcript(row: dict) -> str:
+    log, _, sample = row["transcript"].partition("#")
+    return f"[{sample}](../eval/results/{row['log_dir']}/{log})"
+
+
 def scored(rows: list[dict], field: str = "passed") -> list[dict]:
     """Rows where the field was graded; a harness failure (None) says nothing about the agent."""
     return [r for r in rows if r[field] is not None]
+
+
+def build_method(published: list[dict]) -> list[str]:
+    dates = sorted({r["transcript"][:10] for r in published})
+    models = sorted({r["model"] for r in published})
+    tasks = sorted({r["task"] for r in published})
+    trials = max((r["trial"] for r in published), default=0)
+    return [
+        "## Method",
+        "",
+        "Each task runs travis headless (`travis run`, eval builds only) in a Docker container, with its",
+        "model calls routed through Inspect AI's agent bridge. Tasks are in `eval/inspect/tasks.toml`; each",
+        "is graded by code on the final files, the tools called and the answer. Approvals and `ask_user`",
+        "replies are scripted per task and fail closed once they run out. travis sees today as",
+        "2026-10-01 in every run, so fixture dates stay in the future.",
+        "",
+        f"- Models: {', '.join(models) or 'none yet'}",
+        f"- Run dates: {', '.join(dates) or 'none yet'}",
+        f"- Tasks: {len(tasks)}, trials per task: {trials}",
+    ]
+
+
+def build_scorecard(published: list[dict]) -> list[str]:
+    lines = ["## Results", ""]
+    graded = scored(published)
+    if not graded:
+        return lines + ["No published run is committed yet (`eval/results/published/`)."]
+    by_category = defaultdict(list)
+    for row in graded:
+        by_category[row["category"]].append(row)
+    lines += ["| Category | pass@1 [95% CI] | pass^k [95% CI] |", "|---|---|---|"]
+    for category, rows in sorted(by_category.items()) + [("**all**", graded)]:
+        trials = defaultdict(list)
+        for row in rows:
+            trials[row["task"]].append(row["passed"])
+        all_passed = sum(all(results) for results in trials.values())
+        lines.append(f"| {category} | {format_rate(sum(r['passed'] for r in rows), len(rows))} "
+                     f"| {format_rate(all_passed, len(trials))} |")
+    errors = len(published) - len(graded)
+    costs = [r["cost_usd"] for r in published]
+    latencies = [r["latency_ms"] / 1000 for r in published]
+    lines += [
+        "",
+        "pass@1 counts every trial; pass^k counts a task only if it passed in all of its trials.",
+        f"Harness errors, excluded above: {errors}.",
+        "",
+        f"Cost: USD {sum(costs):.4f} in total, USD {statistics.mean(costs):.4f} per run. "
+        f"Latency: median {statistics.median(latencies):.1f} s, max {max(latencies):.1f} s. "
+        f"Steps: mean {statistics.mean(r['steps'] for r in published):.1f}.",
+    ]
+    return lines
 
 
 def build_judge(rows: list[dict]) -> tuple[list[str], set[str]]:
@@ -127,26 +187,82 @@ def build_injection(rows: list[dict]) -> list[str]:
     return lines
 
 
+def build_ablations(ablations: list[dict], published: list[dict]) -> list[str]:
+    lines = ["## Ablations", ""]
+    baseline = scored([r for r in published if r["trial"] == 1])
+    groups = defaultdict(list)
+    for row in scored(ablations):
+        changed = {k: v for k, v in row["condition"].items() if (k, v) in (("hide_tools", "fs_edit"), ("skills", "off"))}
+        groups[", ".join(f"{k}={v}" for k, v in sorted(changed.items())) or "baseline"].append(row)
+    lines += ["One trial per task. The baseline is the published run's first trial.", "",
+              "| Condition | pass@1 [95% CI] |", "|---|---|",
+              f"| baseline | {format_rate(sum(r['passed'] for r in baseline), len(baseline))} |"]
+    for name, rows in sorted(groups.items()):
+        lines.append(f"| {name} | {format_rate(sum(r['passed'] for r in rows), len(rows))} |")
+    lines += ["",
+              "- `hide_tools=fs_edit`: the model has `fs_write` only (D-08).",
+              "- `skills=off`: no user skills are installed.",
+              "- Policy and untrusted marking: see the injection table above.",
+              "- Not run: pruning (it never engages below `max_exposed` = 60 tools, and this set registers",
+              "  at most 3 MCP tools) and supervised vs collaborative autonomy (D-09; travis has no",
+              "  supervised mode to switch to)."]
+    return lines
+
+
+def build_failures(published: list[dict]) -> list[str]:
+    lines = ["## Error analysis", ""]
+    if not FAILURES.exists():
+        return lines + ["Failures are not yet coded (`eval/results/published/failures.csv`)."]
+    by_transcript = {r["transcript"]: r for r in published}
+    by_category = defaultdict(list)
+    for failure in csv.DictReader(FAILURES.open()):
+        by_category[failure["category"]].append(failure)
+    lines += ["| Failure | Count | Example |", "|---|---|---|"]
+    for category, failures in sorted(by_category.items(), key=lambda item: (-len(item[1]), item[0])):
+        example = failures[0]
+        row = by_transcript.get(example["transcript"])
+        link = link_transcript(row) if row else example["transcript"]
+        lines.append(f"| {category} | {len(failures)} | {link}: {example['note']} |")
+    return lines
+
+
 LIMITATIONS = [
     "## Limitations",
     "",
     "- These results describe travis on DeepSeek V4.1 Flash only, not travis in general.",
-    "- At 10 injection cases the 95% interval is about ±30 points; differences smaller than the",
-    "  intervals are not claimed.",
+    "- At 30 tasks the 95% interval is about ±17 points, and at 10 injection cases about ±30.",
+    "  Differences smaller than the intervals are not claimed.",
     "- The judge is the model under test, grading its own answers; criteria count only after",
     "  calibration against hand labels.",
     "- \"Policy off\" lifts the approval gate, not hard denials; \"marking off\" strips delimiters",
     "  in the bridge, after travis has marked the step, so step marking stays on and is counted",
     "  under policy.",
-
+    "- Scripted approvals and replies stand in for a person, so a run never shows how a real user",
+    "  would have answered an unexpected question.",
 ]
 
 
 def build_report() -> str:
-    injection = load_rows("injection")
-    judge_lines, _ = build_judge(load_rows("judge") + injection + load_rows("published"))
-    sections = [judge_lines, build_injection(injection), LIMITATIONS]
+    published, injection, ablations = load_rows("published"), load_rows("injection"), load_rows("ablations")
+    judge_lines, _ = build_judge(published + injection + ablations + load_rows("judge"))
+    sections = [
+        ["# travis evaluation", "", "Generated by `make eval-report` from the results committed under",
+         "`eval/results/`. Do not edit by hand."],
+        build_method(published),
+        build_scorecard(published),
+        judge_lines,
+        build_injection(injection),
+        build_ablations(ablations, published),
+        build_failures(published),
+        LIMITATIONS,
+    ]
     return "\n\n".join("\n".join(section) for section in sections) + "\n"
+
+
+def main() -> int:
+    REPORT.write_text(build_report())
+    print(f"wrote {REPORT}")
+    return 0
 
 
 if __name__ == "__main__":
@@ -154,4 +270,4 @@ if __name__ == "__main__":
     assert [round(x, 3) for x in wilson(15, 30)] == [0.332, 0.668], wilson(15, 30)
     assert cohen_kappa([(True, True), (False, False)]) == 1.0
     assert cohen_kappa([(True, False), (False, True)]) == -1.0
-    print(build_report(), end="")
+    sys.exit(main())

@@ -91,6 +91,10 @@ vuln: $(GOVULNCHECK) ## Check dependencies against the Go vulnerability database
 eval-live: ## Live eval (6B) via Inspect, k trials per task; logs and results JSONL land in eval/inspect/logs (needs Docker, uv, the model's key; flags via ARGS="...")
 	cd eval/inspect && uv run python live.py $(ARGS)
 
+.PHONY: eval-report
+eval-report: ## Regenerate docs/EVAL.md from the results committed under eval/results (no model calls)
+	cd eval/inspect && uv run python report.py
+
 .PHONY: check
 check: build vet lint test-race tidy vuln ## Everything CI runs, on this machine only
 
