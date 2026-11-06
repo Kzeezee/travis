@@ -361,7 +361,9 @@ results JSONL, one row per run, land in `eval/inspect/logs/`; `uv run inspect vi
 `eval/inspect` opens the transcripts. `ARGS="--model mockllm/model --trials 1"` checks the
 whole pipeline for free. Tasks live in `eval/inspect/tasks.toml` with 6A's assertion keys;
 `-T split=heldout|all`, `-T policy=off`, `-T hide_tools=fs_edit` and `-T skills=off` pick the
-split and conditions. After editing a grader, run `uv run python test_graders.py` from
+split and conditions. `tasks.py@injection` runs the injection suite (`-T policy=off`,
+`-T marking=off`), and `uv run python report.py` summarises committed results under
+`eval/results/`. After editing a grader, run `uv run python test_graders.py` from
 `eval/inspect`. Live evals run only on a developer's machine: no CI workflow runs
 them, so the model key never becomes a repo secret.
 
