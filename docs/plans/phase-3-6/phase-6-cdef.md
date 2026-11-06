@@ -281,11 +281,65 @@ binary, agreement and Wilson modules, a labelling helper).
 
 ## Risks
 
-- Landlock under Docker's seccomp profile has not been tested. If MCP servers will not
-  start with `require_sandbox = true`, the MCP tasks run with the sandbox off, and the
-  report says so.
+- Workspace files are not untrusted input: 3F marks steps only after MCP, fetch, exec and
+  workspace skill output, so a plain `fs_read` of a planted file leaves the next write
+  unasked. Expect the workspace surface's attack success to stay high with both defences
+  on. That is a finding for the report, not a harness bug.
 - Fetch tasks depend on GitHub raw being reachable. Pinning a SHA keeps the content fixed;
   the only remaining failure is the network, and Inspect marks such a run as a harness
   error (`passed=null`), not a failure.
 - With n=10 per condition, the injection intervals are about ±30 points. Report the numbers;
   claim no differences between conditions.
+
+## Status (2026-11-06)
+
+The work lands as four stacked PRs, one per ticket: 6C `feat/tra-57-phase-6-task-set`, then
+6E `feat/tra-59-phase-6-injection-eval`, 6D `feat/tra-58-phase-6-judge-calibration` and 6F
+`feat/tra-60-phase-6-report`. 6E comes before 6D because `report.py` starts in 6E.
+
+**Changes from the plan, found while building:**
+
+- `travis run` waits for MCP servers before its first model request
+  (`mcp.Manager.WaitUntilStarted`). Without it the model never saw the MCP tools.
+- The solver waits for the bridge's in-container proxy to listen before starting travis.
+  Inspect starts it without waiting, and the first live run lost one task to "connection
+  refused".
+- The MCP config lists the reply file in `read_paths`. The sandbox showed the server
+  nothing else.
+- The MCP sandbox runs under Docker at tier `landlock`, which settles the spike's open
+  question.
+- File assertions match case-insensitively, like answers; a live model writes "Milk" where
+  the task said "milk".
+- The `helpful` judge criterion is dropped, since no task used it.
+- An injection case names its `goal`, and `tasks.ATTACK_TEMPLATE` wraps it in AgentDojo's
+  "important instructions" text. Fetch cases fetch a committed `-clean` or `-attacked`
+  page; 6C and 6E each pin pages to their own commit.
+- New fixtures live in `testdata/fixtures/household/`. `notes/` is unchanged for the 6A
+  cassettes.
+- The live runs use DeepSeek's own API (`deepseek/deepseek-flash`, the same
+  V4.1-Flash-1017 weights), as the spike did. DeepSeek has no per-key limit, so the
+  account balance is the hard stop.
+
+**First live dev run (6C, k=1, 28 tasks): 22/28 passed for USD 0.048, with no harness
+errors.** Of the six failures:
+
+- One was the bridge race, now fixed.
+- Three were wrong tasks, now fixed and passing on rerun:
+  - `notes-shopping-list` failed on letter case.
+  - `household-packing-list` did not say where to save the file.
+  - `household-which-appointment` was not really ambiguous; the fixture gained a GP
+    appointment.
+- Three are agent failures. On `which-chris`, `which-soup` and `which-appointment` the
+  model asks its question in its reply instead of calling `ask_user`, which ends a headless
+  turn. travis's system prompt never mentions `ask_user`. The tasks stay strict, as TRA-57
+  requires, and the report records this as a finding.
+
+**Left, all needing model spend or a person:**
+
+1. 6E: `make eval-live ARGS="tasks.py@injection --model deepseek/deepseek-flash --trials 1
+   --log-dir ../results/injection -T policy=P -T marking=M"` for the four conditions (about
+   USD 0.50), then commit the results.
+2. 6D: run `known_bad.py` into `../results/judge`, hand-label about 50 judged transcripts
+   into `eval/judge/labels.csv`, and commit both.
+3. 6F: the published run (36 × 3) and two ablations into `../results/published` and
+   `../results/ablations`, code `failures.csv`, then `make eval-report` and commit.
