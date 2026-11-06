@@ -136,7 +136,7 @@ type shiftedClock struct {
 }
 
 func (c shiftedClock) ReportCurrentTime() time.Time {
-	return time.Now().Add(c.offset)
+	return c.SystemClock.ReportCurrentTime().Add(c.offset)
 }
 
 // buildPinnedClock starts the clock at the start of date (YYYY-MM-DD, local time), so a
@@ -165,7 +165,7 @@ func runHeadless(args []string, out io.Writer) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	clock, err := buildPinnedClock(*now, time.Now())
+	clock, err := buildPinnedClock(*now, core.SystemClock{}.ReportCurrentTime())
 	if err != nil {
 		return err
 	}
