@@ -91,7 +91,8 @@ def build_sample(entry: dict, sample_id: str, policy: str, skills: str, metadata
         files[path if path.startswith("/") else f"/workspace/{path}"] = content
     setup = []
     if entry.get("fixture"):
-        setup.append(f"cp -a /fixtures/{entry['fixture']}/. /workspace/")
+        # Inspect writes `files` before setup runs, so no-clobber keeps a file a sample plants.
+        setup.append(f"cp -an /fixtures/{entry['fixture']}/. /workspace/")
     if skills == "on":
         setup.append("cp -a /eval/skills /root/.config/travis/skills")
     is_fetch = entry.get("category") == "fetch"
