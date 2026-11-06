@@ -18,7 +18,7 @@ import (
 // ToolLookup is the loop's view of the registry: what to offer the model this step,
 // and how to find what it asked for. A nil ToolLookup means no tools.
 type ToolLookup interface {
-	Prune(ctx context.Context, budget int, hint string) []core.Tool
+	Prune(ctx context.Context, budget int) []core.Tool
 	Lookup(name string) (core.Tool, bool)
 }
 
@@ -165,7 +165,7 @@ func (c *AssistantConversation) RunAssistantTurn(ctx context.Context, prompt str
 		if hasUntrustedIntake {
 			stepContext = core.MarkUntrustedStep(ctx)
 		}
-		reply, err := c.runStep(stepContext, prompt)
+		reply, err := c.runStep(stepContext)
 		if err != nil {
 			err = errors.Join(err, c.recordMessage(ctx, buildUnansweredTurnMessage(err)))
 			c.completeTurn(ctx, core.StopError, usage)
@@ -274,7 +274,7 @@ func (c *AssistantConversation) SelectProvider(provider core.Provider, model str
 }
 
 // runStep makes exactly one provider call; it exists so the stream closes every step.
-func (c *AssistantConversation) runStep(ctx context.Context, hint string) (stepReply, error) {
+func (c *AssistantConversation) runStep(ctx context.Context) (stepReply, error) {
 	var sections []string
 	if c.skills != nil {
 		var err error
@@ -283,7 +283,7 @@ func (c *AssistantConversation) runStep(ctx context.Context, hint string) (stepR
 			return stepReply{}, fmt.Errorf("load instructions: %w", err)
 		}
 	}
-	tools := c.buildToolSpecs(ctx, hint)
+	tools := c.buildToolSpecs(ctx)
 	system := buildSystemPrompt(c.clock.ReportCurrentTime(), sections, c.isSpeechEnabled)
 	request := c.buildRequest(system, tools)
 	if c.shouldCompact(request) && c.compactHistory(ctx, false) {
@@ -314,11 +314,11 @@ func (c *AssistantConversation) exchangeRequest(ctx context.Context, request cor
 	return c.consumeStream(ctx, stream)
 }
 
-func (c *AssistantConversation) buildToolSpecs(ctx context.Context, hint string) []core.ToolSpec {
+func (c *AssistantConversation) buildToolSpecs(ctx context.Context) []core.ToolSpec {
 	if c.tools == nil {
 		return nil
 	}
-	tools := c.tools.Prune(ctx, defaultToolBudget, hint)
+	tools := c.tools.Prune(ctx, defaultToolBudget)
 	specs := make([]core.ToolSpec, 0, len(tools))
 	for _, tool := range tools {
 		specs = append(specs, tool.Describe())

@@ -257,8 +257,8 @@ milestone MCP does — never "MCP now, prune later."
 
 ```go
 // Registry.Prune picks what fits the budget for *this* step; the rest stays
-// registered but invisible to the model until asked for.
-subset := registry.Prune(ctx, budget=6000, hint="editing_go_files")
+// registered but invisible to the model until asked for (tool_search).
+subset := registry.Prune(ctx, budget=6000)
 ```
 
 Context: 12 connected MCP servers ≈ 300 tools ≈ 40k tokens of schemas, sent on every
@@ -1154,8 +1154,9 @@ type Registry interface {
     Lookup(name string) (Tool, bool)
     List(filter Filter) []Tool
     // Prune returns the tool set to expose to the model this step, given a token
-    // budget and the current task. Full set may be hundreds of MCP tools.
-    Prune(ctx context.Context, budget int, hint string) []Tool
+    // budget. It never depends on the prompt, so the provider's prompt cache holds;
+    // MCP tools that do not fit are loaded on demand through tool_search.
+    Prune(ctx context.Context, budget int) []Tool
 }
 ```
 
