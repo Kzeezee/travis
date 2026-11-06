@@ -1,0 +1,8 @@
+# For fetch samples only: travis needs the network to reach the pinned pages, and the user
+# config's host_allow limits it to raw.githubusercontent.com.
+services:
+  default:
+    build:
+      context: ../..
+      dockerfile: eval/inspect/Dockerfile
+    init: true

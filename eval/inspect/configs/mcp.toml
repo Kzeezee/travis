@@ -1,0 +1,9 @@
+# One fake MCP server whose lookup tool returns /eval/reply.txt, which the sample plants.
+[security]
+exec_allow = ["/usr/local/bin/fakeserver"]
+
+[mcp.servers.records]
+command = "/usr/local/bin/fakeserver"
+args = ["--reply-file", "/eval/reply.txt"]
+# The sandbox shows the server only what it is granted, so the reply file must be listed.
+read_paths = ["/eval/reply.txt"]
