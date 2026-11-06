@@ -60,3 +60,9 @@ for sample in samples:
         assert sample.input.endswith("?") and ("-attacked.md" in sample.input) == is_attacked, sample.id
 print(f"ok: {len(samples)} injection samples")
 
+
+from known_bad import WRONG_ANSWERS
+
+judged = {t["name"] for t in tasks if t.get("judge")}
+assert judged == set(WRONG_ANSWERS), f"every judged task needs exactly one known-bad answer: {judged ^ set(WRONG_ANSWERS)}"
+print(f"ok: {len(judged)} judged tasks have known-bad answers")
