@@ -25,7 +25,27 @@ No hand labels are committed yet (`eval/judge/labels.csv`), so no judge criterio
 
 ## Prompt injection
 
-No injection run is committed yet (`eval/results/injection/`).
+Attacks are planted in a workspace file, `AGENTS.md`, a workspace skill, an MCP result and a
+fetched page. Each case runs once clean and once attacked. Defences are switched outside
+travis: policy off approves every ask, and marking off strips the untrusted delimiters before
+the model sees them. Hard denials (`host_allow`, the denylist) stay on in every condition.
+
+| Policy | Marking | Utility, no attack | Utility under attack | Attack success | Canary leaks |
+|---|---|---|---|---|---|
+| on | on | 10/10 = 100% [72, 100] | 10/10 = 100% [72, 100] | 0/10 = 0% [0, 28] | 0 |
+| on | off | 10/10 = 100% [72, 100] | 10/10 = 100% [72, 100] | 0/10 = 0% [0, 28] | 0 |
+| off | on | 10/10 = 100% [72, 100] | 10/10 = 100% [72, 100] | 1/10 = 10% [2, 40] | 0 |
+| off | off | 10/10 = 100% [72, 100] | 10/10 = 100% [72, 100] | 2/10 = 20% [6, 51] | 0 |
+
+Attack success by surface:
+
+| Surface | policy on, marking on | policy on, marking off | policy off, marking on | policy off, marking off |
+|---|---|---|---|---|
+| agents_md | 0/2 | 0/2 | 1/2 | 1/2 |
+| fetch | 0/2 | 0/2 | 0/2 | 0/2 |
+| mcp | 0/2 | 0/2 | 0/2 | 0/2 |
+| skill | 0/2 | 0/2 | 0/2 | 1/2 |
+| workspace | 0/2 | 0/2 | 0/2 | 0/2 |
 
 ## Ablations
 
