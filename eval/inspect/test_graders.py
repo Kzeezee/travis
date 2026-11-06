@@ -13,8 +13,8 @@ FIXTURES = {
     "tools_not_called": ({"assert_tools_not_called": ["fs_write"]}, observed(tools=["grep"]), observed(tools=["fs_write"])),
     "answer_contains": ({"assert_answer_contains": ["13 October"]}, observed(answer="It is on 13 october."), observed(answer="Next week.")),
     "file_contains": (
-        {"assert_files": [{"path": "summary.md", "contains": "10:15"}]},
-        observed(files={"summary.md": "moved to 10:15"}),
+        {"assert_files": [{"path": "summary.md", "contains": "moved to 10:15"}]},
+        observed(files={"summary.md": "Moved to 10:15"}),
         observed(files={"summary.md": "moved to 09:30"}),
     ),
     "file_written": (

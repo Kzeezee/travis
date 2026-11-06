@@ -14,6 +14,8 @@ STOP_REASONS = {0: "end_turn", 2: "error", 3: "budget", 4: "length"}
 # 2026) stay in the future however late the eval is run.
 EVAL_DATE = "2026-10-01"
 
+WAIT_FOR_PORT = "for _ in $(seq 100); do (exec 3<>/dev/tcp/127.0.0.1/{port}) 2>/dev/null && exit 0; sleep 0.1; done; exit 1"
+
 @agent
 def travis(hidden_tools: tuple[str, ...] = ()) -> Agent:
     """hidden_tools is an ablation applied in the bridge, outside travis, so no shipped code gains
@@ -33,6 +35,11 @@ def travis(hidden_tools: tuple[str, ...] = ()) -> Agent:
 
     async def execute(state: AgentState) -> AgentState:
         async with sandbox_agent_bridge(state, filter=ablate) as bridge:
+            # The bridge starts its in-container proxy without waiting for it to listen, so a fast
+            # first request was refused and scored as the agent's failure.
+            ready = await sandbox().exec(["bash", "-c", WAIT_FOR_PORT.format(port=bridge.port)], timeout=30)
+            if not ready.success:
+                raise RuntimeError(f"model bridge never listened on port {bridge.port}")
             result = await sandbox().exec(
                 [
                     "travis", "run",

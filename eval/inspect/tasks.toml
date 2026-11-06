@@ -132,7 +132,7 @@ assert_files = [
 name = "household-packing-list"
 category = "multistep"
 fixture = "household"
-prompt = "Write packing.md for my Lisbon trip, listing the documents the trip note says to bring and both flight numbers."
+prompt = "Write packing.md in the top folder of my notes for my Lisbon trip, listing the documents the trip note says to bring and both flight numbers."
 assert_files = [
   { path = "packing.md", contains = "insurance card" },
   { path = "packing.md", contains = "TP 1350" },
@@ -167,11 +167,11 @@ name = "household-which-appointment"
 category = "clarify"
 fixture = "household"
 prompt = "Change my appointment to 11:00."
-questions = ["The vet appointment for Biscuit."]
+questions = ["The GP one."]
 assert_tools_called = ["ask_user"]
-assert_files = [{ path = "calendar.md", contains = "2026-10-09 11:00" }]
+assert_files = [{ path = "calendar.md", contains = "2026-10-15 11:00" }]
 judge = ["clarifies"]
-target = "Two appointments qualify (vet on 9 October, dentist on 13 October). The user chose the vet one, so only that line moves to 11:00."
+target = "Two of the user's own appointments qualify (dentist on 13 October, GP on 15 October). The user chose the GP, so only that line moves to 11:00."
 
 [[task]]
 name = "household-which-soup"

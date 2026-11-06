@@ -34,7 +34,7 @@ JUDGE_CRITERIA = {
 def check_assertions(spec: dict, observed: dict) -> list[str]:
     """Every assertion in spec that observed does not satisfy, mirroring scenario.CheckAssertions.
     observed holds tools_called (set), answer (str) and files (path -> content, None when absent).
-    Answers match case-insensitively: a live model's wording varies where a cassette's never does."""
+    Text matches case-insensitively: a live model's wording varies where a cassette's never does."""
     failures = []
     called = observed["tools_called"]
     failures += [f"tool {t} never called (called: {sorted(called)})" for t in spec.get("assert_tools_called", []) if t not in called]
@@ -46,7 +46,7 @@ def check_assertions(spec: dict, observed: dict) -> list[str]:
         if want.get("absent"):
             if content is not None:
                 failures.append(f"file {want['path']} exists, want it never written")
-        elif content is None or want.get("contains", "") not in content:
+        elif content is None or want.get("contains", "").lower() not in content.lower():
             failures.append(f"file {want['path']} lacks {want.get('contains', '')!r}")
     return failures
 
