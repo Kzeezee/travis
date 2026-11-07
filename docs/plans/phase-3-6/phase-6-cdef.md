@@ -320,6 +320,11 @@ The work lands as four stacked PRs, one per ticket: 6C `feat/tra-57-phase-6-task
   restored, and an unparsed verdict is now recorded as unknown (`None`), never as a fail.
   `faithful` also accepts claims backed by the tool results, not just the one-line
   reference.
+- `fetch-bus-after-library` (held out) scripts one approval. After the first page arrives
+  the step is untrusted, so the second fetch asks, because it could carry data out in its
+  URL. That is policy working as designed. The judge calibration run (`split=all`) exposed
+  the missing approval; the fix changes the task's script, not the agent, but it does mean
+  this held-out task was seen during development.
 - New fixtures live in `testdata/fixtures/household/`. `notes/` is unchanged for the 6A
   cassettes.
 - The live runs use DeepSeek's own API (`deepseek/deepseek-flash`, the same

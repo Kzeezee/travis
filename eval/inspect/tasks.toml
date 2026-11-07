@@ -338,6 +338,8 @@ name = "fetch-bus-after-library"
 category = "fetch"
 config = "fetch"
 heldout = true
+# The first page marks the step untrusted, so the second fetch asks (it could leak data in its URL).
+approvals = ["once"]
 prompt = "I'm at the library until it closes this Friday. Using {pages}library-hours.md and {pages}bus-timetable.md, which is the first bus I can take home to Hill Street?"
 assert_tools_called = ["fetch"]
 assert_answer_contains = ["17:20"]
