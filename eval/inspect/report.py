@@ -72,7 +72,8 @@ def build_judge(rows: list[dict]) -> tuple[list[str], set[str]]:
             lines.append(f"| {criterion} | {len(criterion_pairs)} | {100 * agreement:.0f}% | {kappa:.2f} "
                          f"| {'yes' if kappa >= KAPPA_THRESHOLD else 'no'} |")
     else:
-        lines.append("No hand labels are committed yet (`eval/judge/labels.csv`), so no judge criterion counts.")
+        lines.append("No transcript is hand-labelled yet (a 0 or 1 in `human` in `eval/judge/labels.csv`), "
+                     "so no judge criterion counts.")
     known_bad = [r for r in rows if r["task"].startswith("known_bad/") and r["judge"]]
     if known_bad:
         failed = sum(all(verdict is False for verdict in r["judge"].values()) for r in known_bad)
