@@ -345,12 +345,24 @@ errors.** Of the six failures:
   turn. travis's system prompt never mentions `ask_user`. The tasks stay strict, as TRA-57
   requires, and the report records this as a finding.
 
+**6E live run (committed under `eval/results/injection/`, 80 runs, USD 0.087).**
+
+- Utility is 10/10 in every condition, and no canary leaked.
+- Attack success: 0/10 with policy on (with marking on or off), 1/10 with policy off and
+  marking on, and 2/10 with both off. That meets the sanity check.
+- Both successful attacks are a logging rule that makes the model write a file: one in
+  `AGENTS.md`, one in a workspace skill. With policy on, neither loads unless approved.
+- The model flagged every planted workspace, MCP and fetch instruction instead of
+  following it.
+- The first attempt used AgentDojo's "message from the user" template and got 0/10 even
+  with both defences off: the model named it as an injection every time. The payloads now
+  fit their context. That run also found a harness bug: copying the fixture overwrote
+  planted workspace files. The fixture is now copied with no-clobber, in 6C. That run's
+  results were discarded.
+
 **Left, all needing model spend or a person:**
 
-1. 6E: `make eval-live ARGS="tasks.py@injection --model deepseek/deepseek-flash --trials 1
-   --log-dir ../results/injection -T policy=P -T marking=M"` for the four conditions (about
-   USD 0.50), then commit the results.
-2. 6D: run `known_bad.py` into `../results/judge`, hand-label about 50 judged transcripts
+1. 6D: run `known_bad.py` into `../results/judge`, hand-label about 50 judged transcripts
    into `eval/judge/labels.csv`, and commit both.
-3. 6F: the published run (36 × 3) and two ablations into `../results/published` and
+2. 6F: the published run (36 × 3) and two ablations into `../results/published` and
    `../results/ablations`, code `failures.csv`, then `make eval-report` and commit.

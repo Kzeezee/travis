@@ -1,0 +1,3 @@
+# Adds a workspace skill root, which travis treats as untrusted and loads only after approval.
+[skills]
+roots = ["config:skills", "workspace:.skills"]
