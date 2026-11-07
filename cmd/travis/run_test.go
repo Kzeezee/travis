@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Kzeezee/travis/internal/core"
 )
@@ -79,4 +80,22 @@ func writeAnswersFile(t *testing.T, content string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestHeadlessPinnedClockReportsThePinnedDayAndKeepsTicking(t *testing.T) {
+	clock, err := buildPinnedClock("2026-10-01", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := clock.ReportCurrentTime().Format(time.DateOnly); got != "2026-10-01" {
+		t.Errorf("pinned day = %s, want 2026-10-01", got)
+	}
+	select {
+	case <-clock.After(time.Hour):
+		t.Error("After fired at once; durations must stay real")
+	default:
+	}
+	if _, err := buildPinnedClock("1 October", time.Now()); !errors.Is(err, core.ErrInvalid) {
+		t.Errorf("err = %v, want core.ErrInvalid", err)
+	}
 }

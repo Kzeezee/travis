@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
@@ -127,6 +128,30 @@ func loadScriptedAnswers(path string) (scriptedAnswers, error) {
 	return answers, nil
 }
 
+// shiftedClock is the system clock moved by a fixed offset: the date is pinned but durations,
+// timeouts and backoff stay real, which a FixedClock (whose After fires at once) would break.
+type shiftedClock struct {
+	core.SystemClock
+	offset time.Duration
+}
+
+func (c shiftedClock) ReportCurrentTime() time.Time {
+	return c.SystemClock.ReportCurrentTime().Add(c.offset)
+}
+
+// buildPinnedClock starts the clock at the start of date (YYYY-MM-DD, local time), so a
+// fixture's dates read the same on every run; an empty date is the unshifted system clock.
+func buildPinnedClock(date string, now time.Time) (core.Clock, error) {
+	if date == "" {
+		return core.SystemClock{}, nil
+	}
+	day, err := time.ParseInLocation(time.DateOnly, date, time.Local)
+	if err != nil {
+		return nil, fmt.Errorf("--now %q is not YYYY-MM-DD: %w", date, core.ErrInvalid)
+	}
+	return shiftedClock{offset: day.Sub(now)}, nil
+}
+
 // runHeadless runs one prompt to completion with no terminal, for the eval harness.
 // shortcut: duplicates runChat's setup minus voice and the TUI; 6B should share one assembly.
 func runHeadless(args []string, out io.Writer) error {
@@ -136,7 +161,12 @@ func runHeadless(args []string, out io.Writer) error {
 	answersPath := flags.String("answers", "", "JSON file of scripted approvals and ask_user answers")
 	baseURL := flags.String("base-url", "", "override the active provider profile's endpoint base URL")
 	model := flags.String("model", "", "override the active provider profile's model name")
+	now := flags.String("now", "", "run as if today were this date (YYYY-MM-DD), so fixture dates stay in the future")
 	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	clock, err := buildPinnedClock(*now, core.SystemClock{}.ReportCurrentTime())
+	if err != nil {
 		return err
 	}
 	if *prompt == "" {
@@ -207,11 +237,15 @@ func runHeadless(args []string, out io.Writer) error {
 			ResolveLauncher: func() (string, error) { return broker.ResolveVerifiedBrokerExecutable(brokerSHA256) },
 			IsRequired:      cfg.Security.RequireSandbox,
 		},
+		Clock: clock,
 	})
 	if err != nil {
 		return err
 	}
 
+	// The scripted approver needs no event loop, so a single turn can wait for every MCP tool
+	// instead of racing the first model request against the servers' handshakes.
+	session.mcpManager.WaitUntilStarted()
 	events, unsubscribe := session.bus.Subscribe(nil)
 	outcome := make(chan core.StopReason, 1)
 	go func() { outcome <- printHeadlessEvents(events, out) }()

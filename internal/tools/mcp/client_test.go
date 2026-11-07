@@ -111,6 +111,20 @@ func TestBuildManagerDoesNotBlockOnAPendingApproval(t *testing.T) {
 	}
 }
 
+// TestWaitUntilStartedReturnsWithEveryToolRegistered is what a headless turn relies on: once
+// it returns, the first model request already sees the server's tools.
+func TestWaitUntilStartedReturnsWithEveryToolRegistered(t *testing.T) {
+	servers := config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": buildTestServerConfig()}}
+	reg := registry.BuildRegistry(100)
+	manager := BuildManager(servers, grantedExecPolicy(), &fakeApprover{decision: core.ApprovalOnce}, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir(), testSandboxing())
+	t.Cleanup(manager.Close)
+
+	manager.WaitUntilStarted()
+	if _, ok := reg.Lookup("mcp_fake_echo"); !ok {
+		t.Fatal("WaitUntilStarted returned before mcp_fake_echo was registered")
+	}
+}
+
 // TestTrustPersistsAcrossManagersSharingAStateDir is the actual behavior this trust store
 // exists to deliver: approve a server "always" once, and a brand new Manager — standing in
 // for a brand new `travis chat` process — must connect without asking again, because the

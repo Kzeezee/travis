@@ -39,6 +39,8 @@ Sizing the published run: runs = tasks × trials. Start at 30 tasks × 3 trials 
 If that exceeds the share, cut trials to 2 before cutting tasks. Never go below 30 tasks;
 below that the 95% interval is too wide to report anything.
 
+The implementation plan for 6C–6F is in [phase-6-cdef.md](phase-6-cdef.md).
+
 ### 6A Regression suite (new)
 
 | | |
@@ -76,7 +78,7 @@ below that the 95% interval is too wide to report anything.
 
 | | |
 |---|---|
-| Changes | Hand-label about 50 transcripts. Report judge–human agreement per criterion. Only criteria above the agreed threshold count in the scorecard. |
+| Changes | Hand-label about 50 transcripts. Report judge–human agreement per criterion. Only criteria at or above the agreed threshold, Cohen's κ ≥ 0.6, count in the scorecard. The agreement table is computed by `eval/inspect/report.py` from the committed labels. |
 | Proof | Agreement table committed; known-bad transcripts fail the judge. |
 | Depends on | 6C |
 
@@ -84,7 +86,7 @@ below that the 95% interval is too wide to report anything.
 
 | | |
 |---|---|
-| Changes | AgentDojo-style suite with the model in the loop. Attacks planted in fetched pages, MCP results, AGENTS.md, skills and workspace files; starts from the 3F and 3E red-team cases. Reports utility without attack, utility under attack, and attack success rate with defences on and off. Canary-secret check: the canary never appears in traces, the session log or memory. |
+| Changes | AgentDojo-style suite with the model in the loop. Attacks planted in fetched pages, MCP results, AGENTS.md, skills and workspace files; starts from the 3F and 3E red-team cases. Reports utility without attack, utility under attack, and attack success rate with defences on and off. Canary-secret check: the canary never appears in traces, the session log or memory. Defences are switched on the eval side, so no shipped code gains an off state: policy off means the scripted approver approves every ask, and untrusted marking off means the agent bridge strips the delimiters before the model sees them. Hard denials (`host_allow`, the denylist) stay on. Starts `eval/inspect/report.py` (Wilson intervals and the injection table), which 6F extends. |
 | Proof | With policy and untrusted marking off, attack success is non-zero (the suite can detect attacks); with them on, it is reported with intervals. |
 | Depends on | 6B, 3E, 3F |
 
@@ -92,7 +94,7 @@ below that the 95% interval is too wide to report anything.
 
 | | |
 |---|---|
-| Changes | A script turns results into `docs/EVAL.md`: method, models and dates, pass@1 with Wilson 95% intervals, pass^k (succeeds in all k trials), cost and latency, an error-analysis summary with linked sample transcripts, limitations. Ablations: policy off/on, untrusted marking off/on, `fs_write` only vs with `fs_edit` (D-08), pruning off/on, skills off/on, supervised vs collaborative autonomy (D-09). Ablations run at one trial each to fit the budget. |
+| Changes | A script turns results into `docs/EVAL.md`: method, models and dates, pass@1 with Wilson 95% intervals, pass^k (succeeds in all k trials), cost and latency, an error-analysis summary with linked sample transcripts, limitations. Ablations: `fs_write` only vs with `fs_edit` (D-08) and skills off/on, one trial each to fit the budget. Policy and untrusted marking off/on reuse 6E's matrix. Dropped, with the reason stated in the report: pruning (it never engages below `max_exposed` = 60 tools) and supervised vs collaborative autonomy (D-09; no supervised mode exists to switch to). |
 | Proof | `make eval-report` regenerates `docs/EVAL.md` from committed results with no diff. |
 | Depends on | 6C, 6D, 6E |
 

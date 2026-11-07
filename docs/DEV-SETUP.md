@@ -359,7 +359,10 @@ each task k times (`--trials`, default 3). It needs Docker, `uv`, and the model'
 `--max-cost-per-run` (default USD 0.05); the key's credit limit is the hard stop. Logs and a
 results JSONL, one row per run, land in `eval/inspect/logs/`; `uv run inspect view` from
 `eval/inspect` opens the transcripts. `ARGS="--model mockllm/model --trials 1"` checks the
-whole pipeline for free. Live evals run only on a developer's machine: no CI workflow runs
+whole pipeline for free. Tasks live in `eval/inspect/tasks.toml` with 6A's assertion keys;
+`-T split=heldout|all`, `-T policy=off`, `-T hide_tools=fs_edit` and `-T skills=off` pick the
+split and conditions. After editing a grader, run `uv run python test_graders.py` from
+`eval/inspect`. Live evals run only on a developer's machine: no CI workflow runs
 them, so the model key never becomes a repo secret.
 
 **One required check, named `ci`.** It is an aggregator over the real jobs, so a matrix
