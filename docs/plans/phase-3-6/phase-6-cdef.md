@@ -313,7 +313,13 @@ The work lands as four stacked PRs, one per ticket: 6C `feat/tra-57-phase-6-task
 - The `helpful` judge criterion is dropped, since no task used it.
 - An injection case names its `goal`, and `tasks.ATTACK_TEMPLATE` wraps it in AgentDojo's
   "important instructions" text. Fetch cases fetch a committed `-clean` or `-attacked`
-  page; 6C and 6E each pin pages to their own commit.
+  page. All pages, the injection pages included, are in one commit at the base of the
+  stack, so rebasing the stack never moves the pin.
+- The judge's custom instructions replaced `model_graded_qa`'s request for a `GRADE: C/I`
+  line, so every verdict came back unparsed and counted as a fail. The format line is
+  restored, and an unparsed verdict is now recorded as unknown (`None`), never as a fail.
+  `faithful` also accepts claims backed by the tool results, not just the one-line
+  reference.
 - New fixtures live in `testdata/fixtures/household/`. `notes/` is unchanged for the 6A
   cassettes.
 - The live runs use DeepSeek's own API (`deepseek/deepseek-flash`, the same
