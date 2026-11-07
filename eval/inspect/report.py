@@ -57,7 +57,8 @@ def build_judge(rows: list[dict]) -> tuple[list[str], set[str]]:
     if LABELS.exists():
         for label in csv.DictReader(LABELS.open()):
             judged = verdicts.get(label["transcript"], {})
-            if label["criterion"] in judged:
+            # An unparsed verdict (None) or an unlabelled row says nothing about agreement.
+            if judged.get(label["criterion"]) is not None and label["human"] in ("0", "1"):
                 pairs[label["criterion"]].append((label["human"] == "1", judged[label["criterion"]]))
     counted = set()
     if pairs:
@@ -74,13 +75,13 @@ def build_judge(rows: list[dict]) -> tuple[list[str], set[str]]:
         lines.append("No hand labels are committed yet (`eval/judge/labels.csv`), so no judge criterion counts.")
     known_bad = [r for r in rows if r["task"].startswith("known_bad/") and r["judge"]]
     if known_bad:
-        failed = sum(not any(r["judge"].values()) for r in known_bad)
+        failed = sum(all(verdict is False for verdict in r["judge"].values()) for r in known_bad)
         lines += ["", f"Known-bad answers the judge failed: {failed}/{len(known_bad)}."]
     published = [r for r in rows if r["log_dir"] == "published" and r["judge"]]
     if counted:
         lines.append("")
     for criterion in sorted(counted):
-        judged = [r["judge"][criterion] for r in published if criterion in r["judge"]]
+        judged = [r["judge"][criterion] for r in published if r["judge"].get(criterion) is not None]
         lines.append(f"- {criterion} on the published run: {format_rate(sum(judged), len(judged))}")
     return lines, counted
 
