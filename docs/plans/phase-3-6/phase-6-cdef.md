@@ -360,9 +360,21 @@ errors.** Of the six failures:
   planted workspace files. The fixture is now copied with no-clobber, in 6C. That run's
   results were discarded.
 
-**Left, all needing model spend or a person:**
+**6D and 6F live runs (2026-11-07, `deepseek/deepseek-flash`, USD 0.31 across every run
+so far).**
 
-1. 6D: run `known_bad.py` into `../results/judge`, hand-label about 50 judged transcripts
-   into `eval/judge/labels.csv`, and commit both.
-2. 6F: the published run (36 × 3) and two ablations into `../results/published` and
-   `../results/ablations`, code `failures.csv`, then `make eval-report` and commit.
+- **Judge calibration** (`eval/results/judge/`): the 6 judged tasks run 7 times each, plus
+  the known-bad set. The judge failed 6/6 known-bad answers. `eval/judge/labels.csv` has
+  one row per judged transcript, 48 rows, with `human` blank for hand labels.
+- **Published run** (`eval/results/published/`): 36 tasks × 3 trials. pass@1 is 98/108 =
+  91% [84, 95] and pass^k is 31/36, with no harness errors.
+- **Failures:** 9 of the 10 are the model asking in its reply instead of calling
+  `ask_user`. 1 is a refusal that tried the command first, which policy denied.
+  `failures.csv` was coded from the transcripts and needs your review.
+- **Ablations** (`eval/results/ablations/`, k=1): baseline 33/36, `hide_tools=fs_edit`
+  32/36, `skills=off` 29/36. All three intervals overlap, so the report claims no
+  difference.
+
+**Left: a person.** Fill `human` (1 = meets the criterion, 0 = does not) for the 48 rows in
+`eval/judge/labels.csv`, then run `make eval-report` and commit. Only criteria with κ ≥ 0.6
+will count.
