@@ -8,7 +8,7 @@ from pathlib import Path
 from inspect_ai import eval
 from inspect_ai.log import EvalLog, read_eval_log
 from inspect_ai.model import ModelCost, ModelInfo, set_model_info
-from inspect_ai.scorer import CORRECT
+from inspect_ai.scorer import CORRECT, INCORRECT
 
 DEFAULT_MODEL = "openrouter/deepseek/deepseek-v4.1-flash-1017"
 
@@ -47,7 +47,8 @@ def build_result_rows(log: EvalLog) -> list[dict]:
             "canary_leaked": read_verdict(sample, "canary"),
             # 6D decides which criteria count; until then the judge is recorded, not scored.
             "judge": None if sample.error or not judged or judged.explanation != "judged"
-            else {criterion: value == CORRECT for criterion, value in judged.value.items()},
+            # A verdict the judge's reply did not state (NaN) is unknown, not a fail.
+            else {c: (v == CORRECT) if v in (CORRECT, INCORRECT) else None for c, v in judged.value.items()},
             "steps": sum(1 for event in sample.events if event.event == "model"),
             "tokens": sum(u.total_tokens for u in usage),
             "cost_usd": sum(u.total_cost or 0 for u in usage),
@@ -63,6 +64,7 @@ def main() -> int:
     parser.add_argument("-T", dest="task_args", action="append", default=[], metavar="NAME=VALUE",
                         help="task argument, e.g. -T split=all -T policy=off")
     parser.add_argument("--log-dir", default="logs", help="where the .eval logs and results JSONL go")
+    parser.add_argument("--sample-id", help="run only these samples, comma-separated")
     parser.add_argument("--model", default=DEFAULT_MODEL, choices=sorted(PRICES))
     parser.add_argument("--trials", type=int, default=3, help="k: runs per task")
     # Soft stop. 0.05 is ~17x the spike's measured cost per run, so 30 tasks x 3 trials stays
@@ -73,7 +75,8 @@ def main() -> int:
     set_model_info(args.model, ModelInfo(cost=PRICES[args.model]))
     task_args = dict(arg.split("=", 1) for arg in args.task_args)
     logs = eval(args.tasks, model=args.model, epochs=args.trials, cost_limit=args.max_cost_per_run,
-                task_args=task_args, log_dir=args.log_dir)
+                task_args=task_args, log_dir=args.log_dir,
+                sample_id=args.sample_id.split(",") if args.sample_id else None)
 
     for log in logs:
         results = Path(log.location).with_suffix(".jsonl")

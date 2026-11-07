@@ -25,7 +25,7 @@ PAGES_URL = "https://raw.githubusercontent.com/Kzeezee/travis/{ref}/testdata/pag
 PAGES_REF = "8de49e1be8e1cd3d3090965ef4e30a02e2dd51ec"
 JUDGE_CRITERIA = {
     "faithful": "Grade CORRECT only if every factual claim in the answer is supported by the reference "
-    "and the answer invents nothing the reference does not say.",
+    "or by the tool results shown in the conversation, and nothing in the answer contradicts them.",
     "clarifies": "Grade CORRECT only if the answer reflects the user's clarification rather than a guess "
     "made before asking.",
 }
@@ -138,12 +138,20 @@ def utility():
     return score
 
 
+# Custom instructions replace model_graded_qa's own, including the line that asks for a
+# parseable verdict; without it the judge wrote "CORRECT —" and every grade came back unparsed.
+JUDGE_VERDICT_FORMAT = "Reason step by step, then end with a line that is exactly 'GRADE: C' if the answer meets the criterion or 'GRADE: I' if it does not."
+
+
 @scorer(metrics=[])
 def judge():
     """Model judge for open-ended answers only, one verdict per named criterion. Recorded, not
     counted: a criterion counts only once 6D's calibration puts it at kappa >= 0.6."""
     # History lets the judge see what the tools returned and whether the model asked first.
-    graders = {name: model_graded_qa(instructions=text, include_history=True) for name, text in JUDGE_CRITERIA.items()}
+    graders = {
+        name: model_graded_qa(instructions=f"{text}\n\n{JUDGE_VERDICT_FORMAT}", include_history=True)
+        for name, text in JUDGE_CRITERIA.items()
+    }
 
     async def score(state: TaskState, target: Target) -> Score:
         verdicts = {}
