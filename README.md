@@ -264,8 +264,3 @@ docs/                design, plan, setup, eval report
 ### License
 
 [Apache License 2.0](LICENSE).
-
-### Credits
-
-Built for CS464 Full-Stack Development by the travis team. See the
-[contributors](https://github.com/Kzeezee/travis/graphs/contributors).
