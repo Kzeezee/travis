@@ -36,9 +36,18 @@ Cost: USD 0.1936 in total, USD 0.0018 per run. Latency: median 47.6 s, max 147.4
 
 ## Judge calibration
 
-No transcript is hand-labelled yet (a 0 or 1 in `human` in `eval/judge/labels.csv`), so no judge criterion counts.
+Labels were suggested by a model (Claude, reading each answer without the judge's verdict) and confirmed by a person, so they are weaker evidence than blind labels.
+
+Threshold: Cohen's κ ≥ 0.6. Only criteria that pass count in the scorecard.
+
+| Criterion | Labelled | Agreement | κ | Counts |
+|---|---|---|---|---|
+| clarifies | 16 | 94% | 0.82 | yes |
+| faithful | 32 | 72% | 0.35 | no |
 
 Known-bad answers the judge failed: 6/6.
+
+- clarifies on the published run: 1/6 = 17% [3, 56]
 
 ## Prompt injection
 
