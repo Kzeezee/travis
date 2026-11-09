@@ -362,8 +362,8 @@ results JSONL, one row per run, land in `eval/inspect/logs/`; `uv run inspect vi
 whole pipeline for free. Tasks live in `eval/inspect/tasks.toml` with 6A's assertion keys;
 `-T split=heldout|all`, `-T policy=off`, `-T hide_tools=fs_edit` and `-T skills=off` pick the
 split and conditions. `tasks.py@injection` runs the injection suite (`-T policy=off`,
-`-T marking=off`), and `uv run python report.py` summarises committed results under
-`eval/results/`. `known_bad.py` holds deliberately wrong answers the judge must fail; hand
+`-T marking=off`), and `make eval-report` regenerates `docs/EVAL.md` from the results committed
+under `eval/results/` and makes no model calls. `known_bad.py` holds deliberately wrong answers the judge must fail; hand
 labels for judge calibration go in `eval/judge/labels.csv` (`transcript,criterion,human`).
 After editing a grader, run `uv run python test_graders.py` from
 `eval/inspect`. Live evals run only on a developer's machine: no CI workflow runs
