@@ -148,6 +148,9 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if lockWarning := broker.ClaimWorkspace(paths.WorkspaceDir, os.Getpid()); lockWarning != "" {
+		startupWarnings = append(startupWarnings, lockWarning)
+	}
 	// Not cfg.Profile, for the same reason startSessionBroker below pins "default": the
 	// workspace config layer can set that, and a cloned repo must not choose its own
 	// security profile. This is the same policy construction the broker process uses

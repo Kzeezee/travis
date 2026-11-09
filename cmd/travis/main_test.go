@@ -59,6 +59,7 @@ func TestRun(t *testing.T) {
 func TestRunChatWiresTheSliceWithoutCallingTheProvider(t *testing.T) {
 	travisHome := t.TempDir()
 	t.Setenv("TRAVIS_HOME", travisHome)
+	t.Chdir(t.TempDir())
 	var out bytes.Buffer
 
 	err := run([]string{"chat", "--model", "test-model"}, strings.NewReader(""), &out)
