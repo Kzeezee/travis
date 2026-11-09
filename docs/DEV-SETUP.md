@@ -205,7 +205,11 @@ workspace `.travis/config.toml`, and never writes a key into any file.
 [args...]` shows a provenance card (publisher, publish date, weekly downloads, direct
 dependencies, integrity) from npm or PyPI and saves the server only when you type `y` at
 a terminal; piped input is refused. `npx` and `uvx` packages must pin an exact version
-(`pkg@1.2.3`, `pkg==1.2.3`). Re-adding a name replaces it, which is how you update one;
+(`pkg@1.2.3`, `pkg==1.2.3`). To skip writing the runner, name the package instead of the
+command: `travis mcp add fs --allow-net npm:@modelcontextprotocol/server-filesystem ~/notes`
+or `travis mcp add time --allow-net pypi:mcp-server-time`; travis pins the registry's latest
+version (or the one you give, `npm:pkg@1.2.3`, `pypi:pkg==1.2.3`) and passes any further
+arguments to the server. Re-adding a name replaces it, which is how you update one;
 `travis mcp remove <name>` deletes it. `--env` values are stored in plain text.
 
 **Seeing what is set up.** `travis provider list` shows each profile, the active one and

@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	mcpUsage = "usage: travis mcp list | add <name> [--allow-net] [--env KEY=VALUE]... [--] <command> [args...] | remove <name>"
+	mcpUsage = "usage: travis mcp list | add <name> [--allow-net] [--env KEY=VALUE]... [--] <command | npm:<pkg>[@version] | pypi:<pkg>[==version]> [args...] | remove <name>"
 	// registryTimeout bounds the provenance lookup; npm's full document for a busy package can be slow.
 	registryTimeout = 20 * time.Second
 )
@@ -160,22 +160,38 @@ func (i mcpInstall) addServer(args []string) error {
 		return fmt.Errorf("travis mcp add must be confirmed at a terminal; it never installs from piped input: %w", core.ErrInvalid)
 	}
 
-	ref, isRegistry, err := mcp.ResolvePackageRef(server.Command, server.Args)
+	ref, isShorthand, err := mcp.ParsePackageShorthand(launch[0])
+	isRegistry := isShorthand
+	if err == nil && !isShorthand {
+		ref, isRegistry, err = mcp.ResolvePackageRef(server.Command, server.Args)
+	}
 	if err != nil {
 		return err
 	}
+	var provenance mcp.Provenance
+	var lookupErr error
+	if isRegistry {
+		ctx, cancel := context.WithTimeout(context.Background(), registryTimeout)
+		provenance, lookupErr = i.lookup.FetchProvenance(ctx, ref)
+		cancel()
+		if errors.Is(lookupErr, core.ErrInvalid) || (lookupErr != nil && ref.Version == "") {
+			return lookupErr
+		}
+		if lookupErr == nil {
+			ref = provenance.Ref
+		}
+	}
+	if isShorthand {
+		command, args := ref.BuildLaunch()
+		server.Command, server.Args = command, append(args, launch[1:]...)
+	}
+
 	card := []string{"install MCP server " + name, "  runs        " + describeLaunch(server)}
 	if existing, err := i.findConfiguredServer(name); err == nil && existing != nil {
 		card = append(card, "  replaces    "+describeLaunch(*existing))
 	}
 	if isRegistry {
-		ctx, cancel := context.WithTimeout(context.Background(), registryTimeout)
-		provenance, err := i.lookup.FetchProvenance(ctx, ref)
-		cancel()
-		if errors.Is(err, core.ErrInvalid) {
-			return err
-		}
-		card = append(card, i.describeProvenance(ref, provenance, err)...)
+		card = append(card, i.describeProvenance(ref, provenance, lookupErr)...)
 		if !server.AllowNet {
 			card = append(card, "  ⚠ "+string(ref.Registry)+" packages download on first launch; without --allow-net that launch will fail")
 		}

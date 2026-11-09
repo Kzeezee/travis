@@ -24,6 +24,7 @@ const (
 )
 
 // PackageRef is the registry package a server's launch command runs, at an exact version.
+// Only a ref parsed from shorthand may leave Version empty, meaning "the registry's latest".
 type PackageRef struct {
 	Registry Registry
 	Name     string
@@ -77,6 +78,41 @@ func ResolvePackageRef(command string, args []string) (PackageRef, bool, error) 
 	}
 }
 
+// ParsePackageShorthand reads "npm:<pkg>[@<exact>]" or "pypi:<pkg>[==<exact>]", which name a
+// package without its runner; anything else is not shorthand and reports false.
+func ParsePackageShorthand(spec string) (PackageRef, bool, error) {
+	prefix, rest, _ := strings.Cut(spec, ":")
+	var ref PackageRef
+	switch prefix {
+	case "npm":
+		ref.Registry = RegistryNPM
+		ref.Name, ref.Version = splitNPMSpec(rest)
+		if ref.Version != "" && !exactNPMVersion.MatchString(ref.Version) {
+			return PackageRef{}, true, fmt.Errorf("pin an exact version, such as %s@1.2.3, or none for the latest, not %q: %w", ref.Name, spec, core.ErrInvalid)
+		}
+	case "pypi":
+		ref.Registry = RegistryPyPI
+		ref.Name, ref.Version, _ = strings.Cut(rest, "==")
+		if (ref.Version != "" && !exactPyPIVersion.MatchString(ref.Version)) || strings.ContainsAny(ref.Name, "<>=!~@") {
+			return PackageRef{}, true, fmt.Errorf("pin an exact version, such as %s==1.2.3, or none for the latest, not %q: %w", ref.Name, spec, core.ErrInvalid)
+		}
+	default:
+		return PackageRef{}, false, nil
+	}
+	if ref.Name == "" || strings.HasPrefix(ref.Name, "-") {
+		return PackageRef{}, true, fmt.Errorf("%q names no package: %w", spec, core.ErrInvalid)
+	}
+	return ref, true, nil
+}
+
+// BuildLaunch is the runner command that installs and starts ref; ResolvePackageRef reads it back.
+func (ref PackageRef) BuildLaunch() (command string, args []string) {
+	if ref.Registry == RegistryPyPI {
+		return "uvx", []string{ref.Name + "==" + ref.Version}
+	}
+	return "npx", []string{"-y", ref.Name + "@" + ref.Version}
+}
+
 // selectPackageSpec is the explicit package flag's value, else the first argument that is not a flag.
 func selectPackageSpec(args []string, shortFlag, longFlag string) string {
 	for i, arg := range args {
@@ -124,6 +160,7 @@ func BuildRegistryLookup(client *http.Client) RegistryLookup {
 
 // FetchProvenance reports what ref's registry says about it. A version the registry does not
 // have is an error, since installing it would fail anyway; download counts are best effort.
+// An empty Version is pinned to the registry's latest, reported in the result's Ref.
 func (l RegistryLookup) FetchProvenance(ctx context.Context, ref PackageRef) (Provenance, error) {
 	switch ref.Registry {
 	case RegistryNPM:
@@ -137,6 +174,9 @@ func (l RegistryLookup) FetchProvenance(ctx context.Context, ref PackageRef) (Pr
 
 func (l RegistryLookup) fetchNPMProvenance(ctx context.Context, ref PackageRef) (Provenance, error) {
 	var doc struct {
+		DistTags struct {
+			Latest string `json:"latest"`
+		} `json:"dist-tags"`
 		Time     map[string]string `json:"time"`
 		Versions map[string]struct {
 			Dependencies map[string]string `json:"dependencies"`
@@ -150,6 +190,9 @@ func (l RegistryLookup) fetchNPMProvenance(ctx context.Context, ref PackageRef) 
 	}
 	if err := l.fetchJSON(ctx, l.npmBaseURL+"/"+url.PathEscape(ref.Name), &doc); err != nil {
 		return Provenance{}, err
+	}
+	if ref.Version == "" {
+		ref.Version = doc.DistTags.Latest
 	}
 	version, ok := doc.Versions[ref.Version]
 	if !ok {
@@ -172,6 +215,7 @@ func (l RegistryLookup) fetchNPMProvenance(ctx context.Context, ref PackageRef) 
 func (l RegistryLookup) fetchPyPIProvenance(ctx context.Context, ref PackageRef) (Provenance, error) {
 	var doc struct {
 		Info struct {
+			Version      string   `json:"version"`
 			Author       string   `json:"author"`
 			Maintainer   string   `json:"maintainer"`
 			RequiresDist []string `json:"requires_dist"`
@@ -183,8 +227,15 @@ func (l RegistryLookup) fetchPyPIProvenance(ctx context.Context, ref PackageRef)
 			} `json:"digests"`
 		} `json:"urls"`
 	}
-	if err := l.fetchJSON(ctx, l.pypiBaseURL+"/"+url.PathEscape(ref.Name)+"/"+url.PathEscape(ref.Version)+"/json", &doc); err != nil {
+	address := l.pypiBaseURL + "/" + url.PathEscape(ref.Name)
+	if ref.Version != "" {
+		address += "/" + url.PathEscape(ref.Version)
+	}
+	if err := l.fetchJSON(ctx, address+"/json", &doc); err != nil {
 		return Provenance{}, err
+	}
+	if ref.Version == "" {
+		ref.Version = doc.Info.Version
 	}
 	provenance := Provenance{Ref: ref, Publisher: doc.Info.Author, WeeklyDownloads: -1}
 	if provenance.Publisher == "" {
