@@ -38,6 +38,39 @@ func TestResolvePackageRefRequiresAnExactVersion(t *testing.T) {
 	}
 }
 
+func TestParsePackageShorthandRoundTripsThroughTheLaunchCommand(t *testing.T) {
+	cases := []struct {
+		spec  string
+		want  PackageRef
+		isErr bool
+	}{
+		{spec: "npm:@scope/server", want: PackageRef{RegistryNPM, "@scope/server", ""}},
+		{spec: "npm:@scope/server@1.2.3", want: PackageRef{RegistryNPM, "@scope/server", "1.2.3"}},
+		{spec: "pypi:mcp-server-time", want: PackageRef{RegistryPyPI, "mcp-server-time", ""}},
+		{spec: "pypi:mcp-server-time==2024.1", want: PackageRef{RegistryPyPI, "mcp-server-time", "2024.1"}},
+		{spec: "npm:server@latest", isErr: true},
+		{spec: "pypi:mcp-server-time>=1.0", isErr: true},
+		{spec: "npm:", isErr: true},
+		{spec: "pypi:-rf", isErr: true},
+	}
+	for _, tc := range cases {
+		got, isShorthand, err := ParsePackageShorthand(tc.spec)
+		if !isShorthand || (err != nil) != tc.isErr || (!tc.isErr && got != tc.want) {
+			t.Errorf("%s: got %+v, %v, %v; want %+v, error %v", tc.spec, got, isShorthand, err, tc.want, tc.isErr)
+		}
+	}
+	if _, isShorthand, err := ParsePackageShorthand("npx"); isShorthand || err != nil {
+		t.Fatalf("a plain command got %v, %v; want no shorthand and no error", isShorthand, err)
+	}
+
+	for _, ref := range []PackageRef{{RegistryNPM, "@scope/server", "1.2.3"}, {RegistryPyPI, "mcp-server-time", "2024.1"}} {
+		command, args := ref.BuildLaunch()
+		if got, _, err := ResolvePackageRef(command, args); err != nil || got != ref {
+			t.Errorf("%+v launched as %s %v resolves back to %+v, %v", ref, command, args, got, err)
+		}
+	}
+}
+
 func buildTestRegistryLookup(t *testing.T, routes map[string]string) RegistryLookup {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -68,6 +101,22 @@ func TestFetchProvenanceReadsTheNPMVersionDocument(t *testing.T) {
 	}
 	if _, err := lookup.FetchProvenance(context.Background(), PackageRef{RegistryNPM, "@scope/server", "9.9.9"}); !errors.Is(err, core.ErrInvalid) {
 		t.Fatalf("got %v for a version npm does not have, want ErrInvalid", err)
+	}
+}
+
+func TestFetchProvenancePinsTheLatestVersionWhenNoneIsGiven(t *testing.T) {
+	lookup := buildTestRegistryLookup(t, map[string]string{
+		"/npm/server":         `{"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{"_npmUser":{"name":"alice"}}}}`,
+		"/pypi/mcp-time/json": `{"info":{"version":"2026.1","author":"bob"}}`,
+	})
+
+	npm, err := lookup.FetchProvenance(context.Background(), PackageRef{RegistryNPM, "server", ""})
+	if err != nil || npm.Ref.Version != "2.0.0" || npm.Publisher != "alice" {
+		t.Fatalf("got %+v, %v; want npm's latest, 2.0.0", npm, err)
+	}
+	pypi, err := lookup.FetchProvenance(context.Background(), PackageRef{RegistryPyPI, "mcp-time", ""})
+	if err != nil || pypi.Ref.Version != "2026.1" || pypi.Publisher != "bob" {
+		t.Fatalf("got %+v, %v; want PyPI's latest, 2026.1", pypi, err)
 	}
 }
 

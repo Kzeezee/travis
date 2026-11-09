@@ -13,8 +13,12 @@ import (
 
 type fakeRegistry struct{ asked []mcp.PackageRef }
 
+// FetchProvenance pins a missing version to 9.0.0, the fake registry's latest.
 func (r *fakeRegistry) FetchProvenance(_ context.Context, ref mcp.PackageRef) (mcp.Provenance, error) {
 	r.asked = append(r.asked, ref)
+	if ref.Version == "" {
+		ref.Version = "9.0.0"
+	}
 	return mcp.Provenance{Ref: ref, Publisher: "alice", WeeklyDownloads: 4120, DependencyCount: 3, Integrity: "sha512-abc",
 		PublishedAt: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}, nil
 }
@@ -59,6 +63,22 @@ func TestMCPAddShowsTheProvenanceCardAndSavesOnYes(t *testing.T) {
 	got := loadConfiguredServers(t)["github"]
 	if got.Command != "npx" || strings.Join(got.Args, " ") != "-y @scope/server@1.2.3" || !got.AllowNet || got.Env["GITHUB_TOKEN"] != "abc" {
 		t.Fatalf("saved %+v, want the server as given", got)
+	}
+}
+
+func TestMCPAddByPackageNamePinsTheLatestVersion(t *testing.T) {
+	install, out, _ := buildTestInstall(t, "y\n")
+
+	if err := install.addServer([]string{"fs", "--allow-net", "npm:@scope/server", "/home/me/notes"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(out.String(), "@scope/server @ 9.0.0 (npm)") || !strings.Contains(out.String(), "runs        npx -y @scope/server@9.0.0 /home/me/notes") {
+		t.Fatalf("got card\n%s\nwant the pinned latest version and its launch command", out)
+	}
+	got := loadConfiguredServers(t)["fs"]
+	if got.Command != "npx" || strings.Join(got.Args, " ") != "-y @scope/server@9.0.0 /home/me/notes" || !got.AllowNet {
+		t.Fatalf("saved %+v, want a pinned npx launch", got)
 	}
 }
 
