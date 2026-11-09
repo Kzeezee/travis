@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"testing"
@@ -13,7 +14,7 @@ func TestIsProcessAliveReportsTheRunningProcess(t *testing.T) {
 }
 
 func TestIsProcessAliveReportsAnExitedProcessAsNotAlive(t *testing.T) {
-	cmd := exec.Command("cmd", "/C", "exit 0")
+	cmd := exec.CommandContext(context.Background(), "cmd", "/C", "exit 0")
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("run short-lived process: %v", err)
 	}
