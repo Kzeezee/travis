@@ -35,6 +35,8 @@ def build_result_rows(log: EvalLog) -> list[dict]:
     for sample in log.samples or []:
         usage = sample.model_usage.values()
         judged = (sample.scores or {}).get("judge")
+        # The judge's own model calls run inside scorer spans and are not agent steps.
+        scorer_spans = {e.id for e in sample.events if e.event == "span_begin" and e.type == "scorer"}
         rows.append({
             "task": f"{log.eval.task}/{sample.id}",
             "model": log.eval.model,
@@ -49,13 +51,20 @@ def build_result_rows(log: EvalLog) -> list[dict]:
             "judge": None if sample.error or not judged or judged.explanation != "judged"
             # A verdict the judge's reply did not state (NaN) is unknown, not a fail.
             else {c: (v == CORRECT) if v in (CORRECT, INCORRECT) else None for c, v in judged.value.items()},
-            "steps": sum(1 for event in sample.events if event.event == "model"),
+            "steps": sum(1 for e in sample.events if e.event == "model" and e.span_id not in scorer_spans),
             "tokens": sum(u.total_tokens for u in usage),
             "cost_usd": sum(u.total_cost or 0 for u in usage),
             "latency_ms": round((sample.total_time or 0) * 1000),
             "transcript": f"{Path(log.location).name}#{sample.id}/{sample.epoch}",
         })
     return rows
+
+
+def write_result_rows(location: str) -> None:
+    results = Path(location).with_suffix(".jsonl")
+    rows = build_result_rows(read_eval_log(location))
+    results.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    print(f"{len(rows)} results written to {results}")
 
 
 def main() -> int:
@@ -79,10 +88,7 @@ def main() -> int:
                 sample_id=args.sample_id.split(",") if args.sample_id else None)
 
     for log in logs:
-        results = Path(log.location).with_suffix(".jsonl")
-        rows = build_result_rows(read_eval_log(log.location))
-        results.write_text("".join(json.dumps(row) + "\n" for row in rows))
-        print(f"{len(rows)} results written to {results}")
+        write_result_rows(log.location)
     return 0 if all(log.status == "success" for log in logs) else 1
 
 

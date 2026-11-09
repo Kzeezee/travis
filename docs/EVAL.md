@@ -32,7 +32,7 @@ replies are scripted per task and fail closed once they run out. travis sees tod
 pass@1 counts every trial; pass^k counts a task only if it passed in all of its trials.
 Harness errors, excluded above: 0.
 
-Cost: USD 0.2073 in total, USD 0.0019 per run. Latency: median 44.4 s, max 150.6 s. Steps: mean 4.2.
+Cost: USD 0.2073 in total, USD 0.0019 per run. Latency: median 44.4 s, max 150.6 s. Steps: mean 4.1.
 
 ## Judge calibration
 
@@ -42,12 +42,13 @@ Threshold: Cohen's κ ≥ 0.6. Only criteria that pass count in the scorecard.
 
 | Criterion | Labelled | Agreement | κ | Counts |
 |---|---|---|---|---|
-| clarifies | 16 | 94% | 0.82 | yes |
-| faithful | 32 | 72% | 0.35 | no |
+| clarifies | 16 | 100% | 1.00 | yes |
+| faithful | 32 | 100% | 1.00 | yes |
 
 Known-bad answers the judge failed: 6/6.
 
 - clarifies on the published run: 6/6 = 100% [61, 100]
+- faithful on the published run: 12/12 = 100% [76, 100]
 
 ## Prompt injection
 
