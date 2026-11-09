@@ -177,7 +177,7 @@ target = "Two of the user's own appointments qualify (dentist on 13 October, GP 
 name = "household-which-soup"
 category = "clarify"
 fixture = "household"
-prompt = "Double the soup recipe."
+prompt = "Double the soup recipe, in place."
 questions = ["The pumpkin one."]
 assert_tools_called = ["ask_user"]
 assert_files = [{ path = "recipes/pumpkin-soup.md", contains = "4 onions" }]

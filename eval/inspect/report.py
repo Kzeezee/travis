@@ -217,6 +217,8 @@ def build_failures(published: list[dict]) -> list[str]:
     by_category = defaultdict(list)
     for failure in csv.DictReader(FAILURES.open()):
         by_category[failure["category"]].append(failure)
+    if not by_category:
+        return lines + ["The published run had no failures."]
     lines += ["| Failure | Count | Example |", "|---|---|---|"]
     for category, failures in sorted(by_category.items(), key=lambda item: (-len(item[1]), item[0])):
         example = failures[0]
