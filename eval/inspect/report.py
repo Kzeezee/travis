@@ -62,6 +62,9 @@ def build_judge(rows: list[dict]) -> tuple[list[str], set[str]]:
                 pairs[label["criterion"]].append((label["human"] == "1", judged[label["criterion"]]))
     counted = set()
     if pairs:
+        if LABELS.exists() and "suggested" in (csv.DictReader(LABELS.open()).fieldnames or []):
+            lines += ["Labels were suggested by a model (Claude, reading each answer without the judge's "
+                      "verdict) and confirmed by a person, so they are weaker evidence than blind labels.", ""]
         lines += [f"Threshold: Cohen's κ ≥ {KAPPA_THRESHOLD}. Only criteria that pass count in the scorecard.", "",
                   "| Criterion | Labelled | Agreement | κ | Counts |", "|---|---|---|---|---|"]
         for criterion, criterion_pairs in sorted(pairs.items()):
