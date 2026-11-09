@@ -58,6 +58,13 @@ def build_result_rows(log: EvalLog) -> list[dict]:
     return rows
 
 
+def write_result_rows(location: str) -> None:
+    results = Path(location).with_suffix(".jsonl")
+    rows = build_result_rows(read_eval_log(location))
+    results.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    print(f"{len(rows)} results written to {results}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tasks", nargs="*", default=["tasks.py@travis_tasks"], help="Inspect tasks")
@@ -79,10 +86,7 @@ def main() -> int:
                 sample_id=args.sample_id.split(",") if args.sample_id else None)
 
     for log in logs:
-        results = Path(log.location).with_suffix(".jsonl")
-        rows = build_result_rows(read_eval_log(log.location))
-        results.write_text("".join(json.dumps(row) + "\n" for row in rows))
-        print(f"{len(rows)} results written to {results}")
+        write_result_rows(log.location)
     return 0 if all(log.status == "success" for log in logs) else 1
 
 

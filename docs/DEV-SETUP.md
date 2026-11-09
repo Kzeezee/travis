@@ -365,6 +365,8 @@ split and conditions. `tasks.py@injection` runs the injection suite (`-T policy=
 `-T marking=off`), and `make eval-report` regenerates `docs/EVAL.md` from the results committed
 under `eval/results/` and makes no model calls. `known_bad.py` holds deliberately wrong answers the judge must fail; hand
 labels for judge calibration go in `eval/judge/labels.csv` (`transcript,criterion,human`).
+After changing a judge criterion, `uv run --env-file .env python rescore.py <logs>` re-grades
+stored logs in place without re-running the agent.
 After editing a grader, run `uv run python test_graders.py` from
 `eval/inspect`. Live evals run only on a developer's machine: no CI workflow runs
 them, so the model key never becomes a repo secret.
