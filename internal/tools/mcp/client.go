@@ -109,6 +109,12 @@ func connectAndRegister(ctx context.Context, name string, process *serverProcess
 	}
 }
 
+// WaitUntilStarted blocks until every configured server has registered its tools or failed to.
+// Only a caller whose approver answers without a frontend loop may call it (BuildManager says why).
+func (m *Manager) WaitUntilStarted() {
+	m.done.Wait()
+}
+
 // ReportServerStatuses describes every configured server right now, sorted by name.
 func (m *Manager) ReportServerStatuses() []ServerStatus {
 	statuses := make([]ServerStatus, 0, len(m.processes))

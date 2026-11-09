@@ -428,6 +428,9 @@ type chatSessionDeps struct {
 	MCPSandboxing mcp.Sandboxing //exhaustruct:optional
 	// IsSpeechEnabled asks the model to mark what to say; something must be listening on Bus to say it.
 	IsSpeechEnabled bool //exhaustruct:optional
+	// Clock dates the session, including "Today is" in the system prompt. Nil is the system
+	// clock; eval runs pin it so fixture dates do not go stale.
+	Clock core.Clock //exhaustruct:optional
 }
 
 // validate reports the first required dependency that is missing. A struct of dependencies
@@ -463,7 +466,10 @@ func assembleChatSession(deps chatSessionDeps) (*chatSession, error) {
 		return nil, err
 	}
 	cfg, paths := deps.Cfg, deps.Paths
-	clock := core.SystemClock{}
+	var clock core.Clock = core.SystemClock{}
+	if deps.Clock != nil {
+		clock = deps.Clock
+	}
 	toolRegistry := registry.BuildRegistry(cfg.Tools.MaxExposed)
 	skillsCatalog := skills.BuildCatalog(cfg.Skills, paths, deps.Diagnostics, deps.Approver)
 	isInstructionPath := skillsCatalog.ReportIsWorkspaceInstructionPath

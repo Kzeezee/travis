@@ -1,0 +1,3 @@
+# fetch may reach only GitHub's raw host, where the task pages are pinned (phase-6-cdef.md).
+[security]
+host_allow = ["raw.githubusercontent.com"]
