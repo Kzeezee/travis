@@ -81,6 +81,8 @@ func run(args []string, in io.Reader, out io.Writer) error {
 		return runInit(args[1:], in, out)
 	case "chat":
 		return runChat(args[1:], in, out)
+	case "sessions":
+		return runSessions(out)
 	case "run":
 		return runHeadless(args[1:], out)
 	case "config":
@@ -92,7 +94,7 @@ func run(args []string, in io.Reader, out io.Writer) error {
 	case "mcp":
 		return runMCP(args[1:], in, out)
 	default:
-		return fmt.Errorf("unknown command %q (try: travis init, travis chat, travis config, travis provider list, travis models, travis mcp list|add|remove, travis version)", args[0])
+		return fmt.Errorf("unknown command %q (try: travis init, travis chat, travis sessions, travis config, travis provider list, travis models, travis mcp list|add|remove, travis version)", args[0])
 	}
 }
 
@@ -104,7 +106,10 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	flags.SetOutput(os.Stderr)
 	baseURL := flags.String("base-url", "", "override the active provider profile's endpoint base URL")
 	model := flags.String("model", "", "override the active provider profile's model name")
-	if err := flags.Parse(args); err != nil {
+	resume := flags.String("resume", "", "continue a past session by id or \"last\"; with no value, pick from a list")
+	fork := flags.String("fork", "", "start a new session from a past session's log, which is left unchanged")
+	forkTurns := flags.Int("at", 0, "with --fork, how many of its turns to keep; 0 keeps them all")
+	if err := flags.Parse(allowBareResume(args)); err != nil {
 		return err
 	}
 	explicitFlags := map[string]bool{}
@@ -148,6 +153,20 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if explicitFlags["resume"] && *resume == "" {
+		if !isInteractiveInput(in) {
+			return fmt.Errorf("pass a session id: travis chat --resume <id|last>")
+		}
+		rows, err := buildSessionRows(buildSessionsDir(paths))
+		if err != nil {
+			return err
+		}
+		picked, err := pickSessionID(rows, in, out)
+		if err != nil {
+			return err
+		}
+		*resume = string(picked)
+	}
 	// Not cfg.Profile, for the same reason startSessionBroker below pins "default": the
 	// workspace config layer can set that, and a cloned repo must not choose its own
 	// security profile. This is the same policy construction the broker process uses
@@ -186,8 +205,12 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		approver = voiceout.WrapApprover(approver, narrator)
 		questioner = voiceout.WrapQuestioner(questioner, narrator)
 	}
-	sessionID := id.BuildULIDGenerator(core.SystemClock{}).GenerateID()
-	sessionBroker, err := startSessionBroker(paths, sessionID, cfg.Session, diagnostics, broker.RemoteOptions{
+	start, err := resolveSessionStart(paths, *resume, *fork, *forkTurns)
+	if err != nil {
+		return err
+	}
+	sessionID := start.ID
+	sessionBroker, err := startSessionBroker(paths, start, cfg.Session, diagnostics, broker.RemoteOptions{
 		Events:   redact.WrapSink(bus, redactor),
 		Approver: approver,
 		Clock:    core.SystemClock{},
@@ -216,6 +239,17 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	})
 	if err != nil {
 		return err
+	}
+
+	var restoredHistory []terminal.RestoredMessage
+	if start.reportIsContinuing() {
+		entries, history, err := loadRestoredSession(paths, sessionID)
+		if err != nil {
+			session.close()
+			return err
+		}
+		session.conversation.RestoreHistory(entries)
+		restoredHistory = history
 	}
 
 	events, unsubscribe := session.bus.Subscribe(nil)
@@ -262,9 +296,10 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 			ModelName: profile.Model, ContextLength: profile.ContextLength,
 			MaxTurnCostUSD: cfg.Brain.MaxTurnCostUSD, MaxDailyCostUSD: cfg.Brain.MaxDailyCostUSD, SpentTodayUSD: spentToday,
 			IsPriced:        profile.InputUSDPerMTok > 0 || profile.OutputUSDPerMTok > 0,
-			StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions, Diagnostics: diagnostics, PushToTalkKey: cfg.Voice.Input.PushToTalkKey,
+			StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions, Diagnostics: diagnostics, PushToTalkKey: cfg.Voice.Input.PushToTalkKey, History: restoredHistory,
 		})
 	session.close()
+	fmt.Fprintf(os.Stderr, "travis: resume with: travis chat --resume %s\n", sessionID)
 	return chatErr
 }
 
@@ -361,8 +396,8 @@ func buildSessionBus(diagnostics io.Writer) *core.Bus {
 
 // startSessionBroker launches this session's travis-broker and connects to it. A chat never
 // runs without one: there is no unenforced fallback (§5.12.5). The broker keeps the session's
-// log under sessionID and backs up files up to sessionCfg's limit before writing them.
-func startSessionBroker(paths config.PathSet, sessionID core.ID, sessionCfg config.SessionCfg, diagnostics io.Writer, client broker.RemoteOptions) (*broker.SessionBroker, error) {
+// log start names, seeding it first for a fork, and backs up files up to sessionCfg's limit before writing them.
+func startSessionBroker(paths config.PathSet, start sessionStart, sessionCfg config.SessionCfg, diagnostics io.Writer, client broker.RemoteOptions) (*broker.SessionBroker, error) {
 	brokerExecutable, err := broker.ResolveBrokerExecutable()
 	if err != nil {
 		return nil, fmt.Errorf("start the security broker: %w", err)
@@ -375,8 +410,10 @@ func startSessionBroker(paths config.PathSet, sessionID core.ID, sessionCfg conf
 		// Not cfg.Profile: the workspace config layer can set that, and a cloned repo must not
 		// choose its own security profile. Selectable once [security] config exists.
 		Profile:          "default",
-		SessionID:        sessionID,
+		SessionID:        start.ID,
 		SnapshotMaxBytes: sessionCfg.SnapshotMaxBytes,
+		ForkFrom:         start.ForkFrom,
+		ForkTurns:        start.ForkTurns,
 		Diagnostics:      diagnostics,
 		Client:           client,
 		// The broker performs file effects only; the provider credential stays in travis.
