@@ -110,3 +110,36 @@ func TestTranscriptExplainsATurnStoppedByItsBudget(t *testing.T) {
 		t.Fatalf("got notices %q, want one naming the limit", notices)
 	}
 }
+
+// A resumed session's turns render as finished turns, /undo can hide them by ID, and the next
+// turn's events land on the new turn rather than a restored one.
+func TestTranscriptRestoresAResumedSessionsTurns(t *testing.T) {
+	message := func(role core.Role, parts ...core.Part) core.Message { return core.Message{Role: role, Parts: parts} }
+	var history transcript
+	history.restoreTurns([]RestoredMessage{
+		{Turn: "t1", Message: message(core.RoleUser, core.TextPart{Text: "read it"})},
+		{Turn: "t1", Message: message(core.RoleAssistant, core.ToolCallPart{ToolCall: core.ToolCall{ID: "c1", Name: "fs_read"}})},
+		{Turn: "t1", Message: message(core.RoleTool, core.ToolResultPart{ToolResult: core.ToolResult{CallID: "c1", Name: "fs_read"}})},
+		{Turn: "t1", Message: message(core.RoleAssistant, core.TextPart{Text: "It says hi."})},
+		{Turn: "t2", Message: message(core.RoleUser, core.TextPart{Text: "thanks"})},
+	})
+
+	if len(history.turns) != 2 || history.turns[0].prompt != "read it" || history.turns[1].prompt != "thanks" {
+		t.Fatalf("restored turns = %+v", history.turns)
+	}
+	first := history.turns[0]
+	if len(first.parts) != 2 || first.parts[0].tool.status != toolSucceeded || first.parts[1].text != "It says hi." {
+		t.Fatalf("first turn parts = %+v, want a settled tool card then the reply", first.parts)
+	}
+
+	history.startTurn("next")
+	history.applyEvent(core.UserMessageSubmitted{EventHeader: core.EventHeader{TurnID: "t3"}})
+	history.applyEvent(core.AssistantTextStreamed{Text: "new reply"})
+	if got := history.turns[2]; got.turnID != "t3" || len(got.parts) != 1 {
+		t.Fatalf("new turn = %+v, want the streamed reply on it", got)
+	}
+
+	if prompt, isFound := history.rewindTurns("t2", "rewound"); !isFound || prompt != "thanks" || !history.turns[1].isRewound {
+		t.Fatalf("rewind of a restored turn = %q, %t", prompt, isFound)
+	}
+}
