@@ -5,7 +5,7 @@ SHELL := /bin/sh
 
 GOLANGCI_LINT_VERSION := $(shell cat .golangci-lint-version)
 GOVULNCHECK_VERSION := v1.7.0
-GOBIN := $(shell go env GOPATH)/bin
+GOBIN := $(subst \,/,$(shell go env GOPATH))/bin
 GOEXE := $(shell go env GOEXE)
 GOLANGCI_LINT := $(GOBIN)/golangci-lint$(GOEXE)
 GOVULNCHECK := $(GOBIN)/govulncheck$(GOEXE)
