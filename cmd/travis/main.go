@@ -541,7 +541,7 @@ func (s *chatSession) close() {
 // trace that cannot be opened or written is reported and the chat carries on without it.
 // The returned function waits, once the bus has closed, for the trace to be flushed.
 func startSessionTrace(bus *core.Bus, traceDir string, sessionID core.ID, diagnostics io.Writer) func() {
-	file, err := trace.CreateSessionFile(traceDir, sessionID)
+	file, err := trace.OpenSessionFile(traceDir, sessionID)
 	if err != nil {
 		fmt.Fprintf(diagnostics, "travis: %v; continuing without a trace\n", err)
 		return func() {}
