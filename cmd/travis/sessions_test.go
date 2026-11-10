@@ -129,7 +129,7 @@ func TestPickSessionIDOffersOnlyTheNewestFive(t *testing.T) {
 		t.Fatal("answer 6 was accepted beyond the five offered")
 	}
 	out.Reset()
-	pickSessionID(rows[:2], strings.NewReader("\n"), &out)
+	_, _ = pickSessionID(rows[:2], strings.NewReader("\n"), &out)
 	if strings.Contains(out.String(), "travis sessions") {
 		t.Fatal("pointed to travis sessions with nothing older to show")
 	}
