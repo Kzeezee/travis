@@ -214,3 +214,33 @@ func TestToolResultsTheLogRefusesStillAnswerTheirCalls(t *testing.T) {
 		t.Fatalf("next request = %+v, want user, assistant call, its tool result, user", history)
 	}
 }
+
+// A resumed conversation sends its logged messages, leaving out the broker's own facts, and a log
+// that ended right after untrusted intake starts the next turn untrusted.
+func TestRestoreHistoryContinuesTheLoggedConversation(t *testing.T) {
+	prompt := core.Message{Role: core.RoleUser, Parts: []core.Part{core.TextPart{Text: "fetch it"}}}
+	call := core.Message{Role: core.RoleAssistant, Parts: []core.Part{core.ToolCallPart{ToolCall: core.ToolCall{ID: "c1", Name: "fetch"}}}}
+	result := core.Message{Role: core.RoleTool, Parts: []core.Part{core.ToolResultPart{ToolResult: core.ToolResult{CallID: "c1", Name: "fetch", Content: "page", IsUntrusted: true}}}}
+	logged := []core.SessionEntry{
+		{Kind: core.EntryMessage, Turn: "t1", Message: &prompt},
+		{Kind: core.EntryMessage, Turn: "t1", Message: &call},
+		{Kind: core.EntryApprovalGiven, Turn: "t1", Capability: &core.Capability{Kind: core.CapabilityFSRead}},
+		{Kind: core.EntryMessage, Turn: "t1", Message: &result},
+	}
+	write := &observedTool{name: "write", output: core.ToolOutput{Content: "done"}}
+	provider := &fakeProvider{streams: []*fakeStream{
+		buildToolCallStream(core.ToolCall{ID: "c2", Name: write.name}),
+		buildTextStream(core.Chunk{Text: "done"}),
+	}}
+	conversation := buildLoggedConversation(provider, &fakeToolLookup{tools: []core.Tool{write}}, &recordingLog{})
+	conversation.RestoreHistory(logged)
+	if err := conversation.RunAssistantTurn(t.Context(), "go on"); err != nil {
+		t.Fatal(err)
+	}
+	if roles := provider.requests[0].Messages; len(roles) != 4 || roles[2].Role != core.RoleTool {
+		t.Fatalf("first request = %+v, want the three logged messages and the new prompt", roles)
+	}
+	if len(write.untrustedSteps) != 1 || !write.untrustedSteps[0] {
+		t.Fatalf("untrusted steps = %v, want the first step after the resume marked", write.untrustedSteps)
+	}
+}
