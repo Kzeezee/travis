@@ -95,7 +95,7 @@ func ValidateTravisReported(entry core.SessionEntry) error {
 func BuildHistory(entries []core.SessionEntry) []core.Message {
 	var history []core.Message
 	var pendingNotes []core.Part
-	for _, entry := range selectVisibleEntries(entries) {
+	for _, entry := range SelectVisibleEntries(entries) {
 		switch {
 		case entry.Kind == core.EntryFilesReverted && entry.Rewind.Mode == core.RewindFilesOnly:
 			// Providers join a message's text parts as they are, so the note ends its own paragraph.
@@ -112,9 +112,9 @@ func BuildHistory(entries []core.SessionEntry) []core.Message {
 	return history
 }
 
-// selectVisibleEntries drops what rewinds took out: a rewound entry hides its turn and every
+// SelectVisibleEntries drops what rewinds took out: a rewound entry hides its turn and every
 // entry after that turn began, up to the rewind itself. Entries logged later count again.
-func selectVisibleEntries(entries []core.SessionEntry) []core.SessionEntry {
+func SelectVisibleEntries(entries []core.SessionEntry) []core.SessionEntry {
 	var visible []core.SessionEntry
 	for _, entry := range entries {
 		if entry.Kind == core.EntryRewound && entry.Rewind != nil {
@@ -126,6 +126,18 @@ func selectVisibleEntries(entries []core.SessionEntry) []core.SessionEntry {
 		visible = append(visible, entry)
 	}
 	return visible
+}
+
+// SelectForkEntries is what a fork copies: the log up to where the visible turn after the first
+// keepTurns begins, so the fork carries every earlier fact, rewinds and file changes included,
+// and /undo works in it. keepTurns of zero, or more than there are turns, keeps the whole log.
+func SelectForkEntries(entries []core.SessionEntry, keepTurns int) []core.SessionEntry {
+	summaries := BuildTurnSummaries(entries)
+	if keepTurns <= 0 || keepTurns >= len(summaries) {
+		return slices.Clone(entries)
+	}
+	cut := slices.IndexFunc(entries, func(e core.SessionEntry) bool { return e.Turn == summaries[keepTurns].Turn })
+	return slices.Clone(entries[:cut])
 }
 
 func describeFileRevert(record core.RewindRecord) string {
@@ -153,7 +165,7 @@ func BuildTurnSummaries(entries []core.SessionEntry) []core.TurnSummary {
 	reverted := collectRevertedChangeIDs(entries)
 	var summaries []core.TurnSummary
 	indexByTurn := map[core.ID]int{}
-	for _, entry := range selectVisibleEntries(entries) {
+	for _, entry := range SelectVisibleEntries(entries) {
 		if entry.Turn == "" {
 			continue
 		}
