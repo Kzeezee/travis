@@ -160,3 +160,40 @@ func appendRaw(t *testing.T, path, text string) {
 		t.Fatal(err)
 	}
 }
+
+// ReadEntries is for a process that does not own the log: it skips a torn tail but leaves it on
+// disk, since the owner may be mid-append.
+func TestReadEntriesSkipsATornTailWithoutTouchingTheLog(t *testing.T) {
+	dir := t.TempDir()
+	if err := openStore(t, dir).Append(buildEntries(t)[0]); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "s1.jsonl")
+	appendRaw(t, path, `{"id":"e2","kind":"file_ch`)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := filestore.ReadEntries(dir, "s1")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("ReadEntries = %v, %v; want the one complete entry", got, err)
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Fatal("ReadEntries changed the log")
+	}
+}
+
+func TestListSessionIDsNamesEveryLogOldestFirst(t *testing.T) {
+	dir := t.TempDir()
+	for _, id := range []core.ID{"01B", "01A", "01C"} {
+		store, err := filestore.Open(dir, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = store.Close()
+	}
+	if got, err := filestore.ListSessionIDs(dir); err != nil || !reflect.DeepEqual(got, []core.ID{"01A", "01B", "01C"}) {
+		t.Fatalf("ListSessionIDs = %v, %v", got, err)
+	}
+}

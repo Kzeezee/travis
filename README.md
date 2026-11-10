@@ -110,6 +110,9 @@ model    = "qwen3:14b"
 | Command | What it does |
 | --- | --- |
 | `travis chat [--model M] [--base-url U]` | Start a chat in the current directory |
+| `travis chat --resume ID\|last` | Continue a past session where it left off |
+| `travis chat --fork ID [--at N]` | Start a new session from a past one's first N turns (all by default); the original is left unchanged |
+| `travis sessions` | List past sessions to resume or fork |
 | `travis init` | Run the setup wizard |
 | `travis config path\|init\|check\|show` | Find, create, validate, or print the merged config |
 | `travis provider list` | Profiles, which one is active, and whether each has a key |

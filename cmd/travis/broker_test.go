@@ -81,7 +81,7 @@ func startTestSessionBroker(t *testing.T, paths config.PathSet, diagnostics *str
 	travisHome := t.TempDir()
 	t.Setenv("TRAVIS_HOME", travisHome)
 	sessionCfg := config.SessionCfg{SnapshotMaxBytes: 1 << 20}
-	sessionBroker, err := startSessionBroker(paths, testSessionID, sessionCfg, diagnostics, client)
+	sessionBroker, err := startSessionBroker(paths, sessionStart{ID: testSessionID}, sessionCfg, diagnostics, client)
 	if err != nil {
 		t.Fatalf("start session broker: %v (diagnostics: %s)", err, diagnostics)
 	}

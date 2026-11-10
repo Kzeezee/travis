@@ -5,7 +5,7 @@ SHELL := /bin/sh
 
 GOLANGCI_LINT_VERSION := $(shell cat .golangci-lint-version)
 GOVULNCHECK_VERSION := v1.7.0
-GOBIN := $(shell go env GOPATH)/bin
+GOBIN := $(subst \,/,$(shell go env GOPATH))/bin
 GOEXE := $(shell go env GOEXE)
 GOLANGCI_LINT := $(GOBIN)/golangci-lint$(GOEXE)
 GOVULNCHECK := $(GOBIN)/govulncheck$(GOEXE)
@@ -67,8 +67,8 @@ cover: ## Run the tests with coverage and print the per-function report
 .PHONY: vet
 vet: ## go vet for the host and for the other two supported OSes
 	go vet ./...
-	GOOS=windows go vet ./...
-	GOOS=darwin go vet ./...
+	CGO_ENABLED=0 GOOS=windows go vet ./...
+	CGO_ENABLED=0 GOOS=darwin go vet ./...
 
 .PHONY: lint
 lint: $(GOLANGCI_LINT) ## Run golangci-lint at the pinned version

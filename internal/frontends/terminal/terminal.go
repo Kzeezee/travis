@@ -47,7 +47,9 @@ type Options struct {
 	SpentTodayUSD float64
 	// IsPriced is true when the active profile has a per-token price, so the status bar and
 	// /cost may show a dollar figure even with no spending ceiling configured.
-	IsPriced        bool
+	IsPriced bool
+	// History is a resumed or forked session's visible conversation, shown as its earlier turns.
+	History         []RestoredMessage
 	StartupWarnings []string
 	Input           io.Reader
 	Output          io.Writer
@@ -56,6 +58,12 @@ type Options struct {
 	Diagnostics *DiagnosticsWriter
 	// PushToTalkKey records while held; empty means ctrl+t (§5.10 ptt_key).
 	PushToTalkKey string
+}
+
+// RestoredMessage is one logged message of a resumed session, with the turn it belongs to.
+type RestoredMessage struct {
+	Turn    core.ID
+	Message core.Message
 }
 
 // UndoActions are the operations /undo runs: list the turns it can take back, and rewind from
@@ -336,6 +344,7 @@ func buildChatModel(
 		m.pushToTalkKey = defaultPushToTalkKey
 	}
 	m.transcript.warnings = opts.StartupWarnings
+	m.transcript.restoreTurns(opts.History)
 	m.resize(defaultWidth, defaultHeight)
 	return m
 }

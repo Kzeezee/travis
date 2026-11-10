@@ -228,3 +228,23 @@ func TestValidateEntryChecksRewindEntriesAgainstTheirMode(t *testing.T) {
 		t.Fatalf("travis reporting a rewind = %v, want ErrDenied: only the broker rewinds", err)
 	}
 }
+
+// A fork keeps the log up to where the next visible turn begins: an earlier rewind and its hidden
+// turn travel with it, and the turns after the cut do not.
+func TestSelectForkEntriesCutsBeforeTheNextVisibleTurn(t *testing.T) {
+	entries := []core.SessionEntry{
+		buildMessageEntry("t1", core.RoleUser, "one"),
+		buildFileChangedEntry("t1", buildAbsolutePath("a"), false),
+		buildMessageEntry("t2", core.RoleUser, "two"),
+		buildRewindEntry(core.EntryRewound, "t2", core.RewindConversationOnly),
+		buildMessageEntry("t3", core.RoleUser, "three"),
+		buildMessageEntry("t4", core.RoleUser, "four"),
+	}
+	cases := map[int]int{0: len(entries), 1: 4, 2: 5, 3: len(entries), 9: len(entries)}
+	for keepTurns, wantLen := range cases {
+		fork := session.SelectForkEntries(entries, keepTurns)
+		if !slices.EqualFunc(fork, entries[:wantLen], func(a, b core.SessionEntry) bool { return a.ID == b.ID }) {
+			t.Errorf("keepTurns %d kept %d entries, want the first %d", keepTurns, len(fork), wantLen)
+		}
+	}
+}
