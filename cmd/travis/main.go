@@ -153,6 +153,9 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if lockWarning := broker.ClaimWorkspace(paths.WorkspaceDir, os.Getpid()); lockWarning != "" {
+		startupWarnings = append(startupWarnings, lockWarning)
+	}
 	if explicitFlags["resume"] && *resume == "" {
 		if !isInteractiveInput(in) {
 			return fmt.Errorf("pass a session id: travis chat --resume <id|last>")
