@@ -255,6 +255,22 @@ func (c *AssistantConversation) ResetHistory() {
 	c.isNextStepUntrusted = false
 }
 
+// RestoreHistory continues a resumed or forked session from its log, before its first turn. It keeps
+// only the kinds the conversation records itself, and a log that ended right after untrusted intake
+// marks the next step untrusted, as it would have been had the session never stopped.
+func (c *AssistantConversation) RestoreHistory(entries []core.SessionEntry) {
+	c.entries, c.blocks = nil, nil
+	for _, entry := range entries {
+		switch entry.Kind {
+		case core.EntryMessage, core.EntryFilesReverted, core.EntryRewound:
+			c.entries = append(c.entries, entry)
+		case core.EntryFileChanged, core.EntryPolicyDenied, core.EntryApprovalAsked, core.EntryApprovalGiven:
+			// the broker's own facts; the broker answers /undo from them
+		}
+	}
+	c.isNextStepUntrusted = c.reportIsTaintedAt(len(c.entries))
+}
+
 // SelectModel sends every later turn to the named model.
 func (c *AssistantConversation) SelectModel(name string) {
 	c.model = name

@@ -18,6 +18,7 @@ import (
 	"github.com/Kzeezee/travis/internal/security/sandbox"
 	"github.com/Kzeezee/travis/internal/state/blobs"
 	"github.com/Kzeezee/travis/internal/state/memory"
+	"github.com/Kzeezee/travis/internal/state/session"
 	"github.com/Kzeezee/travis/internal/state/session/filestore"
 )
 
@@ -47,6 +48,8 @@ func run(ctx context.Context, args []string, readiness, diagnostics io.Writer) e
 	profile := flags.String("profile", "default", "security profile whose grants this session holds")
 	sessionID := flags.String("session", "", "id of the session whose log this broker keeps, chosen by travis")
 	snapshotMaxBytes := flags.Int64("snapshot-max-bytes", 0, "largest file backed up before a write; larger writes cannot be undone")
+	forkFrom := flags.String("fork-from", "", "id of a session whose log seeds this one's, which must be empty")
+	forkTurns := flags.Int("fork-turns", 0, "how many of the source's turns the fork keeps; 0 keeps them all")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -84,6 +87,11 @@ func run(ctx context.Context, args []string, readiness, diagnostics io.Writer) e
 		return err
 	}
 	defer sessionLog.Close()
+	if *forkFrom != "" {
+		if err := seedForkedLog(sessionLog, filepath.Join(paths.StateDir, "sessions"), core.ID(*forkFrom), *forkTurns); err != nil {
+			return err
+		}
+	}
 	backups, err := blobs.Open(filepath.Join(paths.StateDir, "blobs"), *snapshotMaxBytes)
 	if err != nil {
 		return err
@@ -101,4 +109,20 @@ func run(ctx context.Context, args []string, readiness, diagnostics io.Writer) e
 		return err
 	}
 	return sessionListener.ServeOneClient(ctx, *clientPID, effects)
+}
+
+// seedForkedLog copies the source session's log through forkTurns into the new, empty log. The
+// source is only read, so the session it belongs to is left exactly as it was.
+func seedForkedLog(sessionLog *filestore.Store, dir string, source core.ID, forkTurns int) error {
+	if len(sessionLog.ReadEntries()) > 0 {
+		return fmt.Errorf("fork: the new session's log is not empty")
+	}
+	entries, err := filestore.ReadEntries(dir, source)
+	if err != nil {
+		return fmt.Errorf("fork: %w", err)
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("fork: session %q has no log", source)
+	}
+	return sessionLog.Append(session.SelectForkEntries(entries, forkTurns)...)
 }

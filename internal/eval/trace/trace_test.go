@@ -176,20 +176,22 @@ func TestRecordEventsDrainsAfterAWriteFailureAndReportsIt(t *testing.T) {
 	}
 }
 
-func TestCreateSessionFileNamesTheTraceAfterTheSessionAndNeverOverwrites(t *testing.T) {
+func TestOpenSessionFileNamesTheTraceAfterTheSessionAndAppendsOnResume(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "traces")
-
-	file, err := trace.CreateSessionFile(dir, "01SESSION")
-	if err != nil {
-		t.Fatalf("CreateSessionFile returned %v", err)
+	for _, line := range []string{"first\n", "resumed\n"} {
+		file, err := trace.OpenSessionFile(dir, "01SESSION")
+		if err != nil {
+			t.Fatalf("OpenSessionFile returned %v", err)
+		}
+		if _, err := file.WriteString(line); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "01SESSION.jsonl")); err != nil {
-		t.Fatalf("trace file missing: %v", err)
-	}
-	if _, err := trace.CreateSessionFile(dir, "01SESSION"); err == nil {
-		t.Fatal("expected an error when the session trace already exists")
+	data, err := os.ReadFile(filepath.Join(dir, "01SESSION.jsonl"))
+	if err != nil || string(data) != "first\nresumed\n" {
+		t.Fatalf("trace = %q, %v; want both sessions' lines, the first kept", data, err)
 	}
 }

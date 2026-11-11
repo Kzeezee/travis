@@ -74,6 +74,10 @@ type SessionLaunch struct {
 	// backs up before writing (config session.snapshot_max_bytes).
 	SessionID        core.ID
 	SnapshotMaxBytes int64
+	// ForkFrom, when set, names the session whose log the broker copies into SessionID's empty log
+	// before it listens, through visible turn ForkTurns (zero copies every turn).
+	ForkFrom  core.ID
+	ForkTurns int
 	// Diagnostics receives the broker's stderr; nil discards it.
 	Diagnostics io.Writer
 	// Client is where the connected RemoteBroker reports denials and asks for approvals.
@@ -116,6 +120,9 @@ func StartSessionBroker(ctx context.Context, launch SessionLaunch) (*SessionBrok
 		"-profile", launch.Profile,
 		"-session", string(launch.SessionID),
 		"-snapshot-max-bytes", strconv.FormatInt(launch.SnapshotMaxBytes, 10))
+	if launch.ForkFrom != "" {
+		brokerProcess.Args = append(brokerProcess.Args, "-fork-from", string(launch.ForkFrom), "-fork-turns", strconv.Itoa(launch.ForkTurns))
+	}
 	brokerProcess.Dir = launch.WorkspaceDir
 	brokerProcess.Env = launch.Env
 	brokerProcess.Stdout = readyWriter

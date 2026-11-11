@@ -76,6 +76,32 @@ func (t *transcript) startTurn(prompt string) int {
 	return len(t.turns)
 }
 
+// restoreTurns shows a resumed session's earlier turns as finished ones. Each keeps its turn ID,
+// so /undo can hide it, and counts as observed, so the next turn's events land on the next turn.
+func (t *transcript) restoreTurns(history []RestoredMessage) {
+	for _, restored := range history {
+		if len(t.turns) == 0 || t.turns[len(t.turns)-1].turnID != restored.Turn {
+			t.turns = append(t.turns, chatTurn{turnID: restored.Turn, outcome: turnSucceeded})
+		}
+		turn := &t.turns[len(t.turns)-1]
+		for _, part := range restored.Message.Parts {
+			switch part := part.(type) {
+			case core.TextPart:
+				if restored.Message.Role == core.RoleUser && turn.prompt == "" {
+					turn.prompt = part.Text
+				} else if restored.Message.Role == core.RoleAssistant {
+					turn.appendStreamed(turnPart{text: part.Text})
+				}
+			case core.ToolCallPart:
+				turn.parts = append(turn.parts, turnPart{tool: &toolCard{callID: part.ToolCall.ID, name: part.ToolCall.Name}})
+			case core.ToolResultPart:
+				turn.finishToolCard(part.ToolResult, "")
+			}
+		}
+	}
+	t.observedTurns = len(t.turns)
+}
+
 // resetTranscript forgets the conversation but keeps startup warnings and the session usage total.
 func (t *transcript) resetTranscript() {
 	t.turns, t.notices, t.observedTurns = nil, nil, 0

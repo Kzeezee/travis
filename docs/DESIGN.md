@@ -2219,8 +2219,11 @@ func (s *Store) Restore(ctx context.Context, path string, ref Ref) error
 `Create`/`Load`/`Fork`/`List` are not a port: one `travis chat` owns one session, whose
 file is opened at startup (`internal/state/session/filestore`), and the rules for reading
 a log back — validation, history, turn summaries, the revert plan — are pure functions in
-`internal/state/session`, shared by the loop and the broker. Forking is not built; the log
-keeps everything a fork would need.
+`internal/state/session`, shared by the loop and the broker. `travis chat --resume <id>`
+reopens a session's log and the conversation continues from it; `travis chat --fork <id>
+[--at N]` starts a new session whose broker first copies the source log through its Nth
+visible turn (`SelectForkEntries`), so the fork's `/undo` works and the source is only read.
+`travis sessions` lists the logs.
 
 **Where it runs, and who vouches for what.** The session log is kept by the **broker
 process**, as the append-only audit log §4.4 gives it. It is one JSON-lines file per session

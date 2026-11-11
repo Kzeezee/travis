@@ -32,15 +32,16 @@ type record struct {
 	EncodeError string `json:"encode_error,omitempty"`
 }
 
-// CreateSessionFile creates <dir>/<sessionID>.jsonl, refusing to overwrite an existing trace.
-func CreateSessionFile(dir string, sessionID core.ID) (*os.File, error) {
+// OpenSessionFile opens <dir>/<sessionID>.jsonl for appending, so a resumed session continues its
+// trace and an existing one is never overwritten.
+func OpenSessionFile(dir string, sessionID core.ID) (*os.File, error) {
 	if err := os.MkdirAll(dir, traceDirMode); err != nil {
 		return nil, fmt.Errorf("trace: create dir: %w", err)
 	}
 	path := filepath.Join(dir, string(sessionID)+".jsonl")
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, traceFileMode)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, traceFileMode)
 	if err != nil {
-		return nil, fmt.Errorf("trace: create file: %w", err)
+		return nil, fmt.Errorf("trace: open file: %w", err)
 	}
 	return file, nil
 }

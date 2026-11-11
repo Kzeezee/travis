@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/Kzeezee/travis/internal/core"
@@ -30,8 +31,8 @@ type Store struct {
 
 // Open creates the log directory and replays <dir>/<sessionID>.jsonl, dropping a torn last line.
 func Open(dir string, sessionID core.ID) (*Store, error) {
-	if sessionID == "" || filepath.Base(string(sessionID)) != string(sessionID) {
-		return nil, fmt.Errorf("session log: invalid session id %q", sessionID)
+	if err := validateSessionID(sessionID); err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(dir, logDirMode); err != nil {
 		return nil, fmt.Errorf("session log: create dir: %w", err)
@@ -88,14 +89,59 @@ func (s *Store) ReadEntries() []core.SessionEntry {
 	return slices.Clone(s.entries)
 }
 
+// ReadEntries replays <dir>/<sessionID>.jsonl without changing it: a torn last line is skipped,
+// not dropped, since the broker that owns the log may still be appending.
+func ReadEntries(dir string, sessionID core.ID) ([]core.SessionEntry, error) {
+	if err := validateSessionID(sessionID); err != nil {
+		return nil, err
+	}
+	entries, _, err := parseLog(filepath.Join(dir, string(sessionID)+".jsonl"))
+	return entries, err
+}
+
+// ListSessionIDs names every session logged in dir, oldest first, as ids are ULIDs.
+func ListSessionIDs(dir string) ([]core.ID, error) {
+	paths, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
+	if err != nil {
+		return nil, fmt.Errorf("session log: list: %w", err)
+	}
+	ids := make([]core.ID, 0, len(paths))
+	for _, path := range paths {
+		ids = append(ids, core.ID(strings.TrimSuffix(filepath.Base(path), ".jsonl")))
+	}
+	slices.Sort(ids)
+	return ids, nil
+}
+
+func validateSessionID(sessionID core.ID) error {
+	if sessionID == "" || filepath.Base(string(sessionID)) != string(sessionID) {
+		return fmt.Errorf("session log: invalid session id %q", sessionID)
+	}
+	return nil
+}
+
 // replayLog drops a torn tail but rejects any corrupt complete line.
 func replayLog(path string) ([]core.SessionEntry, error) {
+	entries, validLen, err := parseLog(path)
+	if err != nil {
+		return nil, err
+	}
+	if info, statErr := os.Stat(path); statErr == nil && validLen < info.Size() {
+		if err := os.Truncate(path, validLen); err != nil {
+			return nil, fmt.Errorf("session log: drop torn tail: %w", err)
+		}
+	}
+	return entries, nil
+}
+
+// parseLog decodes every complete line and reports how many bytes they span; a missing log is empty.
+func parseLog(path string) ([]core.SessionEntry, int64, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("session log: read: %w", err)
+		return nil, 0, fmt.Errorf("session log: read: %w", err)
 	}
 	var entries []core.SessionEntry
 	validLen := 0
@@ -106,18 +152,13 @@ func replayLog(path string) ([]core.SessionEntry, error) {
 		}
 		entry, err := decodeEntry(rest[:end])
 		if err != nil {
-			return nil, fmt.Errorf("session log: corrupt line at byte %d: %w", validLen, err)
+			return nil, 0, fmt.Errorf("session log: corrupt line at byte %d: %w", validLen, err)
 		}
 		entries = append(entries, entry)
 		validLen += end + 1
 		rest = rest[end+1:]
 	}
-	if validLen < len(data) {
-		if err := os.Truncate(path, int64(validLen)); err != nil {
-			return nil, fmt.Errorf("session log: drop torn tail: %w", err)
-		}
-	}
-	return entries, nil
+	return entries, int64(validLen), nil
 }
 
 func decodeEntry(line []byte) (core.SessionEntry, error) {
