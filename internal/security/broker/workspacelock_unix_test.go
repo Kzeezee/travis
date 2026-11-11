@@ -10,8 +10,8 @@ import (
 )
 
 func TestIsProcessAliveReportsTheRunningProcess(t *testing.T) {
-	if !isProcessAlive(os.Getpid()) {
-		t.Fatal("isProcessAlive(os.Getpid()) = false, want true")
+	if !IsProcessAlive(os.Getpid()) {
+		t.Fatal("IsProcessAlive(os.Getpid()) = false, want true")
 	}
 }
 
@@ -20,7 +20,7 @@ func TestIsProcessAliveReportsAnExitedProcessAsNotAlive(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("run short-lived process: %v", err)
 	}
-	if isProcessAlive(cmd.Process.Pid) {
-		t.Fatalf("isProcessAlive(%d) = true right after it exited, want false", cmd.Process.Pid)
+	if IsProcessAlive(cmd.Process.Pid) {
+		t.Fatalf("IsProcessAlive(%d) = true right after it exited, want false", cmd.Process.Pid)
 	}
 }
