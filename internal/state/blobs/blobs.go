@@ -3,8 +3,6 @@
 // in the session log, not here.
 package blobs
 
-// ponytail: no retention, blobs grow until a retention config and GC of unreferenced blobs land
-
 import (
 	"context"
 	"crypto/sha256"

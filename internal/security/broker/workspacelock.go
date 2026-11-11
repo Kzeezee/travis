@@ -9,8 +9,10 @@ import (
 	"strings"
 )
 
-// isProcessAlive is implemented per OS (workspacelock_unix.go, workspacelock_windows.go,
-// workspacelock_other.go), since only the OS can say whether a PID is still running.
+// IsProcessAlive is implemented per OS (workspacelock_unix.go, workspacelock_windows.go,
+// workspacelock_other.go), since only the OS can say whether a PID is still running. It is
+// exported so retention.go's sweep can reuse the same liveness check against a session's
+// own .lock marker.
 
 // ReportWorkspaceLockFile is where the current session's PID is recorded, so the next session to
 // start in this workspace can read it. It sits beside decisions.toml (D-30, D-32 rule 5): both
@@ -25,7 +27,7 @@ func ReportWorkspaceLockFile(workspaceDir string) string {
 // never blocks or fails the caller's startup: an I/O problem here is reported as a warning too,
 // not an error, since nothing about using the workspace depends on this marker.
 func ClaimWorkspace(workspaceDir string, pid int) string {
-	return claimWorkspace(workspaceDir, pid, isProcessAlive)
+	return claimWorkspace(workspaceDir, pid, IsProcessAlive)
 }
 
 // claimWorkspace takes isAlive as a parameter so tests can fake process liveness without

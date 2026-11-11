@@ -194,6 +194,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	redactor := redact.New(apiKey)
 	// Everything below keeps running under the chat screen, so its diagnostics must not write to the terminal directly.
 	diagnostics := terminal.BuildDiagnosticsWriter(os.Stderr)
+	runSessionRetentionSweep(paths.StateDir, cfg.Session.Retention, diagnostics)
 	bus := buildSessionBus(diagnostics)
 	approvals := make(chan core.ApprovalRequest)
 	questions := make(chan core.QuestionRequest)
@@ -395,6 +396,25 @@ func buildDictation(cfg config.VoiceInputCfg) (func(context.Context) (func() (st
 // buildSessionBus is the bus one chat session publishes to; diagnostics receives its warnings.
 func buildSessionBus(diagnostics io.Writer) *core.Bus {
 	return core.BuildEventBus(log.BuildTextLogger(diagnostics, log.LevelWarn), subscriberEventCapacity)
+}
+
+// runSessionRetentionSweep removes session logs past retention and the blobs no remaining log
+// refers to, in the background: it must never delay or fail chat startup, so any problem (an
+// invalid setting, an I/O error, a concurrent sweep already running elsewhere) is only reported.
+func runSessionRetentionSweep(stateDir, retentionSetting string, diagnostics io.Writer) {
+	retention, err := config.ParseSessionRetention(retentionSetting)
+	if err != nil {
+		fmt.Fprintf(diagnostics, "travis: %v; session retention sweep skipped\n", err)
+		return
+	}
+	if retention <= 0 {
+		return
+	}
+	go func() {
+		if _, err := broker.SweepExpiredSessions(stateDir, retention, core.SystemClock{}); err != nil {
+			fmt.Fprintf(diagnostics, "travis: session retention sweep: %v\n", err)
+		}
+	}()
 }
 
 // startSessionBroker launches this session's travis-broker and connects to it. A chat never

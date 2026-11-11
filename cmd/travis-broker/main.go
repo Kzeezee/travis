@@ -87,6 +87,13 @@ func run(ctx context.Context, args []string, readiness, diagnostics io.Writer) e
 		return err
 	}
 	defer sessionLog.Close()
+	// Written before anything else touches the session so retention's sweep never sees a
+	// session with no liveness marker yet and mistakes "just starting" for "abandoned"; it is
+	// never removed on shutdown, only by the sweep itself once it independently confirms this
+	// session's PID is no longer running (D-32).
+	if err := broker.WriteSessionLivenessMarker(filepath.Join(paths.StateDir, "sessions"), core.ID(*sessionID), os.Getpid()); err != nil {
+		fmt.Fprintf(diagnostics, "travis-broker: session liveness marker: %v\n", err)
+	}
 	if *forkFrom != "" {
 		if err := seedForkedLog(sessionLog, filepath.Join(paths.StateDir, "sessions"), core.ID(*forkFrom), *forkTurns); err != nil {
 			return err

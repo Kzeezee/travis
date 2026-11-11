@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/pelletier/go-toml/v2"
@@ -154,6 +155,32 @@ type EvalCfg struct {
 // layer cannot set it: a cloned repo must not be able to size the journal.
 type SessionCfg struct {
 	SnapshotMaxBytes int64 `toml:"snapshot_max_bytes"`
+	// Retention is how long a session log (and the blobs it alone still refers to) is kept
+	// after its last write, as a day count ("30d") or any Go duration string; "" disables
+	// the sweep entirely. See ParseSessionRetention.
+	Retention string `toml:"retention"`
+}
+
+// ParseSessionRetention turns a SessionCfg.Retention setting into a duration; "" means
+// retention is disabled (never sweep). A day count such as "30d" is accepted on top of
+// Go's own duration syntax, since DESIGN.md §5.15 specifies the setting that way and
+// time.ParseDuration has no day unit.
+func ParseSessionRetention(raw string) (time.Duration, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	if days, ok := strings.CutSuffix(raw, "d"); ok {
+		n, err := strconv.Atoi(days)
+		if err != nil || n <= 0 {
+			return 0, fmt.Errorf("config: invalid session.retention %q", raw)
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("config: invalid session.retention %q", raw)
+	}
+	return d, nil
 }
 
 // workspaceLayerCfg is every field the workspace config file (.travis/config.toml) is
@@ -291,7 +318,7 @@ func buildDefaultConfig() Config {
 		Tools:    ToolsCfg{ApprovalDefault: "ask", MaxExposed: 60},
 		Eval:     EvalCfg{Traces: true},
 		Security: SecurityCfg{RequireSandbox: true},
-		Session:  SessionCfg{SnapshotMaxBytes: 16 << 20},
+		Session:  SessionCfg{SnapshotMaxBytes: 16 << 20, Retention: "30d"},
 		MCP:      MCPCfg{},
 		Skills:   SkillsCfg{Roots: []string{"config:skills"}},
 		Voice:    VoiceCfg{Input: VoiceInputCfg{PushToTalkKey: "ctrl+t"}},
@@ -526,6 +553,9 @@ func (c *Config) Validate() Diagnostics {
 
 	if c.Session.SnapshotMaxBytes <= 0 {
 		diags = append(diags, Diagnostic{Severity: SeverityError, Message: "session.snapshot_max_bytes must be positive"})
+	}
+	if _, err := ParseSessionRetention(c.Session.Retention); err != nil {
+		diags = append(diags, Diagnostic{Severity: SeverityError, Message: err.Error()})
 	}
 
 	if c.Tools.MaxExposed <= 0 {
