@@ -69,6 +69,7 @@ type sessionKeeper interface {
 	AppendTravisEntries(ctx context.Context, entries []core.SessionEntry) error
 	ListTurns(ctx context.Context) ([]core.TurnSummary, error)
 	Rewind(ctx context.Context, fromTurn core.ID, mode core.RewindMode) (core.RewindReport, error)
+	SearchHistory(ctx context.Context, query string, maxResults int) ([]core.HistoryMatch, error)
 }
 
 // connectionSession holds the files one client has open, and the listing it is paging through;
@@ -152,7 +153,7 @@ func (s *connectionSession) perform(ctx context.Context, req Request) (Response,
 		return Response{}, approver.ApproveOnce(ctx, core.Capability{Kind: core.CapabilityKind(req.Capability.Kind), Scope: req.Capability.Scope})
 	case OpAddDecisionRule:
 		return Response{}, s.effects.AddDecisionRule(ctx, ConvertDecisionRuleMessage(*req.Rule))
-	case OpAppendEntries, OpListTurns, OpRewind:
+	case OpAppendEntries, OpListTurns, OpRewind, OpSearchHistory:
 		return s.answerSessionLog(ctx, req)
 	case OpRunCommand:
 		runner, canRun := s.effects.(core.CommandRunner)
@@ -203,6 +204,13 @@ func (s *connectionSession) answerSessionLog(ctx context.Context, req Request) (
 			return Response{}, err
 		}
 		return Response{Rewind: BuildRewindReportMessage(report)}, nil
+	}
+	if req.Op == OpSearchHistory {
+		matches, err := keeper.SearchHistory(ctx, req.Query, int(req.MaxResults))
+		if err != nil {
+			return Response{}, err
+		}
+		return Response{Matches: BuildHistoryMatchMessages(matches)}, nil
 	}
 	entries, err := ConvertEntryMessages(req.Entries)
 	if err != nil {
