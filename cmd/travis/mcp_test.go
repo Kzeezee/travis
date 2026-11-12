@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Kzeezee/travis/internal/config"
+	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/tools/mcp"
 )
 
@@ -150,5 +152,51 @@ func TestMCPRemoveDeletesAConfiguredServer(t *testing.T) {
 	}
 	if len(loadConfiguredServers(t)) != 0 {
 		t.Fatal("the server is still configured")
+	}
+}
+
+func TestMCPAddPinsTheServerSoVerifyAndRemoveSeeIt(t *testing.T) {
+	install, _, _ := buildTestInstall(t, "y\n")
+	if err := install.addServer([]string{"github", "--allow-net", "--", "npx", "-y", "@scope/server@1.2.3"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := run([]string{"mcp", "verify"}, strings.NewReader(""), &out); err != nil || !strings.Contains(out.String(), "github  not launched yet") {
+		t.Fatalf("got %q, %v; want the pinned server awaiting its first launch", out.String(), err)
+	}
+
+	cfg := loadConfiguredServers(t)["github"]
+	if err := config.SaveMCPServer(install.paths, "hand-edited", cfg); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := run([]string{"mcp", "verify"}, strings.NewReader(""), &out); !errors.Is(err, core.ErrDenied) || !strings.Contains(out.String(), "hand-edited  FAILED") {
+		t.Fatalf("got %q, %v; want a server added by hand, never pinned, to fail verify", out.String(), err)
+	}
+
+	if err := run([]string{"mcp", "remove", "github"}, strings.NewReader(""), &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mcp.VerifyInstall(install.paths.StateDir, "github", cfg); !errors.Is(err, core.ErrDenied) {
+		t.Fatalf("got %v; want removal to unpin the server", err)
+	}
+}
+
+type unreachableRegistry struct{}
+
+func (unreachableRegistry) FetchProvenance(context.Context, mcp.PackageRef) (mcp.Provenance, error) {
+	return mcp.Provenance{}, core.ErrTransient
+}
+
+func TestMCPAddRefusesAnNPMPackageItCannotPin(t *testing.T) {
+	install, _, _ := buildTestInstall(t, "y\n")
+	install.lookup = unreachableRegistry{}
+
+	if err := install.addServer([]string{"github", "npx", "-y", "@scope/server@1.2.3"}); !errors.Is(err, core.ErrTransient) {
+		t.Fatalf("got %v; want an unreachable registry to stop the install", err)
+	}
+	if len(loadConfiguredServers(t)) != 0 {
+		t.Fatal("an unpinnable server was saved")
 	}
 }
