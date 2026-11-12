@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -16,10 +17,12 @@ import (
 type SetupActions struct {
 	DescribeProviders func() []ProviderSummary
 	// SaveProvider makes profile the active one, storing apiKey first when it is not empty.
-	SaveProvider     func(profile, apiKey string) error
-	SaveVoiceOutput  func(isEnabled bool) error
-	ListMCPServers   func() []string
-	DescribeSecurity func() []string
+	SaveProvider    func(profile, apiKey string) error
+	SaveVoiceOutput func(isEnabled bool) error
+	ListMCPServers  func() []string
+	// DescribeSecurity says what the named security profile lets travis do, one row per line.
+	DescribeSecurity    func(profile string) []string
+	SaveSecurityProfile func(profile string) error
 }
 
 type SetupOptions struct {
@@ -28,6 +31,8 @@ type SetupOptions struct {
 	// ConfigFile is where the answers are saved, shown so the user knows what changed.
 	ConfigFile           string
 	IsVoiceOutputEnabled bool
+	// SecurityProfile is the configured profile, chosen until the user moves the cursor.
+	SecurityProfile string
 }
 
 type setupStep int
@@ -42,6 +47,9 @@ const (
 
 var setupStepNames = []string{"provider", "voice", "mcp", "security", "done"}
 
+// setupSecurityProfiles leaves out yolo, which needs an RFC amending D-22 and D-27 first.
+var setupSecurityProfiles = []string{"paranoid", "default", "dev"}
+
 const setupLegend = "↑↓ choose · ⏎ continue · tab skip · ctrl+c quit"
 
 type setupModel struct {
@@ -54,6 +62,7 @@ type setupModel struct {
 	isEnteringKey bool
 	keyInput      textinput.Model
 	isVoiceOn     bool
+	profileCursor int
 	// notice is the last save's failure, shown until the user acts again.
 	notice     string
 	isFinished bool
@@ -80,7 +89,11 @@ func buildSetupModel(actions SetupActions, opts SetupOptions) setupModel {
 	keyInput := textinput.New()
 	keyInput.EchoMode = textinput.EchoPassword
 	keyInput.Prompt = " key › "
-	return setupModel{actions: actions, opts: opts, keyInput: keyInput, isVoiceOn: opts.IsVoiceOutputEnabled}
+	profileCursor := slices.Index(setupSecurityProfiles, opts.SecurityProfile)
+	if profileCursor < 0 {
+		profileCursor = slices.Index(setupSecurityProfiles, "default")
+	}
+	return setupModel{actions: actions, opts: opts, keyInput: keyInput, isVoiceOn: opts.IsVoiceOutputEnabled, profileCursor: profileCursor}
 }
 
 func (m setupModel) Init() tea.Cmd {
@@ -134,9 +147,19 @@ func (m setupModel) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m.saveAndAdvance(func() error { return m.actions.SaveVoiceOutput(m.isVoiceOn) })
 		}
-	case setupMCP, setupSecurity:
+	case setupMCP:
 		if key.String() == "enter" {
 			m.step++
+		}
+	case setupSecurity:
+		switch key.String() {
+		case "up", "k":
+			m.profileCursor = max(m.profileCursor-1, 0)
+		case "down", "j":
+			m.profileCursor = min(m.profileCursor+1, len(setupSecurityProfiles)-1)
+		case "enter":
+			chosen := setupSecurityProfiles[m.profileCursor]
+			return m.saveAndAdvance(func() error { return m.actions.SaveSecurityProfile(chosen) })
 		}
 	case setupDone:
 		if key.String() == "enter" {
@@ -264,7 +287,15 @@ func (m setupModel) renderStep() []string {
 			"   travis mcp add <name> --allow-net -- npx -y <package>@<version>",
 			dimStyle.Render(" travis shows where the package comes from and asks before installing it."))
 	case setupSecurity:
-		return append([]string{" What travis can and cannot do", ""}, indentLines(m.actions.DescribeSecurity())...)
+		lines := []string{" Choose what travis may do", ""}
+		for i, profile := range setupSecurityProfiles {
+			row := "   " + profile
+			if i == m.profileCursor {
+				row = selectedRowStyle.Render("▸" + row[1:])
+			}
+			lines = append(lines, row)
+		}
+		return append(append(lines, ""), indentLines(m.actions.DescribeSecurity(setupSecurityProfiles[m.profileCursor]))...)
 	case setupDone:
 		return []string{" Setup is saved to " + m.opts.ConfigFile, "",
 			" Change it any time: /provider in chat, travis mcp add, or travis init again.",

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
+	"github.com/Kzeezee/travis/internal/security/sandbox"
 )
 
 // runInit runs the setup wizard; `travis init` and a first `travis chat` both start here.
@@ -43,12 +44,14 @@ func runSetupWizard(in io.Reader, out io.Writer) (bool, error) {
 			}
 			return config.SaveActiveProvider(paths, profile)
 		},
-		SaveVoiceOutput:  func(isEnabled bool) error { return config.SaveVoiceOutput(paths, isEnabled) },
-		ListMCPServers:   func() []string { return slices.Sorted(maps.Keys(cfg.MCP.Servers)) },
-		DescribeSecurity: func() []string { return describeSecurity(cfg, paths) },
+		SaveVoiceOutput:     func(isEnabled bool) error { return config.SaveVoiceOutput(paths, isEnabled) },
+		ListMCPServers:      func() []string { return slices.Sorted(maps.Keys(cfg.MCP.Servers)) },
+		DescribeSecurity:    func(profile string) []string { return describeSecurity(cfg, paths, profile) },
+		SaveSecurityProfile: func(profile string) error { return config.SaveSecurityProfile(paths, profile) },
 	}
 	isFinished, err := terminal.RunSetup(context.Background(), actions, terminal.SetupOptions{
 		Input: in, Output: out, ConfigFile: paths.ReportUserConfigFile(), IsVoiceOutputEnabled: cfg.Voice.Output.Enabled,
+		SecurityProfile: cfg.Security.Profile,
 	})
 	if err != nil || !isFinished {
 		return isFinished, err
@@ -70,8 +73,9 @@ func shouldOfferSetup(in io.Reader) bool {
 	return errors.Is(err, os.ErrNotExist) && isInteractiveInput(in)
 }
 
-// describeSecurity states the default profile chat runs under (D-27), in the user's terms.
-func describeSecurity(cfg *config.Config, paths config.PathSet) []string {
+// describeSecurity states what profile lets chat do (capabilities.BuildProfileSet, D-27), in the user's terms.
+func describeSecurity(cfg *config.Config, paths config.PathSet, profile string) []string {
+	reads, writes := paths.WorkspaceDir+" (the folder you start travis in)", "the same folder"
 	commands := "nothing until you allow it ([security] exec_allow)"
 	if len(cfg.Security.ExecAllow) > 0 {
 		commands = strings.Join(cfg.Security.ExecAllow, ", ") + ", asking first unless you said always"
@@ -80,17 +84,30 @@ func describeSecurity(cfg *config.Config, paths config.PathSet) []string {
 	if len(cfg.Security.HostAllow) > 0 {
 		hosts = strings.Join(cfg.Security.HostAllow, ", ")
 	}
-	sandbox := "required: a server that cannot be sandboxed does not start"
+	servers := "required: a server that cannot be sandboxed does not start"
 	if !cfg.Security.RequireSandbox {
-		sandbox = "best effort: a server runs unconfined where the OS has no sandbox"
+		servers = "best effort: a server runs unconfined where the OS has no sandbox"
+	}
+	switch profile {
+	case "paranoid":
+		writes, commands, hosts, servers = "nothing", "nothing", "nothing", "none start, since nothing may run"
+	case "dev":
+		reads, writes = "your home folder", paths.WorkspaceDir+" and the OS temp folder"
+		commands, hosts = "any command, asking first unless you said always", "any host"
+	}
+	osSandbox := "none on this OS"
+	if tier, err := sandbox.ReportAvailability(); err == nil {
+		osSandbox = string(tier) + " available"
 	}
 	return []string{
-		"can read and write   " + paths.WorkspaceDir + " (the folder you start travis in)",
+		"can read             " + reads,
+		"can write            " + writes,
 		"can run              " + commands,
 		"can reach            " + hosts,
 		"never touches        SSH keys, cloud credentials, .env files and travis's own state,",
 		"                     even inside the workspace — enforced by the broker, not by the model",
-		"MCP servers          " + sandbox,
+		"MCP servers          " + servers,
+		"OS sandbox           " + osSandbox,
 		"undo                 /undo rewinds files travis changed this session",
 	}
 }
