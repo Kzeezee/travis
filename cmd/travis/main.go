@@ -233,7 +233,8 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		Cfg: cfg, Paths: paths, Session: sessionID, Provider: provider, Model: profile.Model,
 		Files: sessionBroker.Remote, Log: sessionBroker.Remote,
 		Memory: sessionBroker.Remote, Commands: sessionBroker.Remote, Pages: sessionBroker.Remote,
-		Bus: bus, Diagnostics: diagnostics, Redactor: redactor,
+		History: sessionBroker.Remote,
+		Bus:     bus, Diagnostics: diagnostics, Redactor: redactor,
 		Questioner: questioner, Approver: approver, MCPPolicy: mcpPolicy, IsSpeechEnabled: narrator != nil,
 		MCPSandboxing: mcp.Sandboxing{
 			// travis-broker doubles as the sandbox launcher; its hash is checked again before every launch.
@@ -475,9 +476,10 @@ type chatSessionDeps struct {
 	// Memory, Commands and Pages back the memory, exec and fetch tools; a nil one leaves its
 	// tool registered but reporting itself unavailable, so the model is told rather than the
 	// turn failing.
-	Memory   core.MemoryStore   //exhaustruct:optional
-	Commands core.CommandRunner //exhaustruct:optional
-	Pages    core.PageFetcher   //exhaustruct:optional
+	Memory   core.MemoryStore     //exhaustruct:optional
+	Commands core.CommandRunner   //exhaustruct:optional
+	Pages    core.PageFetcher     //exhaustruct:optional
+	History  core.HistorySearcher //exhaustruct:optional
 	// Questioner and Approver reach the human. Nil means nobody can answer, which is the
 	// fail-closed reading: ask_user cannot ask and anything needing approval is refused.
 	Questioner core.Questioner //exhaustruct:optional
@@ -542,6 +544,7 @@ func assembleChatSession(deps chatSessionDeps) (*chatSession, error) {
 		builtin.BuildExecTool(deps.Commands),
 		builtin.BuildFetchTool(deps.Pages),
 		builtin.BuildMemoryTool(deps.Memory, filepath.Join(paths.StateDir, memory.FileName)),
+		builtin.BuildHistorySearchTool(deps.History),
 	} {
 		if err := toolRegistry.Register(registry.SourceBuiltin, tool); err != nil {
 			return nil, err

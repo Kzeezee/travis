@@ -58,11 +58,12 @@ var errBrokerUnavailable = errors.New("broker unavailable")
 var errBrokerKnownDown = errors.New("broker was already unavailable before the request")
 
 var (
-	_ core.Broker        = (*RemoteBroker)(nil)
-	_ core.SessionLog    = (*RemoteBroker)(nil)
-	_ core.MemoryStore   = (*RemoteBroker)(nil)
-	_ core.CommandRunner = (*RemoteBroker)(nil)
-	_ core.PageFetcher   = (*RemoteBroker)(nil)
+	_ core.Broker          = (*RemoteBroker)(nil)
+	_ core.SessionLog      = (*RemoteBroker)(nil)
+	_ core.MemoryStore     = (*RemoteBroker)(nil)
+	_ core.CommandRunner   = (*RemoteBroker)(nil)
+	_ core.PageFetcher     = (*RemoteBroker)(nil)
+	_ core.HistorySearcher = (*RemoteBroker)(nil)
 )
 
 func BuildRemoteBroker(conn net.Conn, options RemoteOptions) *RemoteBroker {
@@ -247,6 +248,32 @@ func (r *RemoteBroker) ListTurns(ctx context.Context) ([]core.TurnSummary, error
 		return nil, err
 	}
 	return ConvertTurnSummaryMessages(resp.Turns), nil
+}
+
+// SearchHistory asks the broker to search this session's own log; it needs no capability or
+// approval, the same as ListTurns, since it reads only what this session already logged.
+func (r *RemoteBroker) SearchHistory(ctx context.Context, query string, maxResults int) ([]core.HistoryMatch, error) {
+	if query == "" || len(query) > MaxHistoryQueryBytes {
+		return nil, fmt.Errorf("a query of 1..%d bytes is required: %w", MaxHistoryQueryBytes, core.ErrInvalid)
+	}
+	maxResultsField, err := safeUint32(maxResults)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := r.exchange(ctx, Request{Op: OpSearchHistory, Query: query, MaxResults: maxResultsField})
+	if err != nil {
+		return nil, err
+	}
+	return ConvertHistoryMatchMessages(resp.Matches)
+}
+
+// safeUint32 turns a non-negative int into the wire's uint32 field without ever wrapping a
+// negative value into a huge one; a caller never has reason to ask for more than fits anyway.
+func safeUint32(n int) (uint32, error) {
+	if n < 0 || n > (1<<31) {
+		return 0, fmt.Errorf("maxResults %d is out of range: %w", n, core.ErrInvalid)
+	}
+	return uint32(n), nil
 }
 
 func (r *RemoteBroker) Rewind(ctx context.Context, fromTurn core.ID, mode core.RewindMode) (core.RewindReport, error) {

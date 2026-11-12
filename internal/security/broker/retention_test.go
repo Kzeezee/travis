@@ -153,7 +153,10 @@ func startLongRunningProcess(t *testing.T) (*exec.Cmd, func()) {
 	t.Helper()
 	var cmd *exec.Cmd
 	if os.PathSeparator == '\\' {
-		cmd = exec.CommandContext(context.Background(), "cmd", "/C", "pause >nul 2>&1 || timeout /T 30")
+		// Neither pause nor timeout works here: both require an attached console, which go
+		// test does not provide, so they exit instantly instead of waiting. ping against the
+		// loopback address needs no console and reliably takes ~30s for 30 pings.
+		cmd = exec.CommandContext(context.Background(), "ping", "-n", "31", "127.0.0.1")
 	} else {
 		cmd = exec.CommandContext(context.Background(), "sleep", "30")
 	}

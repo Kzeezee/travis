@@ -13,18 +13,20 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/vmihailenco/msgpack/v5"
 
 	"github.com/Kzeezee/travis/internal/core"
+	"github.com/Kzeezee/travis/internal/state/session"
 )
 
 // ProtocolVersion is carried on every request; a broker refuses any version it does not speak.
 // Version 2 added write_file, approve_once, add_decision_rule, the needs_approval error and
 // list_directory paging. Version 3 added session entries and irreversible approvals; version 4
 // added rewind; version 5 added managed memory operations; version 6 added run_command;
-// version 7 adds fetch_page.
-const ProtocolVersion uint16 = 7
+// version 7 added fetch_page; version 8 adds search_history.
+const ProtocolVersion uint16 = 8
 
 const (
 	// MaxFrameBytes bounds what either side allocates for one message.
@@ -44,7 +46,9 @@ const (
 	MaxPageTextBytes = 256 << 10
 	// MaxFetchURLBytes bounds a requested URL before anything parses it.
 	MaxFetchURLBytes = 2048
-	frameHeaderBytes = 4
+	// MaxHistoryQueryBytes bounds a search_history query before anything matches against it.
+	MaxHistoryQueryBytes = 1024
+	frameHeaderBytes     = 4
 )
 
 type Op string
@@ -72,6 +76,8 @@ const (
 	OpRunCommand Op = "run_command"
 	// OpFetchPage reads the page at URL over HTTPS, under the §9.3 rules.
 	OpFetchPage Op = "fetch_page"
+	// OpSearchHistory searches this session's own log (the "cold tier", DESIGN.md §5.4.2).
+	OpSearchHistory Op = "search_history"
 )
 
 type Request struct {
@@ -105,6 +111,10 @@ type Request struct {
 	// URL is the page fetch_page reads. It is not Path: a URL is not a filesystem path, and
 	// policy evaluates its host rather than the whole string.
 	URL string `msgpack:"url,omitempty"`
+	// Query and MaxResults are search_history's request; MaxResults of 0 asks for the broker's
+	// own default, never "unlimited" — see MaxHistoryMatches.
+	Query      string `msgpack:"query,omitempty"`
+	MaxResults uint32 `msgpack:"max_results,omitempty"`
 }
 
 // EntryMessage is one conversation message travis reports. Message is core.Message's JSON, which
@@ -154,6 +164,16 @@ type Response struct {
 	Command *CommandResultMessage `msgpack:"command,omitempty"`
 	// Page answers fetch_page.
 	Page *FetchedPageMessage `msgpack:"page,omitempty"`
+	// Matches answers search_history, newest first.
+	Matches []HistoryMatchMessage `msgpack:"matches,omitempty"`
+}
+
+type HistoryMatchMessage struct {
+	Turn        string    `msgpack:"turn,omitempty"`
+	At          time.Time `msgpack:"at"`
+	Kind        string    `msgpack:"kind"`
+	Text        string    `msgpack:"text"`
+	IsUntrusted bool      `msgpack:"untrusted,omitempty"`
 }
 
 type FetchedPageMessage struct {
@@ -303,6 +323,10 @@ func validateRequest(req Request) error {
 		if req.URL == "" || len(req.URL) > MaxFetchURLBytes {
 			return fmt.Errorf("%s needs a URL of at most %d bytes: %w", req.Op, MaxFetchURLBytes, core.ErrInvalid)
 		}
+	case OpSearchHistory:
+		if req.Query == "" || len(req.Query) > MaxHistoryQueryBytes {
+			return fmt.Errorf("%s needs a query of 1..%d bytes: %w", req.Op, MaxHistoryQueryBytes, core.ErrInvalid)
+		}
 	default:
 		return fmt.Errorf("unknown op %q: %w", req.Op, core.ErrInvalid)
 	}
@@ -368,6 +392,34 @@ func ConvertFetchedPageMessage(msg FetchedPageMessage) (core.FetchedPage, error)
 		URL: msg.URL, ContentType: msg.ContentType, Text: msg.Text,
 		IsTruncated: msg.IsTruncated, StatusCode: msg.StatusCode,
 	}, nil
+}
+
+// BuildHistoryMatchMessages converts search results for the wire.
+func BuildHistoryMatchMessages(matches []core.HistoryMatch) []HistoryMatchMessage {
+	messages := make([]HistoryMatchMessage, 0, len(matches))
+	for _, match := range matches {
+		messages = append(messages, HistoryMatchMessage{
+			Turn: string(match.Turn), At: match.At, Kind: string(match.Kind),
+			Text: match.Text, IsUntrusted: match.IsUntrusted,
+		})
+	}
+	return messages
+}
+
+// ConvertHistoryMatchMessages is the inverse; a match longer than the broker's own cap means
+// the broker did not apply MaxHistoryMatchBytes, so it is refused rather than handed over.
+func ConvertHistoryMatchMessages(messages []HistoryMatchMessage) ([]core.HistoryMatch, error) {
+	matches := make([]core.HistoryMatch, 0, len(messages))
+	for _, msg := range messages {
+		if len(msg.Text) > session.MaxHistoryMatchBytes+utf8.UTFMax {
+			return nil, fmt.Errorf("history match of %d bytes exceeds the %d-byte cap: %w", len(msg.Text), session.MaxHistoryMatchBytes, core.ErrInvalid)
+		}
+		matches = append(matches, core.HistoryMatch{
+			Turn: core.ID(msg.Turn), At: msg.At, Kind: core.SessionEntryKind(msg.Kind),
+			Text: msg.Text, IsUntrusted: msg.IsUntrusted,
+		})
+	}
+	return matches, nil
 }
 
 // BuildPathInfoMessage converts a core path description for the wire.
