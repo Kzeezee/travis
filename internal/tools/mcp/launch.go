@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -89,6 +90,30 @@ func createStderrLog(scratchDir string) (*os.File, error) {
 		return nil, fmt.Errorf("create stderr log: %w", err)
 	}
 	return file, nil
+}
+
+const stderrTailBytes = 4096
+
+// readLastStderrLine reports the last non-empty line within the log's final 4 KiB; an unreadable log has none.
+func readLastStderrLine(scratchDir string) string {
+	path := filepath.Join(scratchDir, stderrLogName)
+	// The server writes its scratch folder, so refuse anything but a plain file: a planted link would surface another file's text.
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	tail := make([]byte, min(info.Size(), stderrTailBytes))
+	n, err := file.ReadAt(tail, info.Size()-int64(len(tail)))
+	if err != nil && !errors.Is(err, io.EOF) {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(tail[:n])), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 // buildSandboxSpec gives the server its runner's install folder to read and only its own scratch folder to write.

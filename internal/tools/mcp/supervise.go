@@ -68,12 +68,29 @@ type serverProcess struct {
 	unavailable error
 	// startErr is why the first launch never produced a usable server; nothing retries it.
 	startErr error
+	// hasStderrLog is true once a launch of this process made a fresh stderr.log, so an older session's is never quoted.
+	hasStderrLog bool
 }
 
-func (p *serverProcess) recordStartFailure(err error) {
+// recordStartFailure keeps why the first launch failed, with the server's last stderr line, and announces it.
+func (p *serverProcess) recordStartFailure(ctx context.Context, err error) {
+	if line := p.readLastStderrLine(); line != "" {
+		err = fmt.Errorf("%w; stderr: %s", err, line)
+	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.startErr = err
+	p.mu.Unlock()
+	p.publish(ctx, core.MCPServerUnavailable{EventHeader: core.EventHeader{At: p.clock.ReportCurrentTime()}, Server: p.name, Reason: err.Error()})
+}
+
+func (p *serverProcess) readLastStderrLine() string {
+	p.mu.Lock()
+	hasLog := p.hasStderrLog
+	p.mu.Unlock()
+	if !hasLog {
+		return ""
+	}
+	return readLastStderrLine(p.scratchDir)
 }
 
 func (p *serverProcess) reportState() (ServerState, string) {
@@ -144,6 +161,9 @@ func (p *serverProcess) connect(ctx context.Context) (*mcpsdk.ClientSession, err
 	if err != nil {
 		return nil, fmt.Errorf("mcp server %q: %w", p.name, err)
 	}
+	p.mu.Lock()
+	p.hasStderrLog = true
+	p.mu.Unlock()
 	defer stderrLog.Close() // the child holds its own copy once started
 	cmd.Stderr = stderrLog
 
@@ -267,6 +287,9 @@ func (p *serverProcess) superviseRestarts(ctx context.Context, session *mcpsdk.C
 }
 
 func (p *serverProcess) reportUnavailable(ctx context.Context, reason string) {
+	if line := p.readLastStderrLine(); line != "" {
+		reason += "; stderr: " + line
+	}
 	fmt.Fprintf(p.diagnostics, "travis: mcp server %q is unavailable: %s\n", p.name, reason)
 	p.mu.Lock()
 	p.unavailable = &core.ProviderError{Provider: sourceName(p.name), Kind: core.ErrExhausted, Cause: fmt.Errorf("%s", reason)}

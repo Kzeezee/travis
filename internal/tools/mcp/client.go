@@ -92,13 +92,13 @@ func connectAndRegister(ctx context.Context, name string, process *serverProcess
 	session, err := process.connectAndSupervise(ctx)
 	if err != nil {
 		fmt.Fprintf(diagnostics, "travis: mcp server %q did not start: %v\n", name, err)
-		process.recordStartFailure(err)
+		process.recordStartFailure(ctx, err)
 		return
 	}
 	listed, err := session.ListTools(ctx, &mcpsdk.ListToolsParams{})
 	if err != nil {
 		fmt.Fprintf(diagnostics, "travis: mcp server %q: listing tools failed: %v\n", name, err)
-		process.recordStartFailure(fmt.Errorf("listing tools failed: %w", err))
+		process.recordStartFailure(ctx, fmt.Errorf("listing tools failed: %w", err))
 		return
 	}
 	for _, remoteTool := range listed.Tools {

@@ -173,3 +173,24 @@ func TestBuildManagerSkipsAServerDeniedByPolicy(t *testing.T) {
 		t.Fatalf("ReportServerStatuses() = %+v, want the denial as the reason and no tools", status)
 	}
 }
+
+func TestFailedServerStartReportsItsStderrLineInStatusAndEvent(t *testing.T) {
+	servers := config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": buildTestServerConfig("-require-home", "/nowhere")}}
+	sink := &recordingSink{}
+	manager := BuildManager(servers, grantedExecPolicy(), &fakeApprover{decision: core.ApprovalOnce}, core.FixedClock{}, sink, &syncBuffer{}, registry.BuildRegistry(100), t.TempDir(), testSandboxing())
+	t.Cleanup(manager.Close)
+
+	pollUntil(t, 10*time.Second, func() bool { return manager.ReportServerStatuses()[0].State == ServerFailed })
+	const stderrLine = `want "/nowhere"`
+	if status := manager.ReportServerStatuses()[0]; !strings.Contains(status.Reason, stderrLine) {
+		t.Fatalf("status reason = %q, want it to carry the server's stderr line", status.Reason)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.events) != 1 {
+		t.Fatalf("events = %+v, want exactly one MCPServerUnavailable", sink.events)
+	}
+	if unavailable, ok := sink.events[0].(core.MCPServerUnavailable); !ok || unavailable.Server != "fake" || !strings.Contains(unavailable.Reason, stderrLine) {
+		t.Fatalf("event = %+v, want MCPServerUnavailable for fake carrying the stderr line", sink.events[0])
+	}
+}
