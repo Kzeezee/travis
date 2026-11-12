@@ -1476,6 +1476,17 @@ also be "curl | node whatever". Therefore:
 - A `mcp.lock` file records exactly what is installed; `travis mcp verify` re-checks
   integrity on every start.
 
+**What `mcp.lock` checks (shipped in TRA-71).** It lives in the state dir beside
+`mcp-trust.toml`. `travis mcp add` writes the package ref and the registry's integrity
+hash; a registry launch the lock does not pin, or whose args name another version, is
+refused before anyone is asked. npx installs on first launch, so that launch records the
+integrity of every package in npm's own `package-lock.json` (trust on first use, with the
+root package checked against the registry hash), and every later launch, restarts
+included, must match it exactly. A corrupt lock refuses every registry launch. It guards
+the supply chain, not a running server rewriting its own scratch folder; the sandbox does
+that, and a travis-owned read-only install is the upgrade path. PyPI hashes are recorded
+but not enforced, because `uvx` has no hash checking.
+
 **Testing.** A mock MCP server exercising protocol edge cases (huge results,
 notifications mid-call, server-initiated sampling requests, unicode, slow start).
 Integration tests against 5 pinned real servers in CI nightly, not per-PR.

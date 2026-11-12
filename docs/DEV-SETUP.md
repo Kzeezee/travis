@@ -211,6 +211,10 @@ or `travis mcp add time --allow-net pypi:mcp-server-time`; travis pins the regis
 version (or the one you give, `npm:pkg@1.2.3`, `pypi:pkg==1.2.3`) and passes any further
 arguments to the server. Re-adding a name replaces it, which is how you update one;
 `travis mcp remove <name>` deletes it. `--env` values are stored in plain text.
+npm servers are pinned in `mcp.lock` (state dir) by integrity hash, down to every package npx
+installs on first launch; a later launch that differs, or a registry server added by hand
+instead of through `travis mcp add`, is refused. `travis mcp verify` reports each server
+and exits non-zero if any would be refused.
 
 **Seeing what is set up.** `travis provider list` shows each profile, the active one and
 whether it has a key; `travis models` lists what the active endpoint offers; `travis mcp
