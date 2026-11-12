@@ -46,12 +46,21 @@ const networkSeatbeltProfile = `(allow system-socket)
 (allow file-read* (subpath "/private/etc") (literal "/private/var/run/resolv.conf"))
 `
 
-func prepareCommandForOS(cmd *exec.Cmd, _ Spec) (Tier, error) {
+// ReportAvailability reports the tier BuildCommand confines with on this machine, or ErrUnsupported without one.
+func ReportAvailability() (Tier, error) {
 	if _, err := os.Stat(sandboxExecPath); err != nil {
 		return TierNone, fmt.Errorf("find %s: %w", sandboxExecPath, core.ErrUnsupported)
 	}
-	killGroupOnCancel(cmd)
 	return TierSeatbelt, nil
+}
+
+func prepareCommandForOS(cmd *exec.Cmd, _ Spec) (Tier, error) {
+	tier, err := ReportAvailability()
+	if err != nil {
+		return TierNone, err
+	}
+	killGroupOnCancel(cmd)
+	return tier, nil
 }
 
 // applyToSelf has nothing to do: sandbox-exec applies the profile as it execs the target, never to the launcher.

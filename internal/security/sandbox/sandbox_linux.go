@@ -47,6 +47,11 @@ func prepareCommandForOS(cmd *exec.Cmd, _ Spec) (Tier, error) {
 	return tier, nil
 }
 
+// ReportAvailability reports the tier BuildCommand confines with on this machine, or ErrUnsupported without one.
+func ReportAvailability() (Tier, error) {
+	return reportLandlockTier()
+}
+
 // reportLandlockTier fails closed without Landlock, since there is nothing else to fall back to (OQ-16).
 func reportLandlockTier() (Tier, error) {
 	abi, err := llsyscall.LandlockGetABIVersion()
