@@ -26,6 +26,28 @@ func TestRedTeamGateWorkspaceCannotGrantExec(t *testing.T) {
 	}
 }
 
+func TestLoadSecurityProfileDefaultsToDefaultAndComesFromUserConfig(t *testing.T) {
+	paths := testPathSet()
+	cfg, _, err := load(buildFileReaderFromMap(nil), paths, nil, buildEnvLookupFromMap(nil))
+	if err != nil || cfg.Security.Profile != "default" {
+		t.Fatalf("default profile = %q, %v; want default", cfg.Security.Profile, err)
+	}
+	files := map[string]string{testUserConfigFile(paths): "[security]\nprofile = 'paranoid'\n"}
+	cfg, diags, err := load(buildFileReaderFromMap(files), paths, nil, buildEnvLookupFromMap(nil))
+	if err != nil || len(diags) != 0 || cfg.Security.Profile != "paranoid" {
+		t.Fatalf("user profile = %q, %v, %v; want paranoid", cfg.Security.Profile, diags, err)
+	}
+}
+
+// A cloned repo must never choose its own security profile.
+func TestRedTeamGateWorkspaceCannotChooseTheSecurityProfile(t *testing.T) {
+	paths := testPathSet()
+	files := map[string]string{paths.WorkspaceConfigFile: "[security]\nprofile = 'dev'\n"}
+	if _, _, err := load(buildFileReaderFromMap(files), paths, nil, buildEnvLookupFromMap(nil)); !errors.Is(err, core.ErrInvalid) {
+		t.Fatalf("workspace profile = dev gave %v, want ErrInvalid", err)
+	}
+}
+
 func TestLoadRejectsMalformedExecAllowPatterns(t *testing.T) {
 	for _, pattern := range []string{"", " ", "[", " node "} {
 		t.Run(pattern, func(t *testing.T) {

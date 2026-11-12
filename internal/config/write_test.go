@@ -75,6 +75,20 @@ func TestUpdateUserConfigLeavesAnInvalidFileAlone(t *testing.T) {
 	}
 }
 
+func TestSaveSecurityProfileKeepsTheOtherSecuritySettings(t *testing.T) {
+	paths := buildWritablePathSet(t)
+	writeTestFile(t, paths.ReportUserConfigFile(), "[security]\nexec_allow = [\"node\"]\n")
+
+	if err := SaveSecurityProfile(paths, "paranoid"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := loadUserConfigOnly(t, paths)
+	if cfg.Security.Profile != "paranoid" || strings.Join(cfg.Security.ExecAllow, ",") != "node" {
+		t.Fatalf("got profile %q and exec_allow %v, want paranoid and the hand-set node", cfg.Security.Profile, cfg.Security.ExecAllow)
+	}
+}
+
 func TestSaveAndRemoveMCPServerRoundTrip(t *testing.T) {
 	paths := buildWritablePathSet(t)
 	server := MCPServerCfg{Command: "npx", Args: []string{"-y", "pkg@1.2.3"}, Env: map[string]string{"A": "b"}, AllowNet: true}
