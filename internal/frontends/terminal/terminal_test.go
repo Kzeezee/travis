@@ -170,6 +170,27 @@ func TestStatusBarShowsTheMCPSandboxTier(t *testing.T) {
 	}
 }
 
+func TestStatusBarMarksUnavailableMCPServersUntilTheyStart(t *testing.T) {
+	m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "test-model"})
+	feed := func(events ...core.Event) string {
+		updated, _ := m.Update(eventBatchMsg{events: events})
+		m = updated.(chatModel)
+		return renderPlainView(m)
+	}
+	if view := feed(core.MCPServerUnavailable{Server: "notes", Reason: "boom"}); !strings.Contains(view, "● mcp notes") {
+		t.Fatalf("got view\n%s\nwant the unavailable marker", view)
+	}
+	if view := feed(core.MCPServerUnavailable{Server: "web", Reason: "boom"}); !strings.Contains(view, "● mcp 2 down") {
+		t.Fatalf("got view\n%s\nwant the count for several servers", view)
+	}
+	if view := feed(core.MCPServerStarted{Server: "notes", Tier: "landlock"}); !strings.Contains(view, "● mcp web") || strings.Contains(view, "notes") {
+		t.Fatalf("got view\n%s\nwant only web still marked", view)
+	}
+	if view := feed(core.MCPServerStarted{Server: "web", Tier: "landlock"}); strings.Contains(view, "● mcp") {
+		t.Fatalf("got view\n%s\nwant the marker cleared", view)
+	}
+}
+
 func TestCancelKeysInterruptTheRunningTurn(t *testing.T) {
 	for _, cancelKey := range []tea.KeyPressMsg{escKey, ctrlKey('c')} {
 		t.Run(cancelKey.String(), func(t *testing.T) {
