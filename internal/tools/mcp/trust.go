@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	trustFileName = "mcp-trust.toml"
-	trustDirMode  = 0o700
-	trustFileMode = 0o600
+	trustFileName        = "mcp-trust.toml"
+	privateStateDirMode  = 0o700
+	privateStateFileMode = 0o600
 )
 
 // trustEntry is one user's "always allow" answer for one exact server launch — separate
@@ -97,7 +97,7 @@ func (s *trustStore) add(command string, args []string, grant launchGrant, sourc
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	file, err := openTrustFile(s.path)
+	file, err := openPrivateFileNoFollow(s.path)
 	if err != nil {
 		return fmt.Errorf("mcp trust: %w", err)
 	}
@@ -125,12 +125,12 @@ func (s *trustStore) add(command string, args []string, grant launchGrant, sourc
 	return nil
 }
 
-// openTrustFile opens the trust file without following a symlink at its directory or at
-// the file itself — the same R-26-style reasoning as decisions.go's openDecisionsFile: a
-// planted symlink must never redirect a trusted write somewhere else on disk.
-func openTrustFile(path string) (*os.File, error) {
+// openPrivateFileNoFollow opens mcp-trust.toml or mcp.lock without following a symlink at its directory or at
+// the file itself, as broker's function of the same name does (R-26): a planted symlink must never redirect a
+// trusted write somewhere else on disk.
+func openPrivateFileNoFollow(path string) (*os.File, error) {
 	dir := filepath.Dir(path)
-	if err := os.Mkdir(dir, trustDirMode); err != nil && !errors.Is(err, fs.ErrExist) {
+	if err := os.Mkdir(dir, privateStateDirMode); err != nil && !errors.Is(err, fs.ErrExist) {
 		return nil, err
 	}
 	if info, err := os.Lstat(dir); err != nil {
@@ -139,7 +139,7 @@ func openTrustFile(path string) (*os.File, error) {
 		return nil, fmt.Errorf("%q is not a real folder: %w", dir, core.ErrDenied)
 	}
 
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, trustFileMode)
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, privateStateFileMode)
 	if !errors.Is(err, fs.ErrExist) {
 		return file, err
 	}
