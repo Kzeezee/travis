@@ -176,7 +176,8 @@ The broker's own paranoid grants are covered by `enforced_test.go`.
 - [ ] 5.3 Pre-fill `context_length` from Ollama `/api/show` or llama.cpp `/props` (D-33: config
       stays the source of truth)
 - [ ] 5.4 Connection test on keypress only (it costs a model call): reachable · streaming · tool call
-- [ ] 5.5 "tools" step: `approval_default` (supervised · collaborative · autonomous, §6.4),
+- [ ] ~~5.5~~ **Skipped:** `[tools] approval_default` is validated but nothing reads it, so a wizard
+      step for it would change nothing. Wire it into policy first (separate ticket, §5.5/§6.4). Was: "tools" step: `approval_default` (supervised · collaborative · autonomous, §6.4),
       making it six steps
 - [ ] 5.6 Tests: fake HTTP servers for detection and pre-fill; resume starts at the saved step
 
