@@ -106,6 +106,7 @@ func showTools(m chatModel, _ string) (chatModel, tea.Cmd) {
 type MCPServerSummary struct {
 	Name, State, Reason string
 	ToolCount           int
+	HiddenToolCount     int
 }
 
 func showMCPServers(m chatModel, _ string) (chatModel, tea.Cmd) {
@@ -119,6 +120,9 @@ func showMCPServers(m chatModel, _ string) (chatModel, tea.Cmd) {
 	}
 	for _, server := range servers {
 		line := fmt.Sprintf("%s · %s · %d tools", server.Name, server.State, server.ToolCount)
+		if server.HiddenToolCount > 0 {
+			line += fmt.Sprintf(" (%d hidden)", server.HiddenToolCount)
+		}
 		if server.Reason != "" {
 			line += " · " + cutFirstLine(server.Reason)
 		}

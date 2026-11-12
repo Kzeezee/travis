@@ -335,7 +335,7 @@ type chatSession struct {
 func (s *chatSession) listMCPServers() []terminal.MCPServerSummary {
 	var servers []terminal.MCPServerSummary
 	for _, status := range s.mcpManager.ReportServerStatuses() {
-		servers = append(servers, terminal.MCPServerSummary{Name: status.Name, State: string(status.State), Reason: status.Reason, ToolCount: status.ToolCount})
+		servers = append(servers, terminal.MCPServerSummary{Name: status.Name, State: string(status.State), Reason: status.Reason, ToolCount: status.ToolCount, HiddenToolCount: status.HiddenToolCount})
 	}
 	return servers
 }

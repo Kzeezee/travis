@@ -66,6 +66,20 @@ type serverProcess struct {
 	unavailable error
 	// startErr is why the first launch never produced a usable server; nothing retries it.
 	startErr error
+	// hiddenToolCount is how many of the server's listed tools its [tools] filter kept from the registry.
+	hiddenToolCount int
+}
+
+func (p *serverProcess) recordHiddenToolCount(count int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.hiddenToolCount = count
+}
+
+func (p *serverProcess) reportHiddenToolCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.hiddenToolCount
 }
 
 func (p *serverProcess) recordStartFailure(err error) {
