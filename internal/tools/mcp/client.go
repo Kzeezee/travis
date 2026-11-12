@@ -63,7 +63,7 @@ func BuildManager(servers config.MCPCfg, pol policy.Policy, approver core.Approv
 
 	trust := buildTrustStore(filepath.Join(stateDir, trustFileName))
 	for name, serverCfg := range servers.Servers {
-		process := buildServerProcess(name, serverCfg, pol, approver, clock, events, diagnostics, trust, sandboxing, filepath.Join(stateDir, "mcp", name), buildUnregisterTools(reg, name))
+		process := buildServerProcess(name, serverCfg, pol, approver, clock, events, diagnostics, trust, sandboxing, buildScratchDir(stateDir, name), filepath.Join(stateDir, lockFileName), buildUnregisterTools(reg, name))
 		manager.processes[name] = process
 		manager.done.Add(1)
 		go func(name string, process *serverProcess) {

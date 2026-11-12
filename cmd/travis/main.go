@@ -94,7 +94,7 @@ func run(args []string, in io.Reader, out io.Writer) error {
 	case "mcp":
 		return runMCP(args[1:], in, out)
 	default:
-		return fmt.Errorf("unknown command %q (try: travis init, travis chat, travis sessions, travis config, travis provider list, travis models, travis mcp list|add|remove, travis version)", args[0])
+		return fmt.Errorf("unknown command %q (try: travis init, travis chat, travis sessions, travis config, travis provider list, travis models, travis mcp list|verify|add|remove, travis version)", args[0])
 	}
 }
 

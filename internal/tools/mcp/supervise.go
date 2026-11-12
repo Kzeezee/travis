@@ -57,6 +57,8 @@ type serverProcess struct {
 	buildSandboxedCommand func(context.Context, sandbox.Spec) (*exec.Cmd, sandbox.Tier, error)
 	// scratchDir is this server's only writable folder by default; its home, temp and caches live there.
 	scratchDir string
+	// lockPath is mcp.lock, which pins what a registry server may install.
+	lockPath string
 	// unregisterTools removes this server's own tools from the registry once restart
 	// attempts are exhausted; nil in tests that never reach exhaustion.
 	unregisterTools func()
@@ -89,8 +91,8 @@ func (p *serverProcess) reportState() (ServerState, string) {
 	}
 }
 
-func buildServerProcess(name string, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, trust *trustStore, sandboxing Sandboxing, scratchDir string, unregisterTools func()) *serverProcess {
-	return &serverProcess{name: name, cfg: cfg, policy: pol, approver: approver, clock: clock, events: events, diagnostics: diagnostics, trust: trust, sandboxing: sandboxing, buildSandboxedCommand: sandbox.BuildCommand, scratchDir: scratchDir, unregisterTools: unregisterTools}
+func buildServerProcess(name string, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, trust *trustStore, sandboxing Sandboxing, scratchDir, lockPath string, unregisterTools func()) *serverProcess {
+	return &serverProcess{name: name, cfg: cfg, policy: pol, approver: approver, clock: clock, events: events, diagnostics: diagnostics, trust: trust, sandboxing: sandboxing, buildSandboxedCommand: sandbox.BuildCommand, scratchDir: scratchDir, lockPath: lockPath, unregisterTools: unregisterTools}
 }
 
 // connectAndSupervise performs the first connect (so tools/list has something to report)
@@ -125,6 +127,10 @@ func (p *serverProcess) currentSession() (*mcpsdk.ClientSession, error) {
 // the user wrote "npx" in their config, so their grant should match "npx", not a
 // platform-specific "npx.cmd" or an absolute path that happens to vary by machine.
 func (p *serverProcess) connect(ctx context.Context) (*mcpsdk.ClientSession, error) {
+	installState, err := verifyInstall(p.lockPath, p.scratchDir, p.name, p.cfg)
+	if err != nil {
+		return nil, err
+	}
 	cmd, grant, err := p.buildLaunchCommand(ctx)
 	if err != nil {
 		return nil, err
@@ -146,6 +152,16 @@ func (p *serverProcess) connect(ctx context.Context) (*mcpsdk.ClientSession, err
 	if err != nil {
 		fmt.Fprintf(p.diagnostics, "travis: mcp server %q wrote its startup errors to %s\n", p.name, stderrLog.Name())
 		return nil, translateConnectError(p.name, err)
+	}
+	// npx installs during the first launch, so only now is there an install to check against the pin and record.
+	if installState == InstallAwaitingFirstLaunch {
+		if installState, err = verifyInstall(p.lockPath, p.scratchDir, p.name, p.cfg); err == nil && installState != InstallVerified {
+			err = fmt.Errorf("mcp server %q started, but what npx installed was not found under %s, so it cannot be checked: %w", p.name, p.scratchDir, core.ErrDenied)
+		}
+		if err != nil {
+			_ = session.Close()
+			return nil, err
+		}
 	}
 	p.publish(ctx, core.MCPServerStarted{EventHeader: core.EventHeader{At: p.clock.ReportCurrentTime()}, Server: p.name, Tier: string(grant.Tier)})
 	return session, nil

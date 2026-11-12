@@ -162,6 +162,6 @@ func buildTestProcessWithUnregister(t *testing.T, cfg config.MCPServerCfg, pol p
 	})
 	clock := core.FixedClock{Time: time.Now()}
 	trust := buildTrustStore(filepath.Join(t.TempDir(), trustFileName))
-	process := buildServerProcess("test-server", cfg, pol, approver, clock, nil, diagnostics, trust, testSandboxing(), filepath.Join(t.TempDir(), "scratch"), unregisterTools)
+	process := buildServerProcess("test-server", cfg, pol, approver, clock, nil, diagnostics, trust, testSandboxing(), filepath.Join(t.TempDir(), "scratch"), filepath.Join(t.TempDir(), lockFileName), unregisterTools)
 	return process, clock
 }
