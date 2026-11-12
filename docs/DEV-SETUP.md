@@ -413,7 +413,11 @@ args = ["-y", "@modelcontextprotocol/server-everything"]
 allow_net = true             # the first launch downloads the package
 read_paths = []              # absolute paths beyond the defaults
 write_paths = []
+tools = { allow = ["*"], deny = ["delete_repository"] }   # globs over the server's own tool names
 ```
+
+`tools.deny` wins over `tools.allow`, and an empty `allow` means every tool. Tools the filter
+withholds never reach the model; `/mcp` shows the count as `N tools (M hidden)`.
 
 The status bar shows the tier (`sandbox: seatbelt`, `landlock`, `landlock-no-net`,
 `restricted-token`). Where this OS has no sandbox, `[security] require_sandbox = true`

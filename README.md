@@ -163,7 +163,8 @@ exec_allow = ["npx", "uvx"]
 ```
 
 `allow_net` lets the first launch download the package. Without it the sandbox blocks
-the network (where the OS can).
+the network (where the OS can). `tools = { allow = [...], deny = [...] }` limits which of
+the server's tools the model sees (globs on the server's own tool names; deny wins).
 
 ### Skills
 
