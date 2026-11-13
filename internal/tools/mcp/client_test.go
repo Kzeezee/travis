@@ -198,7 +198,8 @@ func TestFailedServerStartReportsItsStderrLineInStatusAndEvent(t *testing.T) {
 	}
 }
 
-// startFilteredFakeServer registers the fake server's tools under filter and waits for it to be running.
+// startFilteredFakeServer registers the fake server's tools under filter and waits until registration is done:
+// a server reports running once connected, before its tools are listed.
 func startFilteredFakeServer(t *testing.T, filter config.MCPToolFilterCfg) (*registry.Registry, *Manager) {
 	t.Helper()
 	cfg := buildTestServerConfig()
@@ -206,7 +207,10 @@ func startFilteredFakeServer(t *testing.T, filter config.MCPToolFilterCfg) (*reg
 	reg := registry.BuildRegistry(100)
 	manager := BuildManager(config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": cfg}}, grantedExecPolicy(), &fakeApprover{decision: core.ApprovalOnce}, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir(), testSandboxing(), CallApprovalAuto)
 	t.Cleanup(manager.Close)
-	pollUntil(t, 10*time.Second, func() bool { return manager.ReportServerStatuses()[0].State == ServerRunning })
+	manager.WaitUntilStarted()
+	if status := manager.ReportServerStatuses()[0]; status.State != ServerRunning {
+		t.Fatalf("status = %+v, want the fake server running", status)
+	}
 	return reg, manager
 }
 
