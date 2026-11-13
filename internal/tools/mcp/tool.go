@@ -54,7 +54,7 @@ func (t *adaptedTool) Invoke(ctx context.Context, arguments json.RawMessage) (co
 		return core.ToolOutput{}, err
 	}
 
-	if core.ReportIsFromUntrustedStep(ctx) && !t.requestUntrustedCallApproval(ctx) {
+	if !t.authorizeCall(ctx) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return core.ToolOutput{}, ctxErr
 		}
@@ -90,19 +90,49 @@ func (t *adaptedTool) Invoke(ctx context.Context, arguments json.RawMessage) (co
 	}, nil
 }
 
-// requestUntrustedCallApproval reports whether a human allowed an MCP call in a step with
-// untrusted intake: the server's effects never pass the broker, so this is the only check.
-func (t *adaptedTool) requestUntrustedCallApproval(ctx context.Context) bool {
+// authorizeCall is the only check on an MCP call, since the server's effects never pass the broker. After
+// untrusted intake it always asks, with no "always" (§5.12.4); otherwise approval_default decides.
+func (t *adaptedTool) authorizeCall(ctx context.Context) bool {
+	if core.ReportIsFromUntrustedStep(ctx) {
+		return t.requestCallApproval(ctx, "call an MCP tool in a step with untrusted intake (§5.12.4)", true)
+	}
+	if t.process.callApproval == CallApprovalAuto {
+		return true
+	}
+	if t.process.callApproval != CallApprovalAsk {
+		return false // never, or an unset mode, fails closed
+	}
+	command, args, grant := t.reportApprovedLaunch()
+	if t.process.trust != nil && t.process.trust.isTrusted(command, args, grant, t.Name()) {
+		return true
+	}
+	return t.requestCallApproval(ctx, "call an MCP tool, which travis cannot undo ([tools] approval_default = \"ask\")", false)
+}
+
+func (t *adaptedTool) requestCallApproval(ctx context.Context, explanation string, isIrreversible bool) bool {
 	if t.process.approver == nil {
 		return false
 	}
 	decision, err := t.process.approver.RequestApproval(ctx, core.Operation{
-		Kind:           core.CapabilityExec,
-		Target:         t.Name(),
-		Explanation:    "call an MCP tool in a step with untrusted intake (§5.12.4)",
-		IsIrreversible: true,
+		Kind: core.CapabilityExec, Target: t.Name(), Explanation: explanation, IsIrreversible: isIrreversible,
 	})
-	return err == nil && decision != core.ApprovalDenied
+	switch {
+	case err != nil || decision == core.ApprovalDenied:
+		return false
+	case decision == core.ApprovalAlways && !isIrreversible && t.process.trust != nil:
+		command, args, grant := t.reportApprovedLaunch()
+		// The call goes ahead even if remembering fails: the user did say yes to it.
+		if err := t.process.trust.add(command, args, grant, t.Name(), "approval modal", t.process.clock); err != nil {
+			fmt.Fprintf(t.process.diagnostics, "travis: could not remember always for %s: %v\n", t.Name(), err)
+		}
+	}
+	return true
+}
+
+func (t *adaptedTool) reportApprovedLaunch() (string, []string, launchGrant) {
+	t.process.mu.Lock()
+	defer t.process.mu.Unlock()
+	return t.process.cfg.Command, t.process.cfg.Args, t.process.grant
 }
 
 // extractText concatenates every text part of an MCP result; non-text content (images,

@@ -33,12 +33,14 @@ type trustEntry struct {
 	AllowNetwork bool     `toml:"allow_network"`
 	ReadPaths    []string `toml:"read_paths"`
 	WritePaths   []string `toml:"write_paths"`
-	AddedAt      time.Time
-	Source       string
+	// Tool is one MCP tool call answered "always" (approval_default = "ask"); empty for the launch itself.
+	Tool    string `toml:"tool,omitempty"`
+	AddedAt time.Time
+	Source  string
 }
 
-func (e trustEntry) matches(command string, args []string, grant launchGrant) bool {
-	return e.Command == command && slices.Equal(e.Args, args) && e.Tier == string(grant.Tier) &&
+func (e trustEntry) matches(command string, args []string, grant launchGrant, tool string) bool {
+	return e.Tool == tool && e.Command == command && slices.Equal(e.Args, args) && e.Tier == string(grant.Tier) &&
 		e.AllowNetwork == grant.AllowNetwork && slices.Equal(e.ReadPaths, grant.ReadPaths) && slices.Equal(e.WritePaths, grant.WritePaths)
 }
 
@@ -77,21 +79,21 @@ func buildTrustStore(path string) *trustStore {
 	return store
 }
 
-// isTrusted reports whether command, args and sandbox grant exactly match a previously approved entry.
-func (s *trustStore) isTrusted(command string, args []string, grant launchGrant) bool {
+// isTrusted reports whether command, args, sandbox grant and tool ("" for the launch) exactly match a previously approved entry.
+func (s *trustStore) isTrusted(command string, args []string, grant launchGrant, tool string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.ContainsFunc(s.entries, func(entry trustEntry) bool { return entry.matches(command, args, grant) })
+	return slices.ContainsFunc(s.entries, func(entry trustEntry) bool { return entry.matches(command, args, grant, tool) })
 }
 
 // add appends one trusted entry, both in memory and durably on disk under an exclusive
 // lock (same D-32 reasoning as AddDecisionRule), so a concurrent writer never corrupts
 // the file and a crash right after never loses the in-memory half of the picture.
-func (s *trustStore) add(command string, args []string, grant launchGrant, source string, clock core.Clock) error {
+func (s *trustStore) add(command string, args []string, grant launchGrant, tool, source string, clock core.Clock) error {
 	entry := trustEntry{
 		Command: command, Args: slices.Clone(args),
 		Tier: string(grant.Tier), AllowNetwork: grant.AllowNetwork, ReadPaths: slices.Clone(grant.ReadPaths), WritePaths: slices.Clone(grant.WritePaths),
-		AddedAt: clock.ReportCurrentTime().UTC(), Source: source,
+		Tool: tool, AddedAt: clock.ReportCurrentTime().UTC(), Source: source,
 	}
 
 	s.mu.Lock()

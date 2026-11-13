@@ -28,6 +28,19 @@ type Manager struct {
 	processes map[string]*serverProcess
 }
 
+// CallApproval is [tools] approval_default: whether a call to an MCP tool asks first. Built-in tools keep the
+// broker's own rules; MCP calls never pass the broker, so they cannot be journalled or undone (DESIGN.md §5.5, §6.4).
+type CallApproval string
+
+const (
+	// CallApprovalAuto runs MCP tools without asking, except after untrusted intake.
+	CallApprovalAuto CallApproval = "auto"
+	// CallApprovalAsk asks before each tool until the user answers "always" for it, remembered per approved launch.
+	CallApprovalAsk CallApproval = "ask"
+	// CallApprovalNever keeps every MCP tool from the model.
+	CallApprovalNever CallApproval = "never"
+)
+
 // ServerState is where one configured server is in its life this session.
 type ServerState string
 
@@ -59,13 +72,14 @@ type ServerStatus struct {
 // skipped with a diagnostic rather than failing the session. stateDir is where the shared
 // trust store (mcp-trust.toml) lives — user-scoped, like the [mcp.servers] config itself —
 // and where each server's scratch folder (mcp/<name>) is created.
-func BuildManager(servers config.MCPCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, reg *registry.Registry, stateDir string, sandboxing Sandboxing) *Manager {
+func BuildManager(servers config.MCPCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, reg *registry.Registry, stateDir string, sandboxing Sandboxing, callApproval CallApproval) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &Manager{cancel: cancel, reg: reg, processes: map[string]*serverProcess{}}
 
 	trust := buildTrustStore(filepath.Join(stateDir, trustFileName))
 	for name, serverCfg := range servers.Servers {
 		process := buildServerProcess(name, serverCfg, pol, approver, clock, events, diagnostics, trust, sandboxing, buildScratchDir(stateDir, name), filepath.Join(stateDir, lockFileName), buildUnregisterTools(reg, name))
+		process.callApproval = callApproval
 		manager.processes[name] = process
 		manager.done.Add(1)
 		go func(name string, process *serverProcess) {
@@ -103,7 +117,7 @@ func connectAndRegister(ctx context.Context, name string, process *serverProcess
 	}
 	hidden := 0
 	for _, remoteTool := range listed.Tools {
-		if !process.cfg.Tools.PermitsTool(remoteTool.Name) {
+		if process.callApproval == CallApprovalNever || !process.cfg.Tools.PermitsTool(remoteTool.Name) {
 			hidden++
 			continue
 		}

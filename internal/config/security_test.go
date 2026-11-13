@@ -114,3 +114,15 @@ func TestValidateRejectsUnsafeMCPServerSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestRedTeamGateWorkspaceCannotStopMCPToolsAsking(t *testing.T) {
+	paths := testPathSet()
+	files := map[string]string{paths.WorkspaceConfigFile: "[tools]\napproval_default = 'auto'\nmax_exposed = 12\n"}
+	cfg, _, err := load(buildFileReaderFromMap(files), paths, nil, buildEnvLookupFromMap(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tools.ApprovalDefault != "ask" || cfg.Tools.MaxExposed != 12 {
+		t.Fatalf("got %+v; want the workspace's approval_default ignored and its other [tools] keys kept", cfg.Tools)
+	}
+}

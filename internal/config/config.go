@@ -155,9 +155,10 @@ type BrainCfg struct {
 }
 
 // ToolsCfg bounds what the registry exposes to the model each step (DESIGN.md 5.5).
-// Per-tool approval overrides ([tools.approval]) are deferred: they resolve against
-// `security`, which doesn't exist yet.
+// Per-tool approval overrides ([tools.approval]) are deferred.
 type ToolsCfg struct {
+	// ApprovalDefault (auto | ask | never) governs MCP tool calls; built-in tools follow the broker's fixed rules.
+	// User-config only: decodeWorkspaceLayerFile discards the workspace's value.
 	ApprovalDefault string `toml:"approval_default"`
 	MaxExposed      int    `toml:"max_exposed"`
 }
@@ -422,6 +423,7 @@ func decodeWorkspaceLayerFile(readFile fileReader, path string, cfg *Config) (Di
 		return diags, fmt.Errorf("config %s: %w", path, err)
 	}
 	seed.Brain.MaxDailyCostUSD = cfg.Brain.MaxDailyCostUSD // a cloned repo must not raise the user's daily limit
+	seed.Tools.ApprovalDefault = cfg.Tools.ApprovalDefault // nor stop MCP tools asking first
 	cfg.Brain, cfg.Tools = seed.Brain, seed.Tools
 	return diags, nil
 }

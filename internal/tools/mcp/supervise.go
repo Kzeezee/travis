@@ -68,6 +68,10 @@ type serverProcess struct {
 	unavailable error
 	// startErr is why the first launch never produced a usable server; nothing retries it.
 	startErr error
+	// callApproval is [tools] approval_default, applied to each call of this server's tools.
+	callApproval CallApproval
+	// grant is what the running launch was approved under; an "always" for one of its tools is tied to it.
+	grant launchGrant
 	// hasStderrLog is true once a launch of this process made a fresh stderr.log, so an older session's is never quoted.
 	hasStderrLog bool
 	// hiddenToolCount is how many of the server's listed tools its [tools] filter kept from the registry.
@@ -170,6 +174,9 @@ func (p *serverProcess) connect(ctx context.Context) (*mcpsdk.ClientSession, err
 	if err := p.authorizeExec(ctx, p.cfg.Command, grant); err != nil {
 		return nil, err
 	}
+	p.mu.Lock()
+	p.grant = grant
+	p.mu.Unlock()
 	// A server that dies at startup says why only on stderr (an npm network error, a sandbox denial). It goes to a
 	// file, not the terminal, where a chatty server's log lines would draw over the chat screen.
 	stderrLog, err := createStderrLog(p.scratchDir)
@@ -209,7 +216,7 @@ func (p *serverProcess) authorizeExec(ctx context.Context, command string, grant
 	case policy.Allow:
 		return nil
 	case policy.Ask:
-		if p.trust != nil && p.trust.isTrusted(command, p.cfg.Args, grant) {
+		if p.trust != nil && p.trust.isTrusted(command, p.cfg.Args, grant, "") {
 			return nil
 		}
 		return p.requestApproval(ctx, command, grant)
@@ -244,7 +251,7 @@ func (p *serverProcess) requestApproval(ctx context.Context, command string, gra
 		if p.trust == nil {
 			return nil
 		}
-		return p.trust.add(command, p.cfg.Args, grant, "approval modal", p.clock)
+		return p.trust.add(command, p.cfg.Args, grant, "", "approval modal", p.clock)
 	case core.ApprovalDenied:
 		return fmt.Errorf("starting mcp server %q was denied by the user: %w", p.name, core.ErrDenied)
 	default:

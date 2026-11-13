@@ -554,7 +554,7 @@ func assembleChatSession(deps chatSessionDeps) (*chatSession, error) {
 	// Async by design (BuildManager's own doc comment): connecting here, before the TUI's
 	// event loop starts reading approvals, would deadlock any server that needs Ask.
 	redactedEvents := redact.WrapSink(deps.Bus, deps.Redactor)
-	mcpManager := mcp.BuildManager(cfg.MCP, deps.MCPPolicy, deps.Approver, clock, redactedEvents, deps.Diagnostics, toolRegistry, paths.StateDir, deps.MCPSandboxing)
+	mcpManager := mcp.BuildManager(cfg.MCP, deps.MCPPolicy, deps.Approver, clock, redactedEvents, deps.Diagnostics, toolRegistry, paths.StateDir, deps.MCPSandboxing, mcp.CallApproval(cfg.Tools.ApprovalDefault))
 
 	ids := id.BuildULIDGenerator(clock)
 	activeProfile := cfg.Provider.Profiles[cfg.Provider.Active]
