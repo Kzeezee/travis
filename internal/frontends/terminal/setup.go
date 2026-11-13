@@ -18,6 +18,9 @@ type SetupActions struct {
 	DescribeProviders func() []ProviderSummary
 	// DetectLocalServers looks for model servers on this machine; it waits on the network, so it runs off the UI thread.
 	DetectLocalServers func() []LocalServerSummary
+	// ChooseLocalModel makes model the one SaveProvider saves and TestConnection tests for a detected local
+	// server's profile, and reports that model's context length (0 when unknown). It waits on the network.
+	ChooseLocalModel func(profile, model string) int
 	// SaveProvider makes profile the active one, storing apiKey first when it is not empty. A detected
 	// local server's profile is created or updated first.
 	SaveProvider func(profile, apiKey string) error
@@ -39,7 +42,10 @@ type LocalServerSummary struct {
 	Profile string
 	// Address is where travis looked, such as 127.0.0.1:11434.
 	Address string
-	// Model is empty when the server was not detected or offers no model; then it cannot be chosen.
+	// Models is every model the server offers, in the order it lists them.
+	Models []string
+	// Model is the chosen one, the first until the user picks another; empty when the server was not
+	// detected or offers no model, and then it cannot be chosen.
 	Model string
 	// ContextLength is Model's context window in tokens; 0 means the server did not say.
 	ContextLength int
@@ -56,8 +62,10 @@ type connectionTestedMsg struct {
 // setupProviderRow is one choice in the provider step: a configured profile or a local server.
 type setupProviderRow struct {
 	name, model, status string
-	isChoosable         bool
-	isKeyNeeded         bool
+	// models is what ←/→ cycles model through; only a detected local server offers more than one.
+	models      []string
+	isChoosable bool
+	isKeyNeeded bool
 }
 
 type SetupOptions struct {
@@ -89,7 +97,7 @@ var setupSecurityProfiles = []string{"paranoid", "default", "dev"}
 
 const (
 	setupLegend         = "↑↓ choose · ⏎ continue · tab skip · ctrl+c quit"
-	setupProviderLegend = "↑↓ choose · ⏎ continue · t test connection · tab skip · ctrl+c quit"
+	setupProviderLegend = "↑↓ choose · ←→ model · ⏎ continue · t test connection · tab skip · ctrl+c quit"
 )
 
 type setupModel struct {
@@ -249,6 +257,8 @@ func (m setupModel) handleProviderKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 			return m, m.keyInput.Focus()
 		}
 		return m.saveAndAdvance(func() error { return m.actions.SaveProvider(chosen.name, "") })
+	case "left", "right":
+		return m.cycleLocalModel(map[string]int{"left": -1, "right": 1}[key.String()]), nil
 	case "t":
 		rows := m.listProviderRows()
 		if len(rows) == 0 || !rows[m.cursor].isChoosable {
@@ -261,6 +271,21 @@ func (m setupModel) handleProviderKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	return m, nil
 }
 
+// cycleLocalModel moves the highlighted local server's model step places along its list, wrapping at the ends.
+func (m setupModel) cycleLocalModel(step int) setupModel {
+	rows := m.listProviderRows()
+	if len(rows) == 0 || len(rows[m.cursor].models) < 2 {
+		return m
+	}
+	row := rows[m.cursor]
+	chosen := row.models[(slices.Index(row.models, row.model)+step+len(row.models))%len(row.models)]
+	m.localServers = slices.Clone(m.localServers)
+	server := &m.localServers[slices.IndexFunc(m.localServers, func(s LocalServerSummary) bool { return s.Profile == row.name })]
+	server.Model, server.ContextLength = chosen, m.actions.ChooseLocalModel(row.name, chosen)
+	m.connectionTest = nil
+	return m
+}
+
 // listProviderRows lists configured profiles, then local servers. A detected server with a model
 // replaces the profile of the same name in place, so the cursor keeps pointing at the same row.
 func (m setupModel) listProviderRows() []setupProviderRow {
@@ -270,7 +295,7 @@ func (m setupModel) listProviderRows() []setupProviderRow {
 			isChoosable: true, isKeyNeeded: provider.IsKeyRequired && !provider.HasKey})
 	}
 	for _, server := range m.localServers {
-		row := setupProviderRow{name: server.Profile, model: server.Model, status: describeLocalServer(server), isChoosable: server.Model != ""}
+		row := setupProviderRow{name: server.Profile, model: server.Model, models: server.Models, status: describeLocalServer(server), isChoosable: server.Model != ""}
 		configured := slices.IndexFunc(rows, func(r setupProviderRow) bool { return r.name == server.Profile })
 		switch {
 		case configured < 0:
@@ -280,6 +305,14 @@ func (m setupModel) listProviderRows() []setupProviderRow {
 		}
 	}
 	return rows
+}
+
+// describeRowModel shows where the model sits among the server's, as "‹name› (2 of 3)", when there is a choice.
+func describeRowModel(row setupProviderRow) string {
+	if len(row.models) < 2 {
+		return row.model
+	}
+	return fmt.Sprintf("‹%s› (%d of %d)", row.model, slices.Index(row.models, row.model)+1, len(row.models))
 }
 
 func describeLocalServer(server LocalServerSummary) string {
@@ -365,7 +398,7 @@ func (m setupModel) renderStep() []string {
 		lines := []string{" Choose your model provider", ""}
 		rows := m.listProviderRows()
 		for i, provider := range rows {
-			row := fmt.Sprintf("   %-10s %-24s %s", provider.name, provider.model, provider.status)
+			row := fmt.Sprintf("   %-10s %-24s %s", provider.name, describeRowModel(provider), provider.status)
 			if i == m.cursor {
 				row = selectedRowStyle.Render("▸" + row[1:])
 			}
