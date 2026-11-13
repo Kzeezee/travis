@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Kzeezee/travis/internal/config"
+	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
 )
@@ -83,6 +84,35 @@ func TestSetupProvidersSavesADetectedLocalServerAsItsProfile(t *testing.T) {
 	for _, line := range []string{"active = 'ollama'", "base_url = 'http://127.0.0.1:11434/v1'", "model = 'qwen3:14b'", "context_length = 40960"} {
 		if !strings.Contains(string(saved), line) {
 			t.Errorf("saved config\n%s\nis missing %q", saved, line)
+		}
+	}
+}
+
+func TestRunConnectionTestReportsEachCheck(t *testing.T) {
+	answer := func(chunks ...core.Chunk) scriptedStep {
+		return func(*testing.T, core.ProviderRequest) []core.Chunk { return chunks }
+	}
+	for name, test := range map[string]struct {
+		step scriptedStep
+		want []string
+	}{
+		"tool called": {answer(buildToolCallChunks("1", "ping", "{}")...), []string{"✓ reachable (0 ms)", "✓ streaming", "✓ tool call"}},
+		"text only":   {answer(core.Chunk{Text: "pong"}), []string{"✓ reachable (0 ms)", "✓ streaming", "✗ tool call: the model answered without calling the tool"}},
+		"empty reply": {answer(), []string{"✓ reachable (0 ms)", "✗ streaming: the reply was empty", "✗ tool call: the reply was empty"}},
+		"unreachable": {nil, []string{"✗ reachable: scripted provider: no step 1"}},
+	} {
+		provider := &scriptedProvider{t: t}
+		if test.step != nil {
+			provider.steps = []scriptedStep{test.step}
+		}
+
+		got := runConnectionTest(context.Background(), provider, "qwen3:14b", core.FixedClock{})
+
+		if !slices.Equal(got, test.want) {
+			t.Errorf("%s: got %q, want %q", name, got, test.want)
+		}
+		if len(provider.requests) == 1 && (len(provider.requests[0].Tools) != 1 || provider.requests[0].Model != "qwen3:14b") {
+			t.Errorf("%s: sent %+v, want one tiny request offering one tool", name, provider.requests[0])
 		}
 	}
 }

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"net/url"
@@ -11,8 +13,10 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Kzeezee/travis/internal/config"
+	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
 	"github.com/Kzeezee/travis/internal/security/sandbox"
@@ -43,6 +47,7 @@ func runSetupWizard(in io.Reader, out io.Writer) (bool, error) {
 		DescribeProviders:   providers.DescribeProviders,
 		DetectLocalServers:  setupProviders.DetectLocalServers,
 		SaveProvider:        setupProviders.SaveProvider,
+		TestConnection:      setupProviders.TestConnection,
 		SaveVoiceOutput:     func(isEnabled bool) error { return config.SaveVoiceOutput(paths, isEnabled) },
 		ListMCPServers:      func() []string { return slices.Sorted(maps.Keys(cfg.MCP.Servers)) },
 		DescribeSecurity:    func(profile string) []string { return describeSecurity(cfg, paths, profile) },
@@ -152,6 +157,71 @@ func (s *setupProviders) SaveProvider(profile, apiKey string) error {
 		}
 	}
 	return config.SaveActiveProvider(s.paths, profile)
+}
+
+// connectionTestTimeout allows for a local server loading the model from disk on first use.
+const connectionTestTimeout = time.Minute
+
+// connectionTestTool is the one trivial tool a connection test offers the model.
+var connectionTestTool = core.ToolSpec{Name: "ping", Description: "Shows that tool calling works. Takes no arguments.",
+	InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)}
+
+// TestConnection sends profile's model one tiny request through the same client a chat uses.
+func (s *setupProviders) TestConnection(profile string) []string {
+	s.mu.Lock()
+	settings, isLocal := s.detected[profile]
+	s.mu.Unlock()
+	if !isLocal {
+		settings = s.profiles[profile]
+	}
+	key, err := config.ResolveProviderAPIKey(profile, settings.Auth)
+	if err != nil {
+		return []string{"✗ reachable: " + reportFirstErrorLine(err)}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), connectionTestTimeout)
+	defer cancel()
+	return runConnectionTest(ctx, openaicompat.BuildProvider(settings.BaseURL, key, nil, core.SystemClock{}), settings.Model, core.SystemClock{})
+}
+
+// runConnectionTest reports reachable, streaming and tool call, one line each, from one request.
+func runConnectionTest(ctx context.Context, provider core.Provider, model string, clock core.Clock) []string {
+	started := clock.ReportCurrentTime()
+	stream, err := provider.Chat(ctx, core.ProviderRequest{
+		Model:     model,
+		Messages:  []core.Message{{Role: core.RoleUser, Parts: []core.Part{core.TextPart{Text: "Call the ping tool."}}}},
+		Tools:     []core.ToolSpec{connectionTestTool},
+		MaxTokens: 512,
+	})
+	if err != nil {
+		return []string{"✗ reachable: " + reportFirstErrorLine(err)}
+	}
+	defer func() { _ = stream.Close() }()
+	checks := []string{fmt.Sprintf("✓ reachable (%d ms)", clock.ReportCurrentTime().Sub(started).Milliseconds())}
+
+	hasChunk, hasToolCall := false, false
+	for {
+		chunk, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return append(checks, "✗ streaming: "+reportFirstErrorLine(err), "✗ tool call: the reply broke off first")
+		}
+		hasChunk = true
+		hasToolCall = hasToolCall || slices.ContainsFunc(chunk.ToolCalls, func(call core.ToolCall) bool { return call.Name == connectionTestTool.Name })
+	}
+	switch {
+	case !hasChunk:
+		return append(checks, "✗ streaming: the reply was empty", "✗ tool call: the reply was empty")
+	case !hasToolCall:
+		return append(checks, "✓ streaming", "✗ tool call: the model answered without calling the tool")
+	}
+	return append(checks, "✓ streaming", "✓ tool call")
+}
+
+func reportFirstErrorLine(err error) string {
+	line, _, _ := strings.Cut(err.Error(), "\n")
+	return line
 }
 
 // shouldOfferSetup is true on a first run: no user config yet and a person at the keyboard.

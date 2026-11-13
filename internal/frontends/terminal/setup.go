@@ -20,7 +20,10 @@ type SetupActions struct {
 	DetectLocalServers func() []LocalServerSummary
 	// SaveProvider makes profile the active one, storing apiKey first when it is not empty. A detected
 	// local server's profile is created or updated first.
-	SaveProvider    func(profile, apiKey string) error
+	SaveProvider func(profile, apiKey string) error
+	// TestConnection sends profile's model one tiny request with one tool and reports one line per
+	// check. It costs a model call, so the wizard runs it only when the user asks.
+	TestConnection  func(profile string) []string
 	SaveVoiceOutput func(isEnabled bool) error
 	ListMCPServers  func() []string
 	// DescribeSecurity says what the named security profile lets travis do, one row per line.
@@ -44,6 +47,11 @@ type LocalServerSummary struct {
 }
 
 type localServersDetectedMsg struct{ servers []LocalServerSummary }
+
+type connectionTestedMsg struct {
+	profile string
+	checks  []string
+}
 
 // setupProviderRow is one choice in the provider step: a configured profile or a local server.
 type setupProviderRow struct {
@@ -79,7 +87,10 @@ var setupStepNames = []string{"provider", "voice", "mcp", "security", "done"}
 // setupSecurityProfiles leaves out yolo, which needs an RFC amending D-22 and D-27 first.
 var setupSecurityProfiles = []string{"paranoid", "default", "dev"}
 
-const setupLegend = "↑↓ choose · ⏎ continue · tab skip · ctrl+c quit"
+const (
+	setupLegend         = "↑↓ choose · ⏎ continue · tab skip · ctrl+c quit"
+	setupProviderLegend = "↑↓ choose · ⏎ continue · t test connection · tab skip · ctrl+c quit"
+)
 
 type setupModel struct {
 	actions SetupActions
@@ -95,6 +106,8 @@ type setupModel struct {
 	keyInput                 textinput.Model
 	isVoiceOn                bool
 	profileCursor            int
+	// connectionTest is the last test's header line and one line per check.
+	connectionTest []string
 	// notice is the last save's failure, shown until the user acts again.
 	notice     string
 	isFinished bool
@@ -148,6 +161,8 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case localServersDetectedMsg:
 		m.localServers, m.hasLookedForLocalServers = msg.servers, true
+	case connectionTestedMsg:
+		m.connectionTest = append([]string{"test · " + msg.profile}, msg.checks...)
 	case tea.PasteMsg:
 		if m.isEnteringKey {
 			var cmd tea.Cmd
@@ -234,6 +249,14 @@ func (m setupModel) handleProviderKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 			return m, m.keyInput.Focus()
 		}
 		return m.saveAndAdvance(func() error { return m.actions.SaveProvider(chosen.name, "") })
+	case "t":
+		rows := m.listProviderRows()
+		if len(rows) == 0 || !rows[m.cursor].isChoosable {
+			return m, nil
+		}
+		profile, testConnection := rows[m.cursor].name, m.actions.TestConnection
+		m.connectionTest = []string{"test · " + profile, "testing…"}
+		return m, func() tea.Msg { return connectionTestedMsg{profile: profile, checks: testConnection(profile)} }
 	}
 	return m, nil
 }
@@ -315,7 +338,11 @@ func (m setupModel) View() tea.View {
 	if m.notice != "" {
 		lines = append(lines, "", " "+errorStyle.Render(m.notice))
 	}
-	lines = append(lines, "", " "+dimStyle.Render(setupLegend))
+	legend := setupLegend
+	if m.step == setupProvider {
+		legend = setupProviderLegend
+	}
+	lines = append(lines, "", " "+dimStyle.Render(legend))
 	view := tea.NewView(strings.Join(lines, "\n"))
 	view.AltScreen = true
 	return view
@@ -346,6 +373,9 @@ func (m setupModel) renderStep() []string {
 		}
 		if !m.hasLookedForLocalServers {
 			lines = append(lines, dimStyle.Render("   looking for Ollama and llama.cpp on this machine…"))
+		}
+		if len(m.connectionTest) > 0 {
+			lines = append(append(lines, "", " "+m.connectionTest[0]), indentLines(m.connectionTest[1:])...)
 		}
 		if m.isEnteringKey {
 			lines = append(lines, "", " "+rows[m.cursor].name+" needs an API key; it is saved to the OS credential store, never to the config file.",

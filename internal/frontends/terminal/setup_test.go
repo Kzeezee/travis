@@ -16,6 +16,7 @@ type setupRecorder struct {
 	saveErr                error
 	recordedSteps          []string
 	localServers           []LocalServerSummary
+	testedProfiles         []string
 }
 
 func (r *setupRecorder) buildSetupModel() setupModel {
@@ -34,6 +35,10 @@ func (r *setupRecorder) buildSetupModelAt(startStep string) setupModel {
 		SaveProvider: func(profile, apiKey string) error {
 			r.savedProfile, r.savedKey = profile, apiKey
 			return r.saveErr
+		},
+		TestConnection: func(profile string) []string {
+			r.testedProfiles = append(r.testedProfiles, profile)
+			return []string{"✓ reachable (34 ms)", "✓ streaming", "✗ tool call: answered without calling it"}
 		},
 		SaveVoiceOutput:     func(isEnabled bool) error { r.voice = &isEnabled; return nil },
 		ListMCPServers:      func() []string { return nil },
@@ -188,5 +193,25 @@ func TestSetupOffersADetectedLocalServerInPlaceOfItsProfile(t *testing.T) {
 	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyUp}, enterKey)
 	if m.step != setupVoice || recorder.savedProfile != "local" {
 		t.Fatalf("got step %d and saved %q, want the detected server saved as local", m.step, recorder.savedProfile)
+	}
+}
+
+func TestSetupTestsTheConnectionOnlyWhenAsked(t *testing.T) {
+	recorder := &setupRecorder{}
+	m := recorder.buildSetupModel()
+	walked, _ := pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyDown}, enterKey, enterKey, enterKey, enterKey, enterKey)
+	if !walked.isFinished || len(recorder.testedProfiles) != 0 {
+		t.Fatalf("finished %v after testing %v, want the whole wizard walked without a connection test", walked.isFinished, recorder.testedProfiles)
+	}
+
+	m, cmd := pressSetupKeys(m, typedKeys("t")...)
+	if len(recorder.testedProfiles) != 0 || !strings.Contains(renderSetup(m), "testing…") {
+		t.Fatalf("tested %v with view\n%s\nwant the test started off the UI thread", recorder.testedProfiles, renderSetup(m))
+	}
+	m, _ = pressSetupKeys(m, cmd())
+
+	view := renderSetup(m)
+	if strings.Join(recorder.testedProfiles, ",") != "cloud" || !strings.Contains(view, "test · cloud") || !strings.Contains(view, "   ✓ streaming") {
+		t.Fatalf("tested %v with view\n%s\nwant cloud tested and one line per check", recorder.testedProfiles, view)
 	}
 }
