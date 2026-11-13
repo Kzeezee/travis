@@ -77,6 +77,7 @@ func (p *serverProcess) recordStartFailure(ctx context.Context, err error) {
 	if line := p.readLastStderrLine(); line != "" {
 		err = fmt.Errorf("%w; stderr: %s", err, line)
 	}
+	fmt.Fprintf(p.diagnostics, "travis: mcp server %q did not start: %v\n", p.name, err)
 	p.mu.Lock()
 	p.startErr = err
 	p.mu.Unlock()

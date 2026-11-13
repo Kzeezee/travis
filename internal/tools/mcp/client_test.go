@@ -176,14 +176,17 @@ func TestBuildManagerSkipsAServerDeniedByPolicy(t *testing.T) {
 
 func TestFailedServerStartReportsItsStderrLineInStatusAndEvent(t *testing.T) {
 	servers := config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": buildTestServerConfig("-require-home", "/nowhere")}}
-	sink := &recordingSink{}
-	manager := BuildManager(servers, grantedExecPolicy(), &fakeApprover{decision: core.ApprovalOnce}, core.FixedClock{}, sink, &syncBuffer{}, registry.BuildRegistry(100), t.TempDir(), testSandboxing())
+	sink, diagnostics := &recordingSink{}, &syncBuffer{}
+	manager := BuildManager(servers, grantedExecPolicy(), &fakeApprover{decision: core.ApprovalOnce}, core.FixedClock{}, sink, diagnostics, registry.BuildRegistry(100), t.TempDir(), testSandboxing())
 	t.Cleanup(manager.Close)
 
 	pollUntil(t, 10*time.Second, func() bool { return manager.ReportServerStatuses()[0].State == ServerFailed })
 	const stderrLine = `want "/nowhere"`
 	if status := manager.ReportServerStatuses()[0]; !strings.Contains(status.Reason, stderrLine) {
 		t.Fatalf("status reason = %q, want it to carry the server's stderr line", status.Reason)
+	}
+	if !strings.Contains(diagnostics.String(), "did not start") || !strings.Contains(diagnostics.String(), stderrLine) {
+		t.Fatalf("diagnostics = %q, want the line chat shows to carry the stderr line", diagnostics.String())
 	}
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
