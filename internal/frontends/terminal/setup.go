@@ -16,7 +16,10 @@ import (
 // so quitting part-way keeps every step already finished.
 type SetupActions struct {
 	DescribeProviders func() []ProviderSummary
-	// SaveProvider makes profile the active one, storing apiKey first when it is not empty.
+	// DetectLocalServers looks for model servers on this machine; it waits on the network, so it runs off the UI thread.
+	DetectLocalServers func() []LocalServerSummary
+	// SaveProvider makes profile the active one, storing apiKey first when it is not empty. A detected
+	// local server's profile is created or updated first.
 	SaveProvider    func(profile, apiKey string) error
 	SaveVoiceOutput func(isEnabled bool) error
 	ListMCPServers  func() []string
@@ -25,6 +28,28 @@ type SetupActions struct {
 	SaveSecurityProfile func(profile string) error
 	// RecordProgress remembers the step the wizard moved to, so a later run can resume there.
 	RecordProgress func(step string)
+}
+
+// LocalServerSummary is a model server the setup wizard looked for on this machine. A detected one
+// with a model stands in for the configured profile of the same name.
+type LocalServerSummary struct {
+	Profile string
+	// Address is where travis looked, such as 127.0.0.1:11434.
+	Address string
+	// Model is empty when the server was not detected or offers no model; then it cannot be chosen.
+	Model string
+	// ContextLength is Model's context window in tokens; 0 means the server did not say.
+	ContextLength int
+	IsDetected    bool
+}
+
+type localServersDetectedMsg struct{ servers []LocalServerSummary }
+
+// setupProviderRow is one choice in the provider step: a configured profile or a local server.
+type setupProviderRow struct {
+	name, model, status string
+	isChoosable         bool
+	isKeyNeeded         bool
 }
 
 type SetupOptions struct {
@@ -61,12 +86,15 @@ type setupModel struct {
 	opts    SetupOptions
 	step    setupStep
 
-	providers     []ProviderSummary
-	cursor        int
-	isEnteringKey bool
-	keyInput      textinput.Model
-	isVoiceOn     bool
-	profileCursor int
+	providers    []ProviderSummary
+	localServers []LocalServerSummary
+	// hasLookedForLocalServers is false until DetectLocalServers answers.
+	hasLookedForLocalServers bool
+	cursor                   int
+	isEnteringKey            bool
+	keyInput                 textinput.Model
+	isVoiceOn                bool
+	profileCursor            int
 	// notice is the last save's failure, shown until the user acts again.
 	notice     string
 	isFinished bool
@@ -102,8 +130,11 @@ func buildSetupModel(actions SetupActions, opts SetupOptions) setupModel {
 }
 
 func (m setupModel) Init() tea.Cmd {
-	describe := m.actions.DescribeProviders
-	return func() tea.Msg { return providersDescribedMsg{providers: describe()} }
+	describe, detect := m.actions.DescribeProviders, m.actions.DetectLocalServers
+	return tea.Batch(
+		func() tea.Msg { return providersDescribedMsg{providers: describe()} },
+		func() tea.Msg { return localServersDetectedMsg{servers: detect()} },
+	)
 }
 
 func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -115,6 +146,8 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor = i
 			}
 		}
+	case localServersDetectedMsg:
+		m.localServers, m.hasLookedForLocalServers = msg.servers, true
 	case tea.PasteMsg:
 		if m.isEnteringKey {
 			var cmd tea.Cmd
@@ -184,20 +217,59 @@ func (m setupModel) handleProviderKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	case "up", "k":
 		m.cursor = max(m.cursor-1, 0)
 	case "down", "j":
-		m.cursor = min(m.cursor+1, len(m.providers)-1)
+		m.cursor = max(min(m.cursor+1, len(m.listProviderRows())-1), 0)
 	case "enter":
-		if len(m.providers) == 0 {
+		rows := m.listProviderRows()
+		if len(rows) == 0 {
 			return m, nil
 		}
-		chosen := m.providers[m.cursor]
-		if chosen.IsKeyRequired && !chosen.HasKey {
+		chosen := rows[m.cursor]
+		switch {
+		case !chosen.isChoosable:
+			m.notice = "✗ " + chosen.name + ": " + chosen.status
+			return m, nil
+		case chosen.isKeyNeeded:
 			m.isEnteringKey = true
 			m.keyInput.Reset()
 			return m, m.keyInput.Focus()
 		}
-		return m.saveAndAdvance(func() error { return m.actions.SaveProvider(chosen.Name, "") })
+		return m.saveAndAdvance(func() error { return m.actions.SaveProvider(chosen.name, "") })
 	}
 	return m, nil
+}
+
+// listProviderRows lists configured profiles, then local servers. A detected server with a model
+// replaces the profile of the same name in place, so the cursor keeps pointing at the same row.
+func (m setupModel) listProviderRows() []setupProviderRow {
+	rows := make([]setupProviderRow, 0, len(m.providers)+len(m.localServers))
+	for _, provider := range m.providers {
+		rows = append(rows, setupProviderRow{name: provider.Name, model: provider.Model, status: reportKeyState(provider),
+			isChoosable: true, isKeyNeeded: provider.IsKeyRequired && !provider.HasKey})
+	}
+	for _, server := range m.localServers {
+		row := setupProviderRow{name: server.Profile, model: server.Model, status: describeLocalServer(server), isChoosable: server.Model != ""}
+		configured := slices.IndexFunc(rows, func(r setupProviderRow) bool { return r.name == server.Profile })
+		switch {
+		case configured < 0:
+			rows = append(rows, row)
+		case row.isChoosable:
+			rows[configured] = row
+		}
+	}
+	return rows
+}
+
+func describeLocalServer(server LocalServerSummary) string {
+	switch {
+	case !server.IsDetected:
+		return "not detected at " + server.Address
+	case server.Model == "":
+		return "detected at " + server.Address + ", but it has no model yet"
+	case server.ContextLength > 0:
+		return fmt.Sprintf("detected at %s · context %d tokens", server.Address, server.ContextLength)
+	default:
+		return "detected at " + server.Address
+	}
 }
 
 // handleKeyEntryKey collects the key masked; it is handed to SaveProvider and never rendered.
@@ -207,7 +279,7 @@ func (m setupModel) handleKeyEntryKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		m.leaveKeyEntry()
 		return m, nil
 	case "enter":
-		profile, apiKey := m.providers[m.cursor].Name, m.keyInput.Value()
+		profile, apiKey := m.listProviderRows()[m.cursor].name, m.keyInput.Value()
 		m.leaveKeyEntry()
 		return m.saveAndAdvance(func() error { return m.actions.SaveProvider(profile, apiKey) })
 	}
@@ -264,15 +336,19 @@ func (m setupModel) renderStep() []string {
 	switch m.step {
 	case setupProvider:
 		lines := []string{" Choose your model provider", ""}
-		for i, provider := range m.providers {
-			row := fmt.Sprintf("   %-10s %-24s %s", provider.Name, provider.Model, reportKeyState(provider))
+		rows := m.listProviderRows()
+		for i, provider := range rows {
+			row := fmt.Sprintf("   %-10s %-24s %s", provider.name, provider.model, provider.status)
 			if i == m.cursor {
 				row = selectedRowStyle.Render("▸" + row[1:])
 			}
 			lines = append(lines, row)
 		}
+		if !m.hasLookedForLocalServers {
+			lines = append(lines, dimStyle.Render("   looking for Ollama and llama.cpp on this machine…"))
+		}
 		if m.isEnteringKey {
-			lines = append(lines, "", " "+m.providers[m.cursor].Name+" needs an API key; it is saved to the OS credential store, never to the config file.",
+			lines = append(lines, "", " "+rows[m.cursor].name+" needs an API key; it is saved to the OS credential store, never to the config file.",
 				" Paste it and press enter · enter on empty continues without one · esc goes back", m.keyInput.View())
 		}
 		return lines

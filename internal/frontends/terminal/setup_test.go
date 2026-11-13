@@ -15,6 +15,7 @@ type setupRecorder struct {
 	voice                  *bool
 	saveErr                error
 	recordedSteps          []string
+	localServers           []LocalServerSummary
 }
 
 func (r *setupRecorder) buildSetupModel() setupModel {
@@ -29,6 +30,7 @@ func (r *setupRecorder) buildSetupModelAt(startStep string) setupModel {
 				{Name: "local", Model: "tiny"},
 			}
 		},
+		DetectLocalServers: func() []LocalServerSummary { return r.localServers },
 		SaveProvider: func(profile, apiKey string) error {
 			r.savedProfile, r.savedKey = profile, apiKey
 			return r.saveErr
@@ -39,8 +41,11 @@ func (r *setupRecorder) buildSetupModelAt(startStep string) setupModel {
 		SaveSecurityProfile: func(profile string) error { r.savedSecurityProfile = profile; return nil },
 		RecordProgress:      func(step string) { r.recordedSteps = append(r.recordedSteps, step) },
 	}, SetupOptions{ConfigFile: "/config/config.toml", SecurityProfile: "default", StartStep: startStep})
-	next, _ := m.Update(m.Init()())
-	return next.(setupModel)
+	for _, cmd := range m.Init()().(tea.BatchMsg) {
+		next, _ := m.Update(cmd())
+		m = next.(setupModel)
+	}
+	return m
 }
 
 func pressSetupKeys(m setupModel, msgs ...tea.Msg) (setupModel, tea.Cmd) {
@@ -156,5 +161,32 @@ func TestSetupOpensAtTheFirstStepWhenTheRecordedStepIsUnknown(t *testing.T) {
 		if m := (&setupRecorder{}).buildSetupModelAt(startStep); m.step != setupProvider {
 			t.Errorf("start step %q opened at step %d, want the provider step", startStep, m.step)
 		}
+	}
+}
+
+func TestSetupOffersADetectedLocalServerInPlaceOfItsProfile(t *testing.T) {
+	recorder := &setupRecorder{localServers: []LocalServerSummary{
+		{Profile: "local", Address: "127.0.0.1:11434", Model: "qwen3:14b", ContextLength: 40960, IsDetected: true},
+		{Profile: "llamacpp", Address: "127.0.0.1:8080"},
+	}}
+	m := recorder.buildSetupModel()
+
+	view := renderSetup(m)
+	for _, want := range []string{"local      qwen3:14b                detected at 127.0.0.1:11434 · context 40960 tokens", "llamacpp", "not detected at 127.0.0.1:8080"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("got view\n%s\nwant %q", view, want)
+		}
+	}
+	if strings.Contains(view, "tiny") {
+		t.Fatalf("got view\n%s\nwant the detected server in place of the configured local profile", view)
+	}
+
+	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: tea.KeyDown}, enterKey)
+	if m.step != setupProvider || recorder.savedProfile != "" || !strings.Contains(renderSetup(m), "✗ llamacpp: not detected") {
+		t.Fatalf("got step %d, saved %q and view\n%s\nwant a server that is not running refused", m.step, recorder.savedProfile, renderSetup(m))
+	}
+	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyUp}, enterKey)
+	if m.step != setupVoice || recorder.savedProfile != "local" {
+		t.Fatalf("got step %d and saved %q, want the detected server saved as local", m.step, recorder.savedProfile)
 	}
 }
