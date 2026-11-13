@@ -1,6 +1,6 @@
 # Implementation plan: TRA-71 MCP install integrity and full §7.1 onboarding
 
-Status: **implemented** (5.5 skipped), against `main` at `9c40e28` (after sessions resume/fork and
+Status: **implemented**, against `main` at `9c40e28` (after sessions resume/fork and
 retention landed). Sources: Linear TRA-71, `DESIGN.md` §5.7, §7.1, §9.2, D-22,
 D-27, D-32, D-33, `Code-Conventions.md`.
 
@@ -179,9 +179,14 @@ covered by a terminal test only; not seen in a live chat.
 - [x] 5.3 Pre-fill `context_length` from Ollama `/api/show` or llama.cpp `/props` (D-33: config
       stays the source of truth)
 - [x] 5.4 Connection test on keypress only (it costs a model call): reachable · streaming · tool call
-- [ ] ~~5.5~~ **Skipped:** `[tools] approval_default` is validated but nothing reads it, so a wizard
-      step for it would change nothing. Wire it into policy first (separate ticket, §5.5/§6.4). Was: "tools" step: `approval_default` (supervised · collaborative · autonomous, §6.4),
-      making it six steps
+- [x] 5.5 "tools" step for `[tools] approval_default`. Nothing read the setting, so it now governs
+      **MCP tool calls**, the one effect that bypasses the broker and cannot be undone (§5.5, §6.4).
+      Default `ask`: asks per call; "always" remembered per tool in `mcp-trust.toml`, tied to the
+      approved launch. `auto` runs them; `never` starts no MCP server. Untrusted-intake escalation
+      still asks as irreversible. User-config only. The eval's `mcp.toml` pins `auto` so published
+      results stay comparable.
+- [x] 5.2b Model picker: ←/→ cycles a detected server's models; the choice is recorded with no IO,
+      and its context length is looked up off the UI thread.
 - [x] 5.6 Tests: fake HTTP servers for detection and pre-fill; resume starts at the saved step
 
 **Proof:** with Ollama running, a fresh `travis init` detects it, pre-fills the context length,
@@ -191,6 +196,9 @@ streaming · tool call. Ollama was not installed here, so it is covered only by 
 Ollama pre-fills only an explicit `num_ctx`: `model_info`'s trained length overstates the window
 Ollama runs, and Ollama truncates silently rather than erroring, which defeats D-33's correction.
 Resume is covered by tests, not a live quit-and-rerun.
+**5.5, done:** with the real llama.cpp model and a real MCP server through `travis run`, `ask`
+asked before the call and a denial reached the model as `mcp_call_denied`; `auto` ran it with no
+prompt; `never` launched nothing and asked nothing.
 
 ## 3. Open questions
 
