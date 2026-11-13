@@ -192,5 +192,56 @@ func TestFailedServerStartReportsItsStderrLineInStatusAndEvent(t *testing.T) {
 	}
 	if unavailable, ok := sink.events[0].(core.MCPServerUnavailable); !ok || unavailable.Server != "fake" || !strings.Contains(unavailable.Reason, stderrLine) {
 		t.Fatalf("event = %+v, want MCPServerUnavailable for fake carrying the stderr line", sink.events[0])
+// startFilteredFakeServer registers the fake server's tools under filter and waits for it to be running.
+func startFilteredFakeServer(t *testing.T, filter config.MCPToolFilterCfg) (*registry.Registry, *Manager) {
+	t.Helper()
+	cfg := buildTestServerConfig()
+	cfg.Tools = filter
+	reg := registry.BuildRegistry(100)
+	manager := BuildManager(config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": cfg}}, grantedExecPolicy(), &fakeApprover{decision: core.ApprovalOnce}, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir(), testSandboxing())
+	t.Cleanup(manager.Close)
+	pollUntil(t, 10*time.Second, func() bool { return manager.ReportServerStatuses()[0].State == ServerRunning })
+	return reg, manager
+}
+
+func TestBuildManagerSkipsToolsTheDenyFilterExcludes(t *testing.T) {
+	reg, manager := startFilteredFakeServer(t, config.MCPToolFilterCfg{Deny: []string{"crash"}})
+
+	if _, ok := reg.Lookup("mcp_fake_crash"); ok {
+		t.Fatal("mcp_fake_crash was registered despite tools.deny")
+	}
+	if _, ok := reg.Lookup("mcp_fake_echo"); !ok {
+		t.Fatal("mcp_fake_echo is missing; tools.deny must only remove the denied tool")
+	}
+	if status := manager.ReportServerStatuses()[0]; status.ToolCount != 1 || status.HiddenToolCount != 1 {
+		t.Fatalf("status = %+v, want 1 tool shown and 1 hidden", status)
+	}
+}
+
+func TestBuildManagerRegistersOnlyAllowedTools(t *testing.T) {
+	reg, manager := startFilteredFakeServer(t, config.MCPToolFilterCfg{Allow: []string{"ec*"}})
+
+	if _, ok := reg.Lookup("mcp_fake_echo"); !ok {
+		t.Fatal("mcp_fake_echo was not registered despite tools.allow")
+	}
+	if _, ok := reg.Lookup("mcp_fake_crash"); ok {
+		t.Fatal("mcp_fake_crash was registered though tools.allow does not list it")
+	}
+	if status := manager.ReportServerStatuses()[0]; status.HiddenToolCount != 1 {
+		t.Fatalf("HiddenToolCount = %d, want 1", status.HiddenToolCount)
+	}
+}
+
+func TestBuildManagerDenyBeatsAllow(t *testing.T) {
+	reg, manager := startFilteredFakeServer(t, config.MCPToolFilterCfg{Allow: []string{"*"}, Deny: []string{"echo"}})
+
+	if _, ok := reg.Lookup("mcp_fake_echo"); ok {
+		t.Fatal("mcp_fake_echo was registered though tools.deny lists it")
+	}
+	if _, ok := reg.Lookup("mcp_fake_crash"); !ok {
+		t.Fatal("mcp_fake_crash is missing; tools.allow = [\"*\"] permits it")
+	}
+	if status := manager.ReportServerStatuses()[0]; status.HiddenToolCount != 1 {
+		t.Fatalf("HiddenToolCount = %d, want 1", status.HiddenToolCount)
 	}
 }

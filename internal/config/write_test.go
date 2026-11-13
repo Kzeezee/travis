@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -91,13 +92,14 @@ func TestSaveSecurityProfileKeepsTheOtherSecuritySettings(t *testing.T) {
 
 func TestSaveAndRemoveMCPServerRoundTrip(t *testing.T) {
 	paths := buildWritablePathSet(t)
-	server := MCPServerCfg{Command: "npx", Args: []string{"-y", "pkg@1.2.3"}, Env: map[string]string{"A": "b"}, AllowNet: true}
+	server := MCPServerCfg{Command: "npx", Args: []string{"-y", "pkg@1.2.3"}, Env: map[string]string{"A": "b"}, AllowNet: true,
+		Tools: MCPToolFilterCfg{Deny: []string{"delete_*"}}}
 
 	if err := SaveMCPServer(paths, "files", server); err != nil {
 		t.Fatal(err)
 	}
 	got := loadUserConfigOnly(t, paths).MCP.Servers["files"]
-	if got.Command != "npx" || strings.Join(got.Args, " ") != "-y pkg@1.2.3" || got.Env["A"] != "b" || !got.AllowNet {
+	if got.Command != "npx" || strings.Join(got.Args, " ") != "-y pkg@1.2.3" || got.Env["A"] != "b" || !got.AllowNet || !slices.Equal(got.Tools.Deny, []string{"delete_*"}) {
 		t.Fatalf("got %+v, want the saved server", got)
 	}
 

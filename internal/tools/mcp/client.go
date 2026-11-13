@@ -44,7 +44,9 @@ type ServerStatus struct {
 	Name      string
 	State     ServerState
 	ToolCount int
-	Reason    string
+	// HiddenToolCount is how many tools the server offers that its [tools] allow/deny filter withheld.
+	HiddenToolCount int
+	Reason          string
 }
 
 // BuildManager starts connecting every configured server in the background and registers
@@ -101,12 +103,18 @@ func connectAndRegister(ctx context.Context, name string, process *serverProcess
 		process.recordStartFailure(ctx, fmt.Errorf("listing tools failed: %w", err))
 		return
 	}
+	hidden := 0
 	for _, remoteTool := range listed.Tools {
+		if !process.cfg.Tools.PermitsTool(remoteTool.Name) {
+			hidden++
+			continue
+		}
 		tool := buildAdaptedTool(process, name, remoteTool)
 		if err := reg.Register(registry.SourceMCP, tool); err != nil {
 			fmt.Fprintf(diagnostics, "travis: mcp server %q: registering tool %q failed: %v\n", name, tool.Name(), err)
 		}
 	}
+	process.recordHiddenToolCount(hidden)
 }
 
 // WaitUntilStarted blocks until every configured server has registered its tools or failed to.
@@ -121,7 +129,7 @@ func (m *Manager) ReportServerStatuses() []ServerStatus {
 	for _, name := range slices.Sorted(maps.Keys(m.processes)) {
 		state, reason := m.processes[name].reportState()
 		tools := m.reg.List(registry.Filter{Source: registry.SourceMCP, NamePrefix: toolNamePrefix(name)})
-		statuses = append(statuses, ServerStatus{Name: name, State: state, ToolCount: len(tools), Reason: reason})
+		statuses = append(statuses, ServerStatus{Name: name, State: state, ToolCount: len(tools), HiddenToolCount: m.processes[name].reportHiddenToolCount(), Reason: reason})
 	}
 	return statuses
 }

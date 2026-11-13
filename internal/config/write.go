@@ -62,6 +62,15 @@ func SaveMCPServer(paths PathSet, name string, server MCPServerCfg) error {
 		if len(server.WritePaths) > 0 {
 			entry["write_paths"] = server.WritePaths
 		}
+		if tools := map[string]any{}; len(server.Tools.Allow)+len(server.Tools.Deny) > 0 {
+			if len(server.Tools.Allow) > 0 {
+				tools["allow"] = server.Tools.Allow
+			}
+			if len(server.Tools.Deny) > 0 {
+				tools["deny"] = server.Tools.Deny
+			}
+			entry["tools"] = tools
+		}
 		doc.ensureTable("mcp").ensureTable("servers")[name] = entry
 		return nil
 	})

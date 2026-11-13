@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -105,6 +106,22 @@ type MCPServerCfg struct {
 	// ReadPaths and WritePaths are absolute paths the sandboxed server may use beyond its own scratch folder.
 	ReadPaths  []string `toml:"read_paths"`
 	WritePaths []string `toml:"write_paths"`
+	// Tools narrows which of the server's own tools reach the model.
+	Tools MCPToolFilterCfg `toml:"tools"`
+}
+
+// MCPToolFilterCfg holds doublestar globs over a server's own (un-prefixed) tool names: deny wins, an empty Allow means all.
+type MCPToolFilterCfg struct {
+	Allow []string `toml:"allow"`
+	Deny  []string `toml:"deny"`
+}
+
+// PermitsTool reports whether a tool called name (as the server names it) passes the filter.
+func (f MCPToolFilterCfg) PermitsTool(name string) bool {
+	if slices.ContainsFunc(f.Deny, func(pattern string) bool { return doublestar.MatchUnvalidated(pattern, name) }) {
+		return false
+	}
+	return len(f.Allow) == 0 || slices.ContainsFunc(f.Allow, func(pattern string) bool { return doublestar.MatchUnvalidated(pattern, name) })
 }
 
 // SkillsCfg configures the SKILL.md loader (DESIGN.md §5.8). User-config only, same
@@ -584,6 +601,13 @@ func (c *Config) Validate() Diagnostics {
 		}
 		if server.Command == "" {
 			diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("mcp.servers.%s.command is empty", name)})
+		}
+		for key, patterns := range map[string][]string{"tools.allow": server.Tools.Allow, "tools.deny": server.Tools.Deny} {
+			for _, pattern := range patterns {
+				if !doublestar.ValidatePattern(pattern) {
+					diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("mcp.servers.%s.%s has invalid pattern %q", name, key, pattern)})
+				}
+			}
 		}
 		for key, paths := range map[string][]string{"read_paths": server.ReadPaths, "write_paths": server.WritePaths} {
 			for _, path := range paths {

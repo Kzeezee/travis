@@ -70,6 +70,20 @@ type serverProcess struct {
 	startErr error
 	// hasStderrLog is true once a launch of this process made a fresh stderr.log, so an older session's is never quoted.
 	hasStderrLog bool
+	// hiddenToolCount is how many of the server's listed tools its [tools] filter kept from the registry.
+	hiddenToolCount int
+}
+
+func (p *serverProcess) recordHiddenToolCount(count int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.hiddenToolCount = count
+}
+
+func (p *serverProcess) reportHiddenToolCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.hiddenToolCount
 }
 
 // recordStartFailure keeps why the first launch failed, with the server's last stderr line, and announces it.
