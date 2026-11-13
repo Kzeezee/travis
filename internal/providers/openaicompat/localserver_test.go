@@ -21,7 +21,7 @@ func TestDetectOllamaOffersItsFirstModelWithItsContextLength(t *testing.T) {
 				http.Error(w, "unknown model", http.StatusNotFound)
 				return
 			}
-			_, _ = io.WriteString(w, `{"model_info":{"general.architecture":"qwen3","qwen3.context_length":40960}}`)
+			_, _ = io.WriteString(w, `{"parameters":"stop \"<|im_end|>\"\nnum_ctx                        40960","model_info":{"general.architecture":"qwen3","qwen3.context_length":131072}}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -89,5 +89,19 @@ func TestDetectLocalServerReportsAServerThatDoesNotAnswer(t *testing.T) {
 		if got := openaicompat.DetectLlamaCpp(context.Background(), origin); got.IsDetected {
 			t.Errorf("llama.cpp at %s: got %+v, want not detected", origin, got)
 		}
+	}
+}
+
+func TestDetectOllamaNeverPrefillsTheTrainedContextLength(t *testing.T) {
+	server := startEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			_, _ = io.WriteString(w, `{"models":[{"name":"llama3.1:8b"}]}`)
+		case "/api/show":
+			_, _ = io.WriteString(w, `{"parameters":"stop \"<|eot_id|>\"","model_info":{"general.architecture":"llama","llama.context_length":131072}}`)
+		}
+	})
+	if got := openaicompat.DetectOllama(context.Background(), server.URL); got.ContextLength != 0 {
+		t.Fatalf("got %d; Ollama runs with a smaller window and truncates silently, so leave it unknown", got.ContextLength)
 	}
 }

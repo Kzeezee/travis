@@ -19,6 +19,7 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
+	"github.com/Kzeezee/travis/internal/security/redact"
 	"github.com/Kzeezee/travis/internal/security/sandbox"
 )
 
@@ -180,7 +181,12 @@ func (s *setupProviders) TestConnection(profile string) []string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), connectionTestTimeout)
 	defer cancel()
-	return runConnectionTest(ctx, openaicompat.BuildProvider(settings.BaseURL, key, nil, core.SystemClock{}), settings.Model, core.SystemClock{})
+	lines := runConnectionTest(ctx, openaicompat.BuildProvider(settings.BaseURL, key, nil, core.SystemClock{}), settings.Model, core.SystemClock{})
+	redactor := redact.New(key)
+	for i, line := range lines {
+		lines[i] = redactor.RedactText(line)
+	}
+	return lines
 }
 
 // runConnectionTest reports reachable, streaming and tool call, one line each, from one request.

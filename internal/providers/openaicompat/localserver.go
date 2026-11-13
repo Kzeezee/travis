@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,15 +44,27 @@ func DetectOllama(ctx context.Context, origin string) LocalServer {
 		return server
 	}
 	server.Model = tags.Models[0].Name
+	// Only an explicit num_ctx is the window Ollama runs with; model_info's context_length is what the model was
+	// trained on, and Ollama silently drops the start of a longer prompt, so pre-filling it would hide truncation (D-33).
 	var show struct {
-		ModelInfo map[string]any `json:"model_info"`
+		Parameters string `json:"parameters"`
 	}
 	if exchangeLocalJSON(ctx, http.MethodPost, origin+"/api/show", map[string]string{"model": server.Model}, &show) == nil {
-		architecture, _ := show.ModelInfo["general.architecture"].(string)
-		contextLength, _ := show.ModelInfo[architecture+".context_length"].(float64)
-		server.ContextLength = int(contextLength)
+		server.ContextLength = parseOllamaNumCtx(show.Parameters)
 	}
 	return server
+}
+
+// parseOllamaNumCtx reads "num_ctx <n>" from a Modelfile's parameter lines; 0 when it is not set.
+func parseOllamaNumCtx(parameters string) int {
+	for line := range strings.Lines(parameters) {
+		if fields := strings.Fields(line); len(fields) == 2 && fields[0] == "num_ctx" {
+			if n, err := strconv.Atoi(fields[1]); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 0
 }
 
 // DetectLlamaCpp probes the llama.cpp server at origin, such as http://127.0.0.1:8080.
