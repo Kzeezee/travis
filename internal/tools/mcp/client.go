@@ -93,13 +93,11 @@ func buildUnregisterTools(reg *registry.Registry, server string) func() {
 func connectAndRegister(ctx context.Context, name string, process *serverProcess, reg *registry.Registry, diagnostics io.Writer) {
 	session, err := process.connectAndSupervise(ctx)
 	if err != nil {
-		fmt.Fprintf(diagnostics, "travis: mcp server %q did not start: %v\n", name, err)
 		process.recordStartFailure(ctx, err)
 		return
 	}
 	listed, err := session.ListTools(ctx, &mcpsdk.ListToolsParams{})
 	if err != nil {
-		fmt.Fprintf(diagnostics, "travis: mcp server %q: listing tools failed: %v\n", name, err)
 		process.recordStartFailure(ctx, fmt.Errorf("listing tools failed: %w", err))
 		return
 	}
