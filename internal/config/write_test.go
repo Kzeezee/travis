@@ -145,3 +145,13 @@ func writeTestFile(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestSaveApprovalDefaultRoundTrips(t *testing.T) {
+	paths := buildWritablePathSet(t)
+	if err := SaveApprovalDefault(paths, "never"); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadUserConfigOnly(t, paths).Tools; got.ApprovalDefault != "never" || got.MaxExposed != 60 {
+		t.Fatalf("got %+v; want never saved and the other [tools] defaults kept", got)
+	}
+}

@@ -1183,6 +1183,16 @@ untrusted-intake escalation §5.12.4), then relaxed by any matching **decision r
 (§6.4) — which can never relax `never`, an irreversible action, or an
 untrusted-intake escalation.
 
+**What is built (TRA-71).** `[tools.approval]` is not. Built-in tools need no entry: the
+broker's policy already applies the rows above as fixed classifications. `approval_default`
+therefore governs **MCP tool calls**, the one effect that never passes the broker and so can
+be neither journalled nor undone. `ask` (default) asks per call; the modal's "always" is
+remembered per tool in `mcp-trust.toml`, tied to the server's approved launch like launch
+trust, so a changed version asks again. `never` keeps every MCP tool out of the registry.
+Untrusted-intake escalation still asks as irreversible, so "always" never relaxes it. The
+setting is user-config only: a workspace value is discarded, as it would otherwise switch
+asking off for the repo that wrote it.
+
 **Swappable backends.** `Prune` strategies: `all` (if under cap), `static_groups`
 (persona-defined), `retrieval` (embed tool descriptions, top-k by task). Default
 `static_groups` — deterministic and debuggable. `[R-06]` notes that tool-count blowup

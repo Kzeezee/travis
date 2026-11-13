@@ -30,7 +30,9 @@ type SetupActions struct {
 	// check. It costs a model call, so the wizard runs it only when the user asks.
 	TestConnection  func(profile string) []string
 	SaveVoiceOutput func(isEnabled bool) error
-	ListMCPServers  func() []string
+	// SaveApprovalDefault saves how MCP tool calls ask: one of setupApprovalChoices' modes.
+	SaveApprovalDefault func(mode string) error
+	ListMCPServers      func() []string
 	// DescribeSecurity says what the named security profile lets travis do, one row per line.
 	DescribeSecurity    func(profile string) []string
 	SaveSecurityProfile func(profile string) error
@@ -81,6 +83,8 @@ type SetupOptions struct {
 	// ConfigFile is where the answers are saved, shown so the user knows what changed.
 	ConfigFile           string
 	IsVoiceOutputEnabled bool
+	// ApprovalDefault is the configured [tools] approval_default, chosen until the user moves the cursor.
+	ApprovalDefault string
 	// SecurityProfile is the configured profile, chosen until the user moves the cursor.
 	SecurityProfile string
 	// StartStep is the step to open at, as RecordProgress named it; an unknown name opens at the first.
@@ -92,12 +96,20 @@ type setupStep int
 const (
 	setupProvider setupStep = iota
 	setupVoice
+	setupTools
 	setupMCP
 	setupSecurity
 	setupDone
 )
 
-var setupStepNames = []string{"provider", "voice", "mcp", "security", "done"}
+var setupStepNames = []string{"provider", "voice", "tools", "mcp", "security", "done"}
+
+// setupApprovalChoices are [tools] approval_default's modes, as the tools step explains them.
+var setupApprovalChoices = []struct{ mode, effect string }{
+	{"ask", "asks before an MCP tool runs; answer a in chat to always allow that tool"},
+	{"auto", "MCP tools run without asking, except right after untrusted content"},
+	{"never", "MCP tools are hidden from the model"},
+}
 
 // setupSecurityProfiles leaves out yolo, which needs an RFC amending D-22 and D-27 first.
 var setupSecurityProfiles = []string{"paranoid", "default", "dev"}
@@ -121,6 +133,7 @@ type setupModel struct {
 	keyInput                 textinput.Model
 	isVoiceOn                bool
 	profileCursor            int
+	approvalCursor           int
 	// connectionTest is the last test's header line and one line per check.
 	connectionTest []string
 	// notice is the last save's failure, shown until the user acts again.
@@ -153,8 +166,10 @@ func buildSetupModel(actions SetupActions, opts SetupOptions) setupModel {
 	if profileCursor < 0 {
 		profileCursor = slices.Index(setupSecurityProfiles, "default")
 	}
+	approvalCursor := max(slices.IndexFunc(setupApprovalChoices, func(c struct{ mode, effect string }) bool { return c.mode == opts.ApprovalDefault }), 0)
 	step := setupStep(max(slices.Index(setupStepNames, opts.StartStep), 0))
-	return setupModel{actions: actions, opts: opts, step: step, keyInput: keyInput, isVoiceOn: opts.IsVoiceOutputEnabled, profileCursor: profileCursor}
+	return setupModel{actions: actions, opts: opts, step: step, keyInput: keyInput, isVoiceOn: opts.IsVoiceOutputEnabled,
+		profileCursor: profileCursor, approvalCursor: approvalCursor}
 }
 
 func (m setupModel) Init() tea.Cmd {
@@ -224,6 +239,16 @@ func (m setupModel) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.isVoiceOn = key.String() == "y" || (key.String() != "n" && !m.isVoiceOn)
 		case "enter":
 			return m.saveAndAdvance(func() error { return m.actions.SaveVoiceOutput(m.isVoiceOn) })
+		}
+	case setupTools:
+		switch key.String() {
+		case "up", "k":
+			m.approvalCursor = max(m.approvalCursor-1, 0)
+		case "down", "j":
+			m.approvalCursor = min(m.approvalCursor+1, len(setupApprovalChoices)-1)
+		case "enter":
+			chosen := setupApprovalChoices[m.approvalCursor].mode
+			return m.saveAndAdvance(func() error { return m.actions.SaveApprovalDefault(chosen) })
 		}
 	case setupMCP:
 		if key.String() == "enter" {
@@ -440,6 +465,17 @@ func (m setupModel) renderStep() []string {
 		}
 		return []string{" Speak replies aloud?", "", "   " + choice, "",
 			dimStyle.Render(" Push-to-talk dictation also needs the voice module: make install-voice (docs/DEV-SETUP.md).")}
+	case setupTools:
+		lines := []string{" When should MCP tools ask first?", ""}
+		for i, choice := range setupApprovalChoices {
+			row := fmt.Sprintf("   %-6s %s", choice.mode, choice.effect)
+			if i == m.approvalCursor {
+				row = selectedRowStyle.Render("▸" + row[1:])
+			}
+			lines = append(lines, row)
+		}
+		return append(lines, "", dimStyle.Render(" travis cannot undo what an MCP tool does. Built-in tools keep fixed rules:"),
+			dimStyle.Render(" writes in the workspace run and /undo rewinds them; commands always ask."))
 	case setupMCP:
 		lines := []string{" MCP servers give travis more tools.", ""}
 		servers := m.actions.ListMCPServers()

@@ -32,6 +32,14 @@ func SaveVoiceOutput(paths PathSet, isEnabled bool) error {
 	})
 }
 
+// SaveApprovalDefault sets [tools] approval_default, which governs MCP tool calls.
+func SaveApprovalDefault(paths PathSet, mode string) error {
+	return updateUserConfig(paths, func(doc configDocument) error {
+		doc.ensureTable("tools")["approval_default"] = mode
+		return nil
+	})
+}
+
 // SaveSecurityProfile makes profileName the security profile every later session runs under.
 func SaveSecurityProfile(paths PathSet, profileName string) error {
 	return updateUserConfig(paths, func(doc configDocument) error {

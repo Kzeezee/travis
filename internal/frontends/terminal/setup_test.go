@@ -12,6 +12,7 @@ import (
 type setupRecorder struct {
 	savedProfile, savedKey string
 	savedSecurityProfile   string
+	savedApprovalDefault   string
 	voice                  *bool
 	saveErr                error
 	recordedSteps          []string
@@ -44,11 +45,12 @@ func (r *setupRecorder) buildSetupModelAt(startStep string) setupModel {
 			return []string{"✓ reachable (34 ms)", "✓ streaming", "✗ tool call: answered without calling it"}
 		},
 		SaveVoiceOutput:     func(isEnabled bool) error { r.voice = &isEnabled; return nil },
+		SaveApprovalDefault: func(mode string) error { r.savedApprovalDefault = mode; return nil },
 		ListMCPServers:      func() []string { return nil },
 		DescribeSecurity:    func(profile string) []string { return []string{profile + " can read   /work"} },
 		SaveSecurityProfile: func(profile string) error { r.savedSecurityProfile = profile; return nil },
 		RecordProgress:      func(step string) { r.recordedSteps = append(r.recordedSteps, step) },
-	}, SetupOptions{ConfigFile: "/config/config.toml", SecurityProfile: "default", StartStep: startStep})
+	}, SetupOptions{ConfigFile: "/config/config.toml", SecurityProfile: "default", ApprovalDefault: "ask", StartStep: startStep})
 	for _, cmd := range m.Init()().(tea.BatchMsg) {
 		next, _ := m.Update(cmd())
 		m = next.(setupModel)
@@ -93,6 +95,10 @@ func TestSetupWalksEveryStepToTheEnd(t *testing.T) {
 	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyDown}, enterKey) // local needs no key
 	m, _ = pressSetupKeys(m, typedKeys("y")...)
 	m, _ = pressSetupKeys(m, enterKey) // voice on
+	if !strings.Contains(renderSetup(m), "▸  ask") {
+		t.Fatalf("got view\n%s\nwant the tools step on the configured ask", renderSetup(m))
+	}
+	m, _ = pressSetupKeys(m, enterKey)
 	if !strings.Contains(renderSetup(m), "none configured yet") {
 		t.Fatalf("got view\n%s\nwant the MCP step", renderSetup(m))
 	}
@@ -102,7 +108,7 @@ func TestSetupWalksEveryStepToTheEnd(t *testing.T) {
 	}
 	m, cmd := pressSetupKeys(m, enterKey, enterKey)
 
-	if recorder.savedProfile != "local" || recorder.savedKey != "" || recorder.voice == nil || !*recorder.voice || recorder.savedSecurityProfile != "default" {
+	if recorder.savedProfile != "local" || recorder.savedKey != "" || recorder.voice == nil || !*recorder.voice || recorder.savedSecurityProfile != "default" || recorder.savedApprovalDefault != "ask" {
 		t.Fatalf("saved %q/%q, voice %v and profile %q, want local with no key, voice on and default", recorder.savedProfile, recorder.savedKey, recorder.voice, recorder.savedSecurityProfile)
 	}
 	if !m.isFinished || cmd == nil {
@@ -135,7 +141,7 @@ func TestSetupSkipsAStepWithoutSavingAndStaysOnAFailedSave(t *testing.T) {
 		t.Fatalf("got step %d and view\n%s\nwant to stay on the provider step with the error", m.step, renderSetup(m))
 	}
 	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyTab}, tea.KeyPressMsg{Code: tea.KeyTab})
-	if m.step != setupMCP || recorder.voice != nil {
+	if m.step != setupTools || recorder.voice != nil {
 		t.Fatalf("got step %d and voice %v, want two skipped steps with nothing saved", m.step, recorder.voice)
 	}
 }
@@ -165,7 +171,7 @@ func TestSetupResumesAtTheRecordedStep(t *testing.T) {
 }
 
 func TestSetupOpensAtTheFirstStepWhenTheRecordedStepIsUnknown(t *testing.T) {
-	for _, startStep := range []string{"", "garbled\x00", "tools"} {
+	for _, startStep := range []string{"", "garbled\x00", "plugins"} {
 		if m := (&setupRecorder{}).buildSetupModelAt(startStep); m.step != setupProvider {
 			t.Errorf("start step %q opened at step %d, want the provider step", startStep, m.step)
 		}
@@ -202,7 +208,7 @@ func TestSetupOffersADetectedLocalServerInPlaceOfItsProfile(t *testing.T) {
 func TestSetupTestsTheConnectionOnlyWhenAsked(t *testing.T) {
 	recorder := &setupRecorder{}
 	m := recorder.buildSetupModel()
-	walked, _ := pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyDown}, enterKey, enterKey, enterKey, enterKey, enterKey)
+	walked, _ := pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyDown}, enterKey, enterKey, enterKey, enterKey, enterKey, enterKey)
 	if !walked.isFinished || len(recorder.testedProfiles) != 0 {
 		t.Fatalf("finished %v after testing %v, want the whole wizard walked without a connection test", walked.isFinished, recorder.testedProfiles)
 	}
@@ -249,5 +255,16 @@ func TestSetupCyclesAMultiModelServersModelWithTheArrowKeys(t *testing.T) {
 
 	if got := strings.Join(recorder.chosenModels, ","); got != "local/llama3,local/qwen3,local/gemma" || recorder.savedProfile != "local" || m.step != setupVoice {
 		t.Fatalf("chose %q and saved %q, want only the multi-model server asked, ending on gemma", got, recorder.savedProfile)
+	}
+}
+
+func TestSetupSavesTheChosenApprovalDefault(t *testing.T) {
+	recorder := &setupRecorder{}
+	m := recorder.buildSetupModelAt("tools")
+
+	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: tea.KeyDown}, enterKey)
+
+	if recorder.savedApprovalDefault != "never" || m.step != setupMCP {
+		t.Fatalf("saved %q at step %d, want never and the mcp step next", recorder.savedApprovalDefault, m.step)
 	}
 }

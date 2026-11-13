@@ -88,7 +88,8 @@ travis chat
 ```
 
 The first run opens a setup wizard: pick a provider, paste a key (saved to your OS
-keychain, never to a file), toggle voice, and review the security summary. Ollama and
+keychain, never to a file), toggle voice, choose when MCP tools ask first, and pick a
+security profile. Ollama and
 llama.cpp running on this machine are detected and offered as `ollama` and `llamacpp`
 profiles; a server with several models starts on the first, and `←`/`→` picks another.
 The chosen model's context length is filled in when the server reports it; `t` on a

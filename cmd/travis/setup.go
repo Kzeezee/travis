@@ -52,6 +52,7 @@ func runSetupWizard(in io.Reader, out io.Writer) (bool, error) {
 		SaveProvider:             setupProviders.SaveProvider,
 		TestConnection:           setupProviders.TestConnection,
 		SaveVoiceOutput:          func(isEnabled bool) error { return config.SaveVoiceOutput(paths, isEnabled) },
+		SaveApprovalDefault:      func(mode string) error { return config.SaveApprovalDefault(paths, mode) },
 		ListMCPServers:           func() []string { return slices.Sorted(maps.Keys(cfg.MCP.Servers)) },
 		DescribeSecurity:         func(profile string) []string { return describeSecurity(cfg, paths, profile) },
 		SaveSecurityProfile:      func(profile string) error { return config.SaveSecurityProfile(paths, profile) },
@@ -59,7 +60,7 @@ func runSetupWizard(in io.Reader, out io.Writer) (bool, error) {
 	}
 	isFinished, err := terminal.RunSetup(context.Background(), actions, terminal.SetupOptions{
 		Input: in, Output: out, ConfigFile: paths.ReportUserConfigFile(), IsVoiceOutputEnabled: cfg.Voice.Output.Enabled,
-		SecurityProfile: cfg.Security.Profile, StartStep: readSetupProgress(paths.StateDir),
+		SecurityProfile: cfg.Security.Profile, ApprovalDefault: cfg.Tools.ApprovalDefault, StartStep: readSetupProgress(paths.StateDir),
 	})
 	if err != nil || !isFinished {
 		return isFinished, err

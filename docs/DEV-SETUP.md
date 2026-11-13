@@ -208,6 +208,13 @@ what is saved and what `t` tests. For Ollama, `context_length` is only an explic
 `num_ctx` set on that model, never the length it was trained on. The step a quit
 `travis init` stopped at is kept in `<state dir>/setup-progress` until a run finishes.
 
+**When MCP tools ask.** `[tools] approval_default` governs MCP tool calls only; built-in
+tools keep the broker's fixed rules. `ask` (the default) asks before an MCP tool runs, and
+answering `a` remembers that tool in `mcp-trust.toml` for as long as the server's approved
+launch stays the same; `auto` runs them without asking; `never` hides every MCP tool from the
+model. After untrusted content in the same step every MCP call asks, whatever the setting,
+and that answer is never remembered. The workspace config cannot change this setting.
+
 **Adding MCP servers.** `travis mcp add <name> [--allow-net] [--env KEY=VALUE] -- <command>
 [args...]` shows a provenance card (publisher, publish date, weekly downloads, direct
 dependencies, integrity) from npm or PyPI and saves the server only when you type `y` at
