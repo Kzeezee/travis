@@ -202,7 +202,10 @@ file with comments, travis keeps a copy as `config.toml.bak`. It never writes th
 workspace `.travis/config.toml`, and never writes a key into any file. Choosing a
 detected Ollama (`127.0.0.1:11434`) or llama.cpp (`127.0.0.1:8080`) server in `travis
 init` creates or updates the `ollama` or `llamacpp` profile: endpoint, model and, when
-the server reports it, `context_length`; its other settings are kept. The step a quit
+the server reports it, `context_length`; its other settings are kept. A server with
+several models starts on the first; `←`/`→` on its row picks another, and the pick is
+what is saved and what `t` tests. For Ollama, `context_length` is only an explicit
+`num_ctx` set on that model, never the length it was trained on. The step a quit
 `travis init` stopped at is kept in `<state dir>/setup-progress` until a run finishes.
 
 **Adding MCP servers.** `travis mcp add <name> [--allow-net] [--env KEY=VALUE] -- <command>

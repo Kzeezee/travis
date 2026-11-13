@@ -89,7 +89,8 @@ travis chat
 The first run opens a setup wizard: pick a provider, paste a key (saved to your OS
 keychain, never to a file), toggle voice, and review the security summary. Ollama and
 llama.cpp running on this machine are detected and offered as `ollama` and `llamacpp`
-profiles, with the model's context length filled in when the server reports it; `t` on a
+profiles; a server with several models starts on the first, and `←`/`→` picks another.
+The chosen model's context length is filled in when the server reports it; `t` on a
 provider sends it one tiny request to check it is reachable, streams, and calls tools.
 Quit part-way and the next `travis init` opens at the step you left. Re-run it any time
 with `travis init`.
