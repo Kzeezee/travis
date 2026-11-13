@@ -23,6 +23,8 @@ type SetupActions struct {
 	// DescribeSecurity says what the named security profile lets travis do, one row per line.
 	DescribeSecurity    func(profile string) []string
 	SaveSecurityProfile func(profile string) error
+	// RecordProgress remembers the step the wizard moved to, so a later run can resume there.
+	RecordProgress func(step string)
 }
 
 type SetupOptions struct {
@@ -33,6 +35,8 @@ type SetupOptions struct {
 	IsVoiceOutputEnabled bool
 	// SecurityProfile is the configured profile, chosen until the user moves the cursor.
 	SecurityProfile string
+	// StartStep is the step to open at, as RecordProgress named it; an unknown name opens at the first.
+	StartStep string
 }
 
 type setupStep int
@@ -93,7 +97,8 @@ func buildSetupModel(actions SetupActions, opts SetupOptions) setupModel {
 	if profileCursor < 0 {
 		profileCursor = slices.Index(setupSecurityProfiles, "default")
 	}
-	return setupModel{actions: actions, opts: opts, keyInput: keyInput, isVoiceOn: opts.IsVoiceOutputEnabled, profileCursor: profileCursor}
+	step := setupStep(max(slices.Index(setupStepNames, opts.StartStep), 0))
+	return setupModel{actions: actions, opts: opts, step: step, keyInput: keyInput, isVoiceOn: opts.IsVoiceOutputEnabled, profileCursor: profileCursor}
 }
 
 func (m setupModel) Init() tea.Cmd {
@@ -117,7 +122,11 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 	case tea.KeyPressMsg:
-		return m.handleKey(msg)
+		next, cmd := m.handleKey(msg)
+		if step := next.(setupModel).step; step != m.step {
+			m.actions.RecordProgress(setupStepNames[step])
+		}
+		return next, cmd
 	}
 	return m, nil
 }

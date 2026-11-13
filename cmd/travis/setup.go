@@ -6,6 +6,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -48,19 +49,42 @@ func runSetupWizard(in io.Reader, out io.Writer) (bool, error) {
 		ListMCPServers:      func() []string { return slices.Sorted(maps.Keys(cfg.MCP.Servers)) },
 		DescribeSecurity:    func(profile string) []string { return describeSecurity(cfg, paths, profile) },
 		SaveSecurityProfile: func(profile string) error { return config.SaveSecurityProfile(paths, profile) },
+		RecordProgress:      func(step string) { recordSetupProgress(paths.StateDir, step) },
 	}
 	isFinished, err := terminal.RunSetup(context.Background(), actions, terminal.SetupOptions{
 		Input: in, Output: out, ConfigFile: paths.ReportUserConfigFile(), IsVoiceOutputEnabled: cfg.Voice.Output.Enabled,
-		SecurityProfile: cfg.Security.Profile,
+		SecurityProfile: cfg.Security.Profile, StartStep: readSetupProgress(paths.StateDir),
 	})
 	if err != nil || !isFinished {
 		return isFinished, err
 	}
+	return true, finishSetup(paths, cfg.Provider.Active)
+}
+
+// finishSetup forgets where an earlier run stopped and makes sure the user config exists.
+func finishSetup(paths config.PathSet, activeProvider string) error {
+	_ = os.Remove(filepath.Join(paths.StateDir, setupProgressFile))
 	// Finishing with every step skipped saves nothing, and a missing file would offer setup on every chat.
 	if _, statErr := os.Stat(paths.ReportUserConfigFile()); errors.Is(statErr, os.ErrNotExist) {
-		return true, config.SaveActiveProvider(paths, cfg.Provider.Active)
+		return config.SaveActiveProvider(paths, activeProvider)
 	}
-	return true, nil
+	return nil
+}
+
+// setupProgressFile names the wizard step a quit run stopped at, so the next run opens there.
+const setupProgressFile = "setup-progress"
+
+// readSetupProgress reports the saved step; a missing file reads as empty, which opens the first step.
+func readSetupProgress(stateDir string) string {
+	step, _ := os.ReadFile(filepath.Join(stateDir, setupProgressFile))
+	return strings.TrimSpace(string(step))
+}
+
+// recordSetupProgress is best effort: losing it only means the next run starts at the first step.
+func recordSetupProgress(stateDir, step string) {
+	if os.MkdirAll(stateDir, 0o700) == nil {
+		_ = os.WriteFile(filepath.Join(stateDir, setupProgressFile), []byte(step), 0o600)
+	}
 }
 
 // shouldOfferSetup is true on a first run: no user config yet and a person at the keyboard.

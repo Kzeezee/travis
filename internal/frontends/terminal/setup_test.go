@@ -14,9 +14,14 @@ type setupRecorder struct {
 	savedSecurityProfile   string
 	voice                  *bool
 	saveErr                error
+	recordedSteps          []string
 }
 
 func (r *setupRecorder) buildSetupModel() setupModel {
+	return r.buildSetupModelAt("")
+}
+
+func (r *setupRecorder) buildSetupModelAt(startStep string) setupModel {
 	m := buildSetupModel(SetupActions{
 		DescribeProviders: func() []ProviderSummary {
 			return []ProviderSummary{
@@ -32,7 +37,8 @@ func (r *setupRecorder) buildSetupModel() setupModel {
 		ListMCPServers:      func() []string { return nil },
 		DescribeSecurity:    func(profile string) []string { return []string{profile + " can read   /work"} },
 		SaveSecurityProfile: func(profile string) error { r.savedSecurityProfile = profile; return nil },
-	}, SetupOptions{ConfigFile: "/config/config.toml", SecurityProfile: "default"})
+		RecordProgress:      func(step string) { r.recordedSteps = append(r.recordedSteps, step) },
+	}, SetupOptions{ConfigFile: "/config/config.toml", SecurityProfile: "default", StartStep: startStep})
 	next, _ := m.Update(m.Init()())
 	return next.(setupModel)
 }
@@ -128,5 +134,27 @@ func TestSetupQuitsWithoutFinishing(t *testing.T) {
 
 	if m.isFinished || !isQuitCmd(cmd) {
 		t.Fatal("ctrl+c did not quit unfinished")
+	}
+}
+
+func TestSetupResumesAtTheRecordedStep(t *testing.T) {
+	recorder := &setupRecorder{}
+	m := recorder.buildSetupModelAt("mcp")
+	if m.step != setupMCP {
+		t.Fatalf("opened at step %d, want the recorded mcp step", m.step)
+	}
+
+	m, _ = pressSetupKeys(m, enterKey, tea.KeyPressMsg{Code: tea.KeyTab})
+
+	if m.step != setupDone || strings.Join(recorder.recordedSteps, ",") != "security,done" {
+		t.Fatalf("at step %d recorded %v, want security then done", m.step, recorder.recordedSteps)
+	}
+}
+
+func TestSetupOpensAtTheFirstStepWhenTheRecordedStepIsUnknown(t *testing.T) {
+	for _, startStep := range []string{"", "garbled\x00", "tools"} {
+		if m := (&setupRecorder{}).buildSetupModelAt(startStep); m.step != setupProvider {
+			t.Errorf("start step %q opened at step %d, want the provider step", startStep, m.step)
+		}
 	}
 }
