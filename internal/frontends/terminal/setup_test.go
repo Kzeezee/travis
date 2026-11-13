@@ -17,6 +17,7 @@ type setupRecorder struct {
 	recordedSteps          []string
 	localServers           []LocalServerSummary
 	testedProfiles         []string
+	chosenModels           []string
 }
 
 func (r *setupRecorder) buildSetupModel() setupModel {
@@ -31,7 +32,9 @@ func (r *setupRecorder) buildSetupModelAt(startStep string) setupModel {
 				{Name: "local", Model: "tiny"},
 			}
 		},
-		DetectLocalServers: func() []LocalServerSummary { return r.localServers },
+		DetectLocalServers:       func() []LocalServerSummary { return r.localServers },
+		ChooseLocalModel:         func(profile, model string) { r.chosenModels = append(r.chosenModels, profile+"/"+model) },
+		LookUpLocalContextLength: func(_, model string) int { return len(model) * 1000 },
 		SaveProvider: func(profile, apiKey string) error {
 			r.savedProfile, r.savedKey = profile, apiKey
 			return r.saveErr
@@ -213,5 +216,38 @@ func TestSetupTestsTheConnectionOnlyWhenAsked(t *testing.T) {
 	view := renderSetup(m)
 	if strings.Join(recorder.testedProfiles, ",") != "cloud" || !strings.Contains(view, "test · cloud") || !strings.Contains(view, "   ✓ streaming") {
 		t.Fatalf("tested %v with view\n%s\nwant cloud tested and one line per check", recorder.testedProfiles, view)
+	}
+}
+
+func TestSetupCyclesAMultiModelServersModelWithTheArrowKeys(t *testing.T) {
+	recorder := &setupRecorder{localServers: []LocalServerSummary{
+		{Profile: "local", Address: "127.0.0.1:11434", Models: []string{"qwen3", "llama3", "gemma"}, Model: "qwen3", ContextLength: 1, IsDetected: true},
+		{Profile: "llamacpp", Address: "127.0.0.1:8080", Models: []string{"tiny"}, Model: "tiny", IsDetected: true},
+	}}
+	m := recorder.buildSetupModel()
+	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if view := renderSetup(m); !strings.Contains(view, "‹qwen3› (1 of 3)") || strings.Contains(view, "‹tiny›") {
+		t.Fatalf("got view\n%s\nwant a model position only on the server with a choice", view)
+	}
+
+	m, lookUp := pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if view := renderSetup(m); !strings.Contains(view, "‹llama3› (2 of 3)") || strings.Contains(view, "context 6000") {
+		t.Fatalf("got view\n%s\nwant the second model chosen at once, its context length still being looked up", view)
+	}
+	m, _ = pressSetupKeys(m, lookUp())
+	if view := renderSetup(m); !strings.Contains(view, "context 6000 tokens") {
+		t.Fatalf("got view\n%s\nwant the context length looked up for the second model", view)
+	}
+	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	m, staleLookUp := pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	m, _ = pressSetupKeys(m, localContextLengthMsg{profile: "local", model: "qwen3", contextLength: 99}, staleLookUp())
+	if view := renderSetup(m); !strings.Contains(view, "‹gemma› (3 of 3)") || strings.Contains(view, "context 99") {
+		t.Fatalf("got view\n%s\nwant the choice to wrap to the last model and a late answer for qwen3 dropped", view)
+	}
+	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyUp}, enterKey)
+
+	if got := strings.Join(recorder.chosenModels, ","); got != "local/llama3,local/qwen3,local/gemma" || recorder.savedProfile != "local" || m.step != setupVoice {
+		t.Fatalf("chose %q and saved %q, want only the multi-model server asked, ending on gemma", got, recorder.savedProfile)
 	}
 }

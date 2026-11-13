@@ -21,11 +21,9 @@ const localProbeTimeout = 300 * time.Millisecond
 type LocalServer struct {
 	// BaseURL is the server's OpenAI-compatible endpoint, the one a provider profile points at.
 	BaseURL string
-	// Model is the first model the server offers; empty when it offers none.
-	Model string
-	// ContextLength is Model's context window in tokens, pre-filled for config (D-33); 0 when the server does not say.
-	ContextLength int
-	IsDetected    bool
+	// Models is every model the server offers, in the order it lists them; empty when it offers none.
+	Models     []string
+	IsDetected bool
 }
 
 // DetectOllama probes the Ollama server at origin, such as http://127.0.0.1:11434.
@@ -40,19 +38,23 @@ func DetectOllama(ctx context.Context, origin string) LocalServer {
 		return LocalServer{}
 	}
 	server := LocalServer{BaseURL: origin + "/v1", IsDetected: true}
-	if len(tags.Models) == 0 {
-		return server
+	for _, model := range tags.Models {
+		server.Models = append(server.Models, model.Name)
 	}
-	server.Model = tags.Models[0].Name
+	return server
+}
+
+// LookUpOllamaContextLength reports model's context window in tokens at the Ollama server at origin; 0 when unknown.
+func LookUpOllamaContextLength(ctx context.Context, origin, model string) int {
 	// Only an explicit num_ctx is the window Ollama runs with; model_info's context_length is what the model was
 	// trained on, and Ollama silently drops the start of a longer prompt, so pre-filling it would hide truncation (D-33).
 	var show struct {
 		Parameters string `json:"parameters"`
 	}
-	if exchangeLocalJSON(ctx, http.MethodPost, origin+"/api/show", map[string]string{"model": server.Model}, &show) == nil {
-		server.ContextLength = parseOllamaNumCtx(show.Parameters)
+	if exchangeLocalJSON(ctx, http.MethodPost, strings.TrimSuffix(origin, "/")+"/api/show", map[string]string{"model": model}, &show) != nil {
+		return 0
 	}
-	return server
+	return parseOllamaNumCtx(show.Parameters)
 }
 
 // parseOllamaNumCtx reads "num_ctx <n>" from a Modelfile's parameter lines; 0 when it is not set.
@@ -76,20 +78,20 @@ func DetectLlamaCpp(ctx context.Context, origin string) LocalServer {
 	if err != nil {
 		return LocalServer{}
 	}
-	server := LocalServer{BaseURL: origin + "/v1", IsDetected: true}
-	if len(models) == 0 {
-		return server
-	}
-	server.Model = models[0]
+	return LocalServer{BaseURL: origin + "/v1", Models: models, IsDetected: true}
+}
+
+// LookUpLlamaCppContextLength reports the server-wide context window in tokens at the llama.cpp server at origin; 0 when unknown.
+func LookUpLlamaCppContextLength(ctx context.Context, origin, _ string) int {
 	var props struct {
 		DefaultGenerationSettings struct {
 			ContextLength int `json:"n_ctx"`
 		} `json:"default_generation_settings"`
 	}
-	if exchangeLocalJSON(ctx, http.MethodGet, origin+"/props", nil, &props) == nil {
-		server.ContextLength = props.DefaultGenerationSettings.ContextLength
+	if exchangeLocalJSON(ctx, http.MethodGet, strings.TrimSuffix(origin, "/")+"/props", nil, &props) != nil {
+		return 0
 	}
-	return server
+	return props.DefaultGenerationSettings.ContextLength
 }
 
 // exchangeLocalJSON sends request, when not nil, as JSON and decodes a 200 reply into reply.

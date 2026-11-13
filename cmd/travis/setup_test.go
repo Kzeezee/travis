@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,7 +13,6 @@ import (
 
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
-	"github.com/Kzeezee/travis/internal/frontends/terminal"
 	"github.com/Kzeezee/travis/internal/providers/openaicompat"
 )
 
@@ -54,24 +56,35 @@ func TestSetupProgressResumesUntilSetupFinishes(t *testing.T) {
 	}
 }
 
+func buildTwoModelOllamaProbe(contextLengths map[string]int, asked *[]string) localServerProbe {
+	return localServerProbe{profile: "ollama", origin: "http://127.0.0.1:11434",
+		detect: func(context.Context, string) openaicompat.LocalServer {
+			return openaicompat.LocalServer{BaseURL: "http://127.0.0.1:11434/v1", Models: []string{"qwen3:14b", "llama3:8b"}, IsDetected: true}
+		},
+		lookUpContextLength: func(_ context.Context, _, model string) int {
+			*asked = append(*asked, model)
+			return contextLengths[model]
+		}}
+}
+
 func TestSetupProvidersSavesADetectedLocalServerAsItsProfile(t *testing.T) {
 	paths := config.PathSet{ConfigDir: t.TempDir()}
+	var asked []string
 	providers := &setupProviders{paths: paths, probes: []localServerProbe{
-		{profile: "ollama", origin: "http://127.0.0.1:11434", detect: func(context.Context, string) openaicompat.LocalServer {
-			return openaicompat.LocalServer{BaseURL: "http://127.0.0.1:11434/v1", Model: "qwen3:14b", ContextLength: 40960, IsDetected: true}
-		}},
+		buildTwoModelOllamaProbe(map[string]int{"qwen3:14b": 40960}, &asked),
 		{profile: "llamacpp", origin: "http://127.0.0.1:8080", detect: func(context.Context, string) openaicompat.LocalServer {
 			return openaicompat.LocalServer{}
 		}},
 	}}
 
 	summaries := providers.DetectLocalServers()
-	want := []terminal.LocalServerSummary{
-		{Profile: "ollama", Address: "127.0.0.1:11434", Model: "qwen3:14b", ContextLength: 40960, IsDetected: true},
-		{Profile: "llamacpp", Address: "127.0.0.1:8080"},
+	if len(summaries) != 2 || summaries[1].Profile != "llamacpp" || summaries[1].IsDetected {
+		t.Fatalf("got %+v, want llamacpp not detected", summaries)
 	}
-	if !slices.Equal(summaries, want) {
-		t.Fatalf("got %+v, want %+v", summaries, want)
+	ollama := summaries[0]
+	if ollama.Address != "127.0.0.1:11434" || ollama.Model != "qwen3:14b" || ollama.ContextLength != 40960 || !ollama.IsDetected ||
+		!slices.Equal(ollama.Models, []string{"qwen3:14b", "llama3:8b"}) || !slices.Equal(asked, []string{"qwen3:14b"}) {
+		t.Fatalf("got %+v after asking about %v, want every model listed, the first chosen and only its context length looked up", ollama, asked)
 	}
 	if err := providers.SaveProvider("ollama", ""); err != nil {
 		t.Fatal(err)
@@ -85,6 +98,47 @@ func TestSetupProvidersSavesADetectedLocalServerAsItsProfile(t *testing.T) {
 		if !strings.Contains(string(saved), line) {
 			t.Errorf("saved config\n%s\nis missing %q", saved, line)
 		}
+	}
+}
+
+func TestSetupProvidersSavesAndTestsTheChosenLocalModel(t *testing.T) {
+	var testedModel string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct{ Model string }
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		testedModel = request.Model
+		http.Error(w, "stop here", http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+	paths := config.PathSet{ConfigDir: t.TempDir()}
+	var asked []string
+	probe := buildTwoModelOllamaProbe(map[string]int{"qwen3:14b": 40960, "llama3:8b": 8192}, &asked)
+	probe.detect = func(context.Context, string) openaicompat.LocalServer {
+		return openaicompat.LocalServer{BaseURL: server.URL + "/v1", Models: []string{"qwen3:14b", "llama3:8b"}, IsDetected: true}
+	}
+	providers := &setupProviders{paths: paths, probes: []localServerProbe{probe}}
+	providers.DetectLocalServers()
+
+	providers.ChooseLocalModel("ollama", "llama3:8b")
+	if got := providers.LookUpLocalContextLength("ollama", "llama3:8b"); got != 8192 {
+		t.Fatalf("got context length %d, want the chosen model's 8192", got)
+	}
+	providers.TestConnection("ollama")
+	if err := providers.SaveProvider("ollama", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	saved, err := os.ReadFile(paths.ReportUserConfigFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{"model = 'llama3:8b'", "context_length = 8192"} {
+		if !strings.Contains(string(saved), line) {
+			t.Errorf("saved config\n%s\nis missing %q", saved, line)
+		}
+	}
+	if testedModel != "llama3:8b" || !slices.Equal(asked, []string{"qwen3:14b", "llama3:8b"}) {
+		t.Fatalf("tested %q after asking about %v, want the chosen model tested and looked up once", testedModel, asked)
 	}
 }
 

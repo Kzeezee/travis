@@ -45,15 +45,17 @@ func runSetupWizard(in io.Reader, out io.Writer) (bool, error) {
 	providers := &providerSwitcher{profiles: cfg.Provider.Profiles, resolveKey: config.ResolveProviderAPIKey, active: cfg.Provider.Active}
 	setupProviders := &setupProviders{paths: paths, profiles: cfg.Provider.Profiles, probes: localServerProbes}
 	actions := terminal.SetupActions{
-		DescribeProviders:   providers.DescribeProviders,
-		DetectLocalServers:  setupProviders.DetectLocalServers,
-		SaveProvider:        setupProviders.SaveProvider,
-		TestConnection:      setupProviders.TestConnection,
-		SaveVoiceOutput:     func(isEnabled bool) error { return config.SaveVoiceOutput(paths, isEnabled) },
-		ListMCPServers:      func() []string { return slices.Sorted(maps.Keys(cfg.MCP.Servers)) },
-		DescribeSecurity:    func(profile string) []string { return describeSecurity(cfg, paths, profile) },
-		SaveSecurityProfile: func(profile string) error { return config.SaveSecurityProfile(paths, profile) },
-		RecordProgress:      func(step string) { recordSetupProgress(paths.StateDir, step) },
+		DescribeProviders:        providers.DescribeProviders,
+		DetectLocalServers:       setupProviders.DetectLocalServers,
+		ChooseLocalModel:         setupProviders.ChooseLocalModel,
+		LookUpLocalContextLength: setupProviders.LookUpLocalContextLength,
+		SaveProvider:             setupProviders.SaveProvider,
+		TestConnection:           setupProviders.TestConnection,
+		SaveVoiceOutput:          func(isEnabled bool) error { return config.SaveVoiceOutput(paths, isEnabled) },
+		ListMCPServers:           func() []string { return slices.Sorted(maps.Keys(cfg.MCP.Servers)) },
+		DescribeSecurity:         func(profile string) []string { return describeSecurity(cfg, paths, profile) },
+		SaveSecurityProfile:      func(profile string) error { return config.SaveSecurityProfile(paths, profile) },
+		RecordProgress:           func(step string) { recordSetupProgress(paths.StateDir, step) },
 	}
 	isFinished, err := terminal.RunSetup(context.Background(), actions, terminal.SetupOptions{
 		Input: in, Output: out, ConfigFile: paths.ReportUserConfigFile(), IsVoiceOutputEnabled: cfg.Voice.Output.Enabled,
@@ -95,11 +97,13 @@ func recordSetupProgress(stateDir, step string) {
 type localServerProbe struct {
 	profile, origin string
 	detect          func(ctx context.Context, origin string) openaicompat.LocalServer
+	// lookUpContextLength asks about one model, so the wizard never asks about models the user does not pick.
+	lookUpContextLength func(ctx context.Context, origin, model string) int
 }
 
 var localServerProbes = []localServerProbe{
-	{profile: "ollama", origin: "http://127.0.0.1:11434", detect: openaicompat.DetectOllama},
-	{profile: "llamacpp", origin: "http://127.0.0.1:8080", detect: openaicompat.DetectLlamaCpp},
+	{profile: "ollama", origin: "http://127.0.0.1:11434", detect: openaicompat.DetectOllama, lookUpContextLength: openaicompat.LookUpOllamaContextLength},
+	{profile: "llamacpp", origin: "http://127.0.0.1:8080", detect: openaicompat.DetectLlamaCpp, lookUpContextLength: openaicompat.LookUpLlamaCppContextLength},
 }
 
 // setupProviders backs the wizard's provider step. A local server it detected stands in for the
@@ -114,11 +118,18 @@ type setupProviders struct {
 }
 
 // DetectLocalServers probes every server at once, so the wait is the slowest probe, not their sum.
+// Each detected server starts on its first model.
 func (s *setupProviders) DetectLocalServers() []terminal.LocalServerSummary {
 	found := make([]openaicompat.LocalServer, len(s.probes))
+	contextLengths := make([]int, len(s.probes))
 	var probing sync.WaitGroup
 	for i, probe := range s.probes {
-		probing.Go(func() { found[i] = probe.detect(context.Background(), probe.origin) })
+		probing.Go(func() {
+			found[i] = probe.detect(context.Background(), probe.origin)
+			if len(found[i].Models) > 0 {
+				contextLengths[i] = probe.lookUpContextLength(context.Background(), probe.origin, found[i].Models[0])
+			}
+		})
 	}
 	probing.Wait()
 
@@ -132,14 +143,44 @@ func (s *setupProviders) DetectLocalServers() []terminal.LocalServerSummary {
 		if origin, err := url.Parse(probe.origin); err == nil {
 			address = origin.Host
 		}
-		summaries[i] = terminal.LocalServerSummary{Profile: probe.profile, Address: address, Model: server.Model,
-			ContextLength: server.ContextLength, IsDetected: server.IsDetected}
-		if server.Model != "" {
+		summaries[i] = terminal.LocalServerSummary{Profile: probe.profile, Address: address, Models: server.Models,
+			ContextLength: contextLengths[i], IsDetected: server.IsDetected}
+		if len(server.Models) > 0 {
+			summaries[i].Model = server.Models[0]
 			s.detected[probe.profile] = config.ProviderProfileCfg{Kind: "openai_compatible", BaseURL: server.BaseURL,
-				Model: server.Model, ContextLength: server.ContextLength}
+				Model: server.Models[0], ContextLength: contextLengths[i]}
 		}
 	}
 	return summaries
+}
+
+// ChooseLocalModel makes model the one SaveProvider saves and TestConnection tests for a detected local server's
+// profile. Its context length is unknown until LookUpLocalContextLength answers.
+func (s *setupProviders) ChooseLocalModel(profile, model string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if settings, isDetected := s.detected[profile]; isDetected {
+		settings.Model, settings.ContextLength = model, 0
+		s.detected[profile] = settings
+	}
+}
+
+// LookUpLocalContextLength reports model's context length, 0 when the server does not say, and keeps it for
+// saving only while model is still the chosen one.
+// ponytail: saving before this answers stores no context_length (unknown, D-33); look it up on save if that bites.
+func (s *setupProviders) LookUpLocalContextLength(profile, model string) int {
+	i := slices.IndexFunc(s.probes, func(probe localServerProbe) bool { return probe.profile == profile })
+	if i < 0 {
+		return 0
+	}
+	contextLength := s.probes[i].lookUpContextLength(context.Background(), s.probes[i].origin, model)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if settings, isDetected := s.detected[profile]; isDetected && settings.Model == model {
+		settings.ContextLength = contextLength
+		s.detected[profile] = settings
+	}
+	return contextLength
 }
 
 // SaveProvider writes a detected local server's profile, or stores apiKey for a configured one, then makes it active.
