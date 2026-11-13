@@ -199,7 +199,11 @@ when no user config exists), `/provider` and `travis mcp add|remove` change the 
 and changes only its own setting, so every value you set by hand, including keys travis
 does not know, survives; comments and key order do not. Before its first rewrite of a
 file with comments, travis keeps a copy as `config.toml.bak`. It never writes the
-workspace `.travis/config.toml`, and never writes a key into any file.
+workspace `.travis/config.toml`, and never writes a key into any file. Choosing a
+detected Ollama (`127.0.0.1:11434`) or llama.cpp (`127.0.0.1:8080`) server in `travis
+init` creates or updates the `ollama` or `llamacpp` profile: endpoint, model and, when
+the server reports it, `context_length`; its other settings are kept. The step a quit
+`travis init` stopped at is kept in `<state dir>/setup-progress` until a run finishes.
 
 **Adding MCP servers.** `travis mcp add <name> [--allow-net] [--env KEY=VALUE] -- <command>
 [args...]` shows a provenance card (publisher, publish date, weekly downloads, direct

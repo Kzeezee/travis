@@ -114,6 +114,28 @@ func TestSaveAndRemoveMCPServerRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSaveProviderProfileUpdatesTheEndpointAndKeepsTheRest(t *testing.T) {
+	paths := buildWritablePathSet(t)
+	writeTestFile(t, paths.ReportUserConfigFile(), `
+[provider.profiles.ollama]
+base_url = "http://old:11434/v1"
+model = "old"
+context_length = 4096
+max_tokens = 512
+`)
+
+	err := SaveProviderProfile(paths, "ollama", ProviderProfileCfg{Kind: "openai_compatible", BaseURL: "http://127.0.0.1:11434/v1", Model: "qwen3:14b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := loadUserConfigOnly(t, paths).Provider.Profiles["ollama"]
+	want := ProviderProfileCfg{Kind: "openai_compatible", BaseURL: "http://127.0.0.1:11434/v1", Model: "qwen3:14b", ContextLength: 4096, MaxTokens: 512}
+	if got != want {
+		t.Fatalf("got %+v, want %+v: a context length the probe did not find keeps the hand-set one", got, want)
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

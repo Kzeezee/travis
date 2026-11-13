@@ -14,9 +14,16 @@ type setupRecorder struct {
 	savedSecurityProfile   string
 	voice                  *bool
 	saveErr                error
+	recordedSteps          []string
+	localServers           []LocalServerSummary
+	testedProfiles         []string
 }
 
 func (r *setupRecorder) buildSetupModel() setupModel {
+	return r.buildSetupModelAt("")
+}
+
+func (r *setupRecorder) buildSetupModelAt(startStep string) setupModel {
 	m := buildSetupModel(SetupActions{
 		DescribeProviders: func() []ProviderSummary {
 			return []ProviderSummary{
@@ -24,17 +31,26 @@ func (r *setupRecorder) buildSetupModel() setupModel {
 				{Name: "local", Model: "tiny"},
 			}
 		},
+		DetectLocalServers: func() []LocalServerSummary { return r.localServers },
 		SaveProvider: func(profile, apiKey string) error {
 			r.savedProfile, r.savedKey = profile, apiKey
 			return r.saveErr
+		},
+		TestConnection: func(profile string) []string {
+			r.testedProfiles = append(r.testedProfiles, profile)
+			return []string{"✓ reachable (34 ms)", "✓ streaming", "✗ tool call: answered without calling it"}
 		},
 		SaveVoiceOutput:     func(isEnabled bool) error { r.voice = &isEnabled; return nil },
 		ListMCPServers:      func() []string { return nil },
 		DescribeSecurity:    func(profile string) []string { return []string{profile + " can read   /work"} },
 		SaveSecurityProfile: func(profile string) error { r.savedSecurityProfile = profile; return nil },
-	}, SetupOptions{ConfigFile: "/config/config.toml", SecurityProfile: "default"})
-	next, _ := m.Update(m.Init()())
-	return next.(setupModel)
+		RecordProgress:      func(step string) { r.recordedSteps = append(r.recordedSteps, step) },
+	}, SetupOptions{ConfigFile: "/config/config.toml", SecurityProfile: "default", StartStep: startStep})
+	for _, cmd := range m.Init()().(tea.BatchMsg) {
+		next, _ := m.Update(cmd())
+		m = next.(setupModel)
+	}
+	return m
 }
 
 func pressSetupKeys(m setupModel, msgs ...tea.Msg) (setupModel, tea.Cmd) {
@@ -128,5 +144,74 @@ func TestSetupQuitsWithoutFinishing(t *testing.T) {
 
 	if m.isFinished || !isQuitCmd(cmd) {
 		t.Fatal("ctrl+c did not quit unfinished")
+	}
+}
+
+func TestSetupResumesAtTheRecordedStep(t *testing.T) {
+	recorder := &setupRecorder{}
+	m := recorder.buildSetupModelAt("mcp")
+	if m.step != setupMCP {
+		t.Fatalf("opened at step %d, want the recorded mcp step", m.step)
+	}
+
+	m, _ = pressSetupKeys(m, enterKey, tea.KeyPressMsg{Code: tea.KeyTab})
+
+	if m.step != setupDone || strings.Join(recorder.recordedSteps, ",") != "security,done" {
+		t.Fatalf("at step %d recorded %v, want security then done", m.step, recorder.recordedSteps)
+	}
+}
+
+func TestSetupOpensAtTheFirstStepWhenTheRecordedStepIsUnknown(t *testing.T) {
+	for _, startStep := range []string{"", "garbled\x00", "tools"} {
+		if m := (&setupRecorder{}).buildSetupModelAt(startStep); m.step != setupProvider {
+			t.Errorf("start step %q opened at step %d, want the provider step", startStep, m.step)
+		}
+	}
+}
+
+func TestSetupOffersADetectedLocalServerInPlaceOfItsProfile(t *testing.T) {
+	recorder := &setupRecorder{localServers: []LocalServerSummary{
+		{Profile: "local", Address: "127.0.0.1:11434", Model: "qwen3:14b", ContextLength: 40960, IsDetected: true},
+		{Profile: "llamacpp", Address: "127.0.0.1:8080"},
+	}}
+	m := recorder.buildSetupModel()
+
+	view := renderSetup(m)
+	for _, want := range []string{"local      qwen3:14b                detected at 127.0.0.1:11434 · context 40960 tokens", "llamacpp", "not detected at 127.0.0.1:8080"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("got view\n%s\nwant %q", view, want)
+		}
+	}
+	if strings.Contains(view, "tiny") {
+		t.Fatalf("got view\n%s\nwant the detected server in place of the configured local profile", view)
+	}
+
+	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: tea.KeyDown}, enterKey)
+	if m.step != setupProvider || recorder.savedProfile != "" || !strings.Contains(renderSetup(m), "✗ llamacpp: not detected") {
+		t.Fatalf("got step %d, saved %q and view\n%s\nwant a server that is not running refused", m.step, recorder.savedProfile, renderSetup(m))
+	}
+	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyUp}, enterKey)
+	if m.step != setupVoice || recorder.savedProfile != "local" {
+		t.Fatalf("got step %d and saved %q, want the detected server saved as local", m.step, recorder.savedProfile)
+	}
+}
+
+func TestSetupTestsTheConnectionOnlyWhenAsked(t *testing.T) {
+	recorder := &setupRecorder{}
+	m := recorder.buildSetupModel()
+	walked, _ := pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyDown}, enterKey, enterKey, enterKey, enterKey, enterKey)
+	if !walked.isFinished || len(recorder.testedProfiles) != 0 {
+		t.Fatalf("finished %v after testing %v, want the whole wizard walked without a connection test", walked.isFinished, recorder.testedProfiles)
+	}
+
+	m, cmd := pressSetupKeys(m, typedKeys("t")...)
+	if len(recorder.testedProfiles) != 0 || !strings.Contains(renderSetup(m), "testing…") {
+		t.Fatalf("tested %v with view\n%s\nwant the test started off the UI thread", recorder.testedProfiles, renderSetup(m))
+	}
+	m, _ = pressSetupKeys(m, cmd())
+
+	view := renderSetup(m)
+	if strings.Join(recorder.testedProfiles, ",") != "cloud" || !strings.Contains(view, "test · cloud") || !strings.Contains(view, "   ✓ streaming") {
+		t.Fatalf("tested %v with view\n%s\nwant cloud tested and one line per check", recorder.testedProfiles, view)
 	}
 }
