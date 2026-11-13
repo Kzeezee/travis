@@ -119,7 +119,8 @@ func TestSetupProvidersSavesAndTestsTheChosenLocalModel(t *testing.T) {
 	providers := &setupProviders{paths: paths, probes: []localServerProbe{probe}}
 	providers.DetectLocalServers()
 
-	if got := providers.ChooseLocalModel("ollama", "llama3:8b"); got != 8192 {
+	providers.ChooseLocalModel("ollama", "llama3:8b")
+	if got := providers.LookUpLocalContextLength("ollama", "llama3:8b"); got != 8192 {
 		t.Fatalf("got context length %d, want the chosen model's 8192", got)
 	}
 	providers.TestConnection("ollama")

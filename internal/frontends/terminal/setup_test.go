@@ -32,11 +32,9 @@ func (r *setupRecorder) buildSetupModelAt(startStep string) setupModel {
 				{Name: "local", Model: "tiny"},
 			}
 		},
-		DetectLocalServers: func() []LocalServerSummary { return r.localServers },
-		ChooseLocalModel: func(profile, model string) int {
-			r.chosenModels = append(r.chosenModels, profile+"/"+model)
-			return len(model) * 1000
-		},
+		DetectLocalServers:       func() []LocalServerSummary { return r.localServers },
+		ChooseLocalModel:         func(profile, model string) { r.chosenModels = append(r.chosenModels, profile+"/"+model) },
+		LookUpLocalContextLength: func(_, model string) int { return len(model) * 1000 },
 		SaveProvider: func(profile, apiKey string) error {
 			r.savedProfile, r.savedKey = profile, apiKey
 			return r.saveErr
@@ -232,13 +230,19 @@ func TestSetupCyclesAMultiModelServersModelWithTheArrowKeys(t *testing.T) {
 		t.Fatalf("got view\n%s\nwant a model position only on the server with a choice", view)
 	}
 
-	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyRight})
-	if view := renderSetup(m); !strings.Contains(view, "‹llama3› (2 of 3)") || !strings.Contains(view, "context 6000 tokens") {
-		t.Fatalf("got view\n%s\nwant the second model with the context length looked up for it", view)
+	m, lookUp := pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if view := renderSetup(m); !strings.Contains(view, "‹llama3› (2 of 3)") || strings.Contains(view, "context 6000") {
+		t.Fatalf("got view\n%s\nwant the second model chosen at once, its context length still being looked up", view)
 	}
-	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyLeft}, tea.KeyPressMsg{Code: tea.KeyLeft})
-	if view := renderSetup(m); !strings.Contains(view, "‹gemma› (3 of 3)") {
-		t.Fatalf("got view\n%s\nwant the choice to wrap to the last model", view)
+	m, _ = pressSetupKeys(m, lookUp())
+	if view := renderSetup(m); !strings.Contains(view, "context 6000 tokens") {
+		t.Fatalf("got view\n%s\nwant the context length looked up for the second model", view)
+	}
+	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	m, staleLookUp := pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	m, _ = pressSetupKeys(m, localContextLengthMsg{profile: "local", model: "qwen3", contextLength: 99}, staleLookUp())
+	if view := renderSetup(m); !strings.Contains(view, "‹gemma› (3 of 3)") || strings.Contains(view, "context 99") {
+		t.Fatalf("got view\n%s\nwant the choice to wrap to the last model and a late answer for qwen3 dropped", view)
 	}
 	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyDown}, tea.KeyPressMsg{Code: tea.KeyRight})
 	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyUp}, enterKey)

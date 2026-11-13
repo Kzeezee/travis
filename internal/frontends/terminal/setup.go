@@ -19,8 +19,10 @@ type SetupActions struct {
 	// DetectLocalServers looks for model servers on this machine; it waits on the network, so it runs off the UI thread.
 	DetectLocalServers func() []LocalServerSummary
 	// ChooseLocalModel makes model the one SaveProvider saves and TestConnection tests for a detected local
-	// server's profile, and reports that model's context length (0 when unknown). It waits on the network.
-	ChooseLocalModel func(profile, model string) int
+	// server's profile. It does no IO, so the choice holds even if the user saves at once.
+	ChooseLocalModel func(profile, model string)
+	// LookUpLocalContextLength reports model's context length, 0 when unknown; it waits on the network.
+	LookUpLocalContextLength func(profile, model string) int
 	// SaveProvider makes profile the active one, storing apiKey first when it is not empty. A detected
 	// local server's profile is created or updated first.
 	SaveProvider func(profile, apiKey string) error
@@ -53,6 +55,11 @@ type LocalServerSummary struct {
 }
 
 type localServersDetectedMsg struct{ servers []LocalServerSummary }
+
+type localContextLengthMsg struct {
+	profile, model string
+	contextLength  int
+}
 
 type connectionTestedMsg struct {
 	profile string
@@ -169,6 +176,12 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case localServersDetectedMsg:
 		m.localServers, m.hasLookedForLocalServers = msg.servers, true
+	case localContextLengthMsg:
+		// A slower answer for a model the user has since moved past is dropped.
+		if i := slices.IndexFunc(m.localServers, func(s LocalServerSummary) bool { return s.Profile == msg.profile }); i >= 0 && m.localServers[i].Model == msg.model {
+			m.localServers = slices.Clone(m.localServers)
+			m.localServers[i].ContextLength = msg.contextLength
+		}
 	case connectionTestedMsg:
 		m.connectionTest = append([]string{"test · " + msg.profile}, msg.checks...)
 	case tea.PasteMsg:
@@ -258,7 +271,7 @@ func (m setupModel) handleProviderKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		}
 		return m.saveAndAdvance(func() error { return m.actions.SaveProvider(chosen.name, "") })
 	case "left", "right":
-		return m.cycleLocalModel(map[string]int{"left": -1, "right": 1}[key.String()]), nil
+		return m.cycleLocalModel(map[string]int{"left": -1, "right": 1}[key.String()])
 	case "t":
 		rows := m.listProviderRows()
 		if len(rows) == 0 || !rows[m.cursor].isChoosable {
@@ -271,19 +284,24 @@ func (m setupModel) handleProviderKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	return m, nil
 }
 
-// cycleLocalModel moves the highlighted local server's model step places along its list, wrapping at the ends.
-func (m setupModel) cycleLocalModel(step int) setupModel {
+// cycleLocalModel moves the highlighted local server's model step places along its list, wrapping at the ends,
+// then looks up the new model's context length off the UI thread.
+func (m setupModel) cycleLocalModel(step int) (setupModel, tea.Cmd) {
 	rows := m.listProviderRows()
 	if len(rows) == 0 || len(rows[m.cursor].models) < 2 {
-		return m
+		return m, nil
 	}
 	row := rows[m.cursor]
 	chosen := row.models[(slices.Index(row.models, row.model)+step+len(row.models))%len(row.models)]
 	m.localServers = slices.Clone(m.localServers)
 	server := &m.localServers[slices.IndexFunc(m.localServers, func(s LocalServerSummary) bool { return s.Profile == row.name })]
-	server.Model, server.ContextLength = chosen, m.actions.ChooseLocalModel(row.name, chosen)
+	server.Model, server.ContextLength = chosen, 0
+	m.actions.ChooseLocalModel(row.name, chosen)
 	m.connectionTest = nil
-	return m
+	profile, lookUp := row.name, m.actions.LookUpLocalContextLength
+	return m, func() tea.Msg {
+		return localContextLengthMsg{profile: profile, model: chosen, contextLength: lookUp(profile, chosen)}
+	}
 }
 
 // listProviderRows lists configured profiles, then local servers. A detected server with a model

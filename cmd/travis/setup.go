@@ -45,16 +45,17 @@ func runSetupWizard(in io.Reader, out io.Writer) (bool, error) {
 	providers := &providerSwitcher{profiles: cfg.Provider.Profiles, resolveKey: config.ResolveProviderAPIKey, active: cfg.Provider.Active}
 	setupProviders := &setupProviders{paths: paths, profiles: cfg.Provider.Profiles, probes: localServerProbes}
 	actions := terminal.SetupActions{
-		DescribeProviders:   providers.DescribeProviders,
-		DetectLocalServers:  setupProviders.DetectLocalServers,
-		ChooseLocalModel:    setupProviders.ChooseLocalModel,
-		SaveProvider:        setupProviders.SaveProvider,
-		TestConnection:      setupProviders.TestConnection,
-		SaveVoiceOutput:     func(isEnabled bool) error { return config.SaveVoiceOutput(paths, isEnabled) },
-		ListMCPServers:      func() []string { return slices.Sorted(maps.Keys(cfg.MCP.Servers)) },
-		DescribeSecurity:    func(profile string) []string { return describeSecurity(cfg, paths, profile) },
-		SaveSecurityProfile: func(profile string) error { return config.SaveSecurityProfile(paths, profile) },
-		RecordProgress:      func(step string) { recordSetupProgress(paths.StateDir, step) },
+		DescribeProviders:        providers.DescribeProviders,
+		DetectLocalServers:       setupProviders.DetectLocalServers,
+		ChooseLocalModel:         setupProviders.ChooseLocalModel,
+		LookUpLocalContextLength: setupProviders.LookUpLocalContextLength,
+		SaveProvider:             setupProviders.SaveProvider,
+		TestConnection:           setupProviders.TestConnection,
+		SaveVoiceOutput:          func(isEnabled bool) error { return config.SaveVoiceOutput(paths, isEnabled) },
+		ListMCPServers:           func() []string { return slices.Sorted(maps.Keys(cfg.MCP.Servers)) },
+		DescribeSecurity:         func(profile string) []string { return describeSecurity(cfg, paths, profile) },
+		SaveSecurityProfile:      func(profile string) error { return config.SaveSecurityProfile(paths, profile) },
+		RecordProgress:           func(step string) { recordSetupProgress(paths.StateDir, step) },
 	}
 	isFinished, err := terminal.RunSetup(context.Background(), actions, terminal.SetupOptions{
 		Input: in, Output: out, ConfigFile: paths.ReportUserConfigFile(), IsVoiceOutputEnabled: cfg.Voice.Output.Enabled,
@@ -153,9 +154,21 @@ func (s *setupProviders) DetectLocalServers() []terminal.LocalServerSummary {
 	return summaries
 }
 
-// ChooseLocalModel makes model the one SaveProvider saves and TestConnection tests for a detected
-// local server's profile, and reports its context length, 0 when the server does not say.
-func (s *setupProviders) ChooseLocalModel(profile, model string) int {
+// ChooseLocalModel makes model the one SaveProvider saves and TestConnection tests for a detected local server's
+// profile. Its context length is unknown until LookUpLocalContextLength answers.
+func (s *setupProviders) ChooseLocalModel(profile, model string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if settings, isDetected := s.detected[profile]; isDetected {
+		settings.Model, settings.ContextLength = model, 0
+		s.detected[profile] = settings
+	}
+}
+
+// LookUpLocalContextLength reports model's context length, 0 when the server does not say, and keeps it for
+// saving only while model is still the chosen one.
+// ponytail: saving before this answers stores no context_length (unknown, D-33); look it up on save if that bites.
+func (s *setupProviders) LookUpLocalContextLength(profile, model string) int {
 	i := slices.IndexFunc(s.probes, func(probe localServerProbe) bool { return probe.profile == profile })
 	if i < 0 {
 		return 0
@@ -163,8 +176,8 @@ func (s *setupProviders) ChooseLocalModel(profile, model string) int {
 	contextLength := s.probes[i].lookUpContextLength(context.Background(), s.probes[i].origin, model)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if settings, isDetected := s.detected[profile]; isDetected {
-		settings.Model, settings.ContextLength = model, contextLength
+	if settings, isDetected := s.detected[profile]; isDetected && settings.Model == model {
+		settings.ContextLength = contextLength
 		s.detected[profile] = settings
 	}
 	return contextLength
