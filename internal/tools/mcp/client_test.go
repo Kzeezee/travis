@@ -192,6 +192,9 @@ func TestFailedServerStartReportsItsStderrLineInStatusAndEvent(t *testing.T) {
 	}
 	if unavailable, ok := sink.events[0].(core.MCPServerUnavailable); !ok || unavailable.Server != "fake" || !strings.Contains(unavailable.Reason, stderrLine) {
 		t.Fatalf("event = %+v, want MCPServerUnavailable for fake carrying the stderr line", sink.events[0])
+	}
+}
+
 // startFilteredFakeServer registers the fake server's tools under filter and waits for it to be running.
 func startFilteredFakeServer(t *testing.T, filter config.MCPToolFilterCfg) (*registry.Registry, *Manager) {
 	t.Helper()
