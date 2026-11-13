@@ -1188,7 +1188,7 @@ broker's policy already applies the rows above as fixed classifications. `approv
 therefore governs **MCP tool calls**, the one effect that never passes the broker and so can
 be neither journalled nor undone. `ask` (default) asks per call; the modal's "always" is
 remembered per tool in `mcp-trust.toml`, tied to the server's approved launch like launch
-trust, so a changed version asks again. `never` keeps every MCP tool out of the registry.
+trust, so a changed version asks again. `never` starts no MCP server, so nothing is offered to the model or asks to launch.
 Untrusted-intake escalation still asks as irreversible, so "always" never relaxes it. The
 setting is user-config only: a workspace value is discarded, as it would otherwise switch
 asking off for the repo that wrote it.

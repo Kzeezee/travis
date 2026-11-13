@@ -212,7 +212,7 @@ what is saved and what `t` tests. For Ollama, `context_length` is only an explic
 tools keep the broker's fixed rules. `ask` (the default) asks before an MCP tool runs, and
 answering `a` remembers that tool in `mcp-trust.toml` for as long as the server's approved
 launch stays the same; `auto` runs them without asking; `never` hides every MCP tool from the
-model. After untrusted content in the same step every MCP call asks, whatever the setting,
+model and starts none of the servers. After untrusted content in the same step every MCP call asks, whatever the setting,
 and that answer is never remembered. The workspace config cannot change this setting.
 
 **Adding MCP servers.** `travis mcp add <name> [--allow-net] [--env KEY=VALUE] -- <command>

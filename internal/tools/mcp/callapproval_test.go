@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
@@ -103,14 +102,16 @@ func TestRedTeamGateRememberedMCPToolTrustStillAsksAfterUntrustedIntake(t *testi
 	}
 }
 
-func TestNeverModeKeepsEveryMCPToolFromTheModel(t *testing.T) {
+func TestNeverModeStartsNoServerAndAsksNothing(t *testing.T) {
 	servers := config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": buildTestServerConfig()}}
 	reg := registry.BuildRegistry(100)
-	manager := BuildManager(servers, grantedExecPolicy(), &fakeApprover{decision: core.ApprovalOnce}, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir(), testSandboxing(), CallApprovalNever)
-	t.Cleanup(manager.Close)
+	approver := &fakeApprover{decision: core.ApprovalOnce}
+	manager := BuildManager(servers, grantedExecPolicy(), approver, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir(), testSandboxing(), CallApprovalNever)
+	manager.WaitUntilStarted()
+	manager.Close()
 
-	pollUntil(t, 10*time.Second, func() bool { return manager.ReportServerStatuses()[0].HiddenToolCount > 0 })
-	if status := manager.ReportServerStatuses()[0]; status.ToolCount != 0 || len(reg.List(registry.Filter{Source: registry.SourceMCP})) != 0 {
-		t.Fatalf("status %+v; want every tool hidden", status)
+	status := manager.ReportServerStatuses()[0]
+	if status.State != ServerOff || len(reg.List(registry.Filter{Source: registry.SourceMCP})) != 0 || len(approver.askedOps()) != 0 {
+		t.Fatalf("status %+v, asked %v; want the server off, no tools and no launch approval", status, approver.askedOps())
 	}
 }

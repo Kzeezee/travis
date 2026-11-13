@@ -108,7 +108,7 @@ var setupStepNames = []string{"provider", "voice", "tools", "mcp", "security", "
 var setupApprovalChoices = []struct{ mode, effect string }{
 	{"ask", "asks before an MCP tool runs; answer a in chat to always allow that tool"},
 	{"auto", "MCP tools run without asking, except right after untrusted content"},
-	{"never", "MCP tools are hidden from the model"},
+	{"never", "MCP servers stay off, so the model has no MCP tools"},
 }
 
 // setupSecurityProfiles leaves out yolo, which needs an RFC amending D-22 and D-27 first.

@@ -116,6 +116,8 @@ func (p *serverProcess) reportState() (ServerState, string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	switch {
+	case p.callApproval == CallApprovalNever:
+		return ServerOff, ""
 	case p.unavailable != nil:
 		return ServerUnavailable, p.unavailable.Error()
 	case p.startErr != nil:

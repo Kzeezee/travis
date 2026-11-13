@@ -37,7 +37,7 @@ const (
 	CallApprovalAuto CallApproval = "auto"
 	// CallApprovalAsk asks before each tool until the user answers "always" for it, remembered per approved launch.
 	CallApprovalAsk CallApproval = "ask"
-	// CallApprovalNever keeps every MCP tool from the model.
+	// CallApprovalNever keeps every MCP tool from the model, so no server is started at all.
 	CallApprovalNever CallApproval = "never"
 )
 
@@ -50,6 +50,7 @@ const (
 	ServerRunning     ServerState = "running"
 	ServerFailed      ServerState = "failed to start"
 	ServerUnavailable ServerState = "unavailable"
+	ServerOff         ServerState = "off ([tools] approval_default = never)"
 )
 
 // ServerStatus is one configured server as /mcp shows it; Reason explains a failed or unavailable server.
@@ -81,6 +82,9 @@ func BuildManager(servers config.MCPCfg, pol policy.Policy, approver core.Approv
 		process := buildServerProcess(name, serverCfg, pol, approver, clock, events, diagnostics, trust, sandboxing, buildScratchDir(stateDir, name), filepath.Join(stateDir, lockFileName), buildUnregisterTools(reg, name))
 		process.callApproval = callApproval
 		manager.processes[name] = process
+		if callApproval == CallApprovalNever {
+			continue // a server whose every tool is hidden is not worth a launch approval or a process
+		}
 		manager.done.Add(1)
 		go func(name string, process *serverProcess) {
 			defer manager.done.Done()
@@ -117,7 +121,7 @@ func connectAndRegister(ctx context.Context, name string, process *serverProcess
 	}
 	hidden := 0
 	for _, remoteTool := range listed.Tools {
-		if process.callApproval == CallApprovalNever || !process.cfg.Tools.PermitsTool(remoteTool.Name) {
+		if !process.cfg.Tools.PermitsTool(remoteTool.Name) {
 			hidden++
 			continue
 		}
