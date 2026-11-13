@@ -293,3 +293,15 @@ func TestRedTeamGateStderrLogLinkIsNotQuoted(t *testing.T) {
 		t.Fatalf("readLastStderrLine = %q, want nothing through a symlink", got)
 	}
 }
+
+func TestRedTeamGateServerStderrCannotDriveTheTerminal(t *testing.T) {
+	scratchDir := t.TempDir()
+	line := "boom \x1b]52;c;ZXZpbA==\x07\x1b[2J" + strings.Repeat("x", 500)
+	if err := os.WriteFile(filepath.Join(scratchDir, stderrLogName), []byte("first\n"+line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := readLastStderrLine(scratchDir)
+	if strings.ContainsAny(got, "\x1b\x07") || !strings.HasPrefix(got, "boom ]52;c;") || len([]rune(got)) > maxStderrLineRunes+1 {
+		t.Fatalf("got %q; want control characters dropped and the line capped", got)
+	}
+}
