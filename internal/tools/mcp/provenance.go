@@ -105,6 +105,14 @@ func ParsePackageShorthand(spec string) (PackageRef, bool, error) {
 	return ref, true, nil
 }
 
+// String is how mcp.lock and the install card name ref: npm:<name>@<version> or pypi:<name>==<version>.
+func (ref PackageRef) String() string {
+	if ref.Registry == RegistryPyPI {
+		return "pypi:" + ref.Name + "==" + ref.Version
+	}
+	return "npm:" + ref.Name + "@" + ref.Version
+}
+
 // BuildLaunch is the runner command that installs and starts ref; ResolvePackageRef reads it back.
 func (ref PackageRef) BuildLaunch() (command string, args []string) {
 	if ref.Registry == RegistryPyPI {

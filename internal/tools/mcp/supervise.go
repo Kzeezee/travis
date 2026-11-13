@@ -57,6 +57,8 @@ type serverProcess struct {
 	buildSandboxedCommand func(context.Context, sandbox.Spec) (*exec.Cmd, sandbox.Tier, error)
 	// scratchDir is this server's only writable folder by default; its home, temp and caches live there.
 	scratchDir string
+	// lockPath is mcp.lock, which pins what a registry server may install.
+	lockPath string
 	// unregisterTools removes this server's own tools from the registry once restart
 	// attempts are exhausted; nil in tests that never reach exhaustion.
 	unregisterTools func()
@@ -66,18 +68,56 @@ type serverProcess struct {
 	unavailable error
 	// startErr is why the first launch never produced a usable server; nothing retries it.
 	startErr error
+	// callApproval is [tools] approval_default, applied to each call of this server's tools.
+	callApproval CallApproval
+	// grant is what the running launch was approved under; an "always" for one of its tools is tied to it.
+	grant launchGrant
+	// hasStderrLog is true once a launch of this process made a fresh stderr.log, so an older session's is never quoted.
+	hasStderrLog bool
+	// hiddenToolCount is how many of the server's listed tools its [tools] filter kept from the registry.
+	hiddenToolCount int
 }
 
-func (p *serverProcess) recordStartFailure(err error) {
+func (p *serverProcess) recordHiddenToolCount(count int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.hiddenToolCount = count
+}
+
+func (p *serverProcess) reportHiddenToolCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.hiddenToolCount
+}
+
+// recordStartFailure keeps why the first launch failed, with the server's last stderr line, and announces it.
+func (p *serverProcess) recordStartFailure(ctx context.Context, err error) {
+	if line := p.readLastStderrLine(); line != "" {
+		err = fmt.Errorf("%w; stderr: %s", err, line)
+	}
+	fmt.Fprintf(p.diagnostics, "travis: mcp server %q did not start: %v\n", p.name, err)
+	p.mu.Lock()
 	p.startErr = err
+	p.mu.Unlock()
+	p.publish(ctx, core.MCPServerUnavailable{EventHeader: core.EventHeader{At: p.clock.ReportCurrentTime()}, Server: p.name, Reason: err.Error()})
+}
+
+func (p *serverProcess) readLastStderrLine() string {
+	p.mu.Lock()
+	hasLog := p.hasStderrLog
+	p.mu.Unlock()
+	if !hasLog {
+		return ""
+	}
+	return readLastStderrLine(p.scratchDir)
 }
 
 func (p *serverProcess) reportState() (ServerState, string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	switch {
+	case p.callApproval == CallApprovalNever:
+		return ServerOff, ""
 	case p.unavailable != nil:
 		return ServerUnavailable, p.unavailable.Error()
 	case p.startErr != nil:
@@ -89,8 +129,8 @@ func (p *serverProcess) reportState() (ServerState, string) {
 	}
 }
 
-func buildServerProcess(name string, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, trust *trustStore, sandboxing Sandboxing, scratchDir string, unregisterTools func()) *serverProcess {
-	return &serverProcess{name: name, cfg: cfg, policy: pol, approver: approver, clock: clock, events: events, diagnostics: diagnostics, trust: trust, sandboxing: sandboxing, buildSandboxedCommand: sandbox.BuildCommand, scratchDir: scratchDir, unregisterTools: unregisterTools}
+func buildServerProcess(name string, cfg config.MCPServerCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, trust *trustStore, sandboxing Sandboxing, scratchDir, lockPath string, unregisterTools func()) *serverProcess {
+	return &serverProcess{name: name, cfg: cfg, policy: pol, approver: approver, clock: clock, events: events, diagnostics: diagnostics, trust: trust, sandboxing: sandboxing, buildSandboxedCommand: sandbox.BuildCommand, scratchDir: scratchDir, lockPath: lockPath, unregisterTools: unregisterTools}
 }
 
 // connectAndSupervise performs the first connect (so tools/list has something to report)
@@ -125,6 +165,10 @@ func (p *serverProcess) currentSession() (*mcpsdk.ClientSession, error) {
 // the user wrote "npx" in their config, so their grant should match "npx", not a
 // platform-specific "npx.cmd" or an absolute path that happens to vary by machine.
 func (p *serverProcess) connect(ctx context.Context) (*mcpsdk.ClientSession, error) {
+	installState, err := verifyInstall(p.lockPath, p.scratchDir, p.name, p.cfg)
+	if err != nil {
+		return nil, err
+	}
 	cmd, grant, err := p.buildLaunchCommand(ctx)
 	if err != nil {
 		return nil, err
@@ -132,12 +176,18 @@ func (p *serverProcess) connect(ctx context.Context) (*mcpsdk.ClientSession, err
 	if err := p.authorizeExec(ctx, p.cfg.Command, grant); err != nil {
 		return nil, err
 	}
+	p.mu.Lock()
+	p.grant = grant
+	p.mu.Unlock()
 	// A server that dies at startup says why only on stderr (an npm network error, a sandbox denial). It goes to a
 	// file, not the terminal, where a chatty server's log lines would draw over the chat screen.
 	stderrLog, err := createStderrLog(p.scratchDir)
 	if err != nil {
 		return nil, fmt.Errorf("mcp server %q: %w", p.name, err)
 	}
+	p.mu.Lock()
+	p.hasStderrLog = true
+	p.mu.Unlock()
 	defer stderrLog.Close() // the child holds its own copy once started
 	cmd.Stderr = stderrLog
 
@@ -146,6 +196,16 @@ func (p *serverProcess) connect(ctx context.Context) (*mcpsdk.ClientSession, err
 	if err != nil {
 		fmt.Fprintf(p.diagnostics, "travis: mcp server %q wrote its startup errors to %s\n", p.name, stderrLog.Name())
 		return nil, translateConnectError(p.name, err)
+	}
+	// npx installs during the first launch, so only now is there an install to check against the pin and record.
+	if installState == InstallAwaitingFirstLaunch {
+		if installState, err = verifyInstall(p.lockPath, p.scratchDir, p.name, p.cfg); err == nil && installState != InstallVerified {
+			err = fmt.Errorf("mcp server %q started, but what npx installed was not found under %s, so it cannot be checked: %w", p.name, p.scratchDir, core.ErrDenied)
+		}
+		if err != nil {
+			_ = session.Close()
+			return nil, err
+		}
 	}
 	p.publish(ctx, core.MCPServerStarted{EventHeader: core.EventHeader{At: p.clock.ReportCurrentTime()}, Server: p.name, Tier: string(grant.Tier)})
 	return session, nil
@@ -158,12 +218,12 @@ func (p *serverProcess) authorizeExec(ctx context.Context, command string, grant
 	case policy.Allow:
 		return nil
 	case policy.Ask:
-		if p.trust != nil && p.trust.isTrusted(command, p.cfg.Args, grant) {
+		if p.trust != nil && p.trust.isTrusted(command, p.cfg.Args, grant, "") {
 			return nil
 		}
 		return p.requestApproval(ctx, command, grant)
 	case policy.Deny:
-		return fmt.Errorf("mcp server %q is not permitted to run %q; add it to [security] exec_allow in your user config: %w", p.name, command, core.ErrDenied)
+		return fmt.Errorf("mcp server %q is not permitted to run %q: your [security] profile must allow commands (paranoid allows none) and exec_allow must list it: %w", p.name, command, core.ErrDenied)
 	default:
 		return fmt.Errorf("mcp server %q is not permitted to run %q: %w", p.name, command, core.ErrDenied)
 	}
@@ -193,7 +253,7 @@ func (p *serverProcess) requestApproval(ctx context.Context, command string, gra
 		if p.trust == nil {
 			return nil
 		}
-		return p.trust.add(command, p.cfg.Args, grant, "approval modal", p.clock)
+		return p.trust.add(command, p.cfg.Args, grant, "", "approval modal", p.clock)
 	case core.ApprovalDenied:
 		return fmt.Errorf("starting mcp server %q was denied by the user: %w", p.name, core.ErrDenied)
 	default:
@@ -251,6 +311,9 @@ func (p *serverProcess) superviseRestarts(ctx context.Context, session *mcpsdk.C
 }
 
 func (p *serverProcess) reportUnavailable(ctx context.Context, reason string) {
+	if line := p.readLastStderrLine(); line != "" {
+		reason += "; stderr: " + line
+	}
 	fmt.Fprintf(p.diagnostics, "travis: mcp server %q is unavailable: %s\n", p.name, reason)
 	p.mu.Lock()
 	p.unavailable = &core.ProviderError{Provider: sourceName(p.name), Kind: core.ErrExhausted, Cause: fmt.Errorf("%s", reason)}

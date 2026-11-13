@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	trustFileName = "mcp-trust.toml"
-	trustDirMode  = 0o700
-	trustFileMode = 0o600
+	trustFileName        = "mcp-trust.toml"
+	privateStateDirMode  = 0o700
+	privateStateFileMode = 0o600
 )
 
 // trustEntry is one user's "always allow" answer for one exact server launch — separate
@@ -33,12 +33,14 @@ type trustEntry struct {
 	AllowNetwork bool     `toml:"allow_network"`
 	ReadPaths    []string `toml:"read_paths"`
 	WritePaths   []string `toml:"write_paths"`
-	AddedAt      time.Time
-	Source       string
+	// Tool is one MCP tool call answered "always" (approval_default = "ask"); empty for the launch itself.
+	Tool    string `toml:"tool,omitempty"`
+	AddedAt time.Time
+	Source  string
 }
 
-func (e trustEntry) matches(command string, args []string, grant launchGrant) bool {
-	return e.Command == command && slices.Equal(e.Args, args) && e.Tier == string(grant.Tier) &&
+func (e trustEntry) matches(command string, args []string, grant launchGrant, tool string) bool {
+	return e.Tool == tool && e.Command == command && slices.Equal(e.Args, args) && e.Tier == string(grant.Tier) &&
 		e.AllowNetwork == grant.AllowNetwork && slices.Equal(e.ReadPaths, grant.ReadPaths) && slices.Equal(e.WritePaths, grant.WritePaths)
 }
 
@@ -77,27 +79,27 @@ func buildTrustStore(path string) *trustStore {
 	return store
 }
 
-// isTrusted reports whether command, args and sandbox grant exactly match a previously approved entry.
-func (s *trustStore) isTrusted(command string, args []string, grant launchGrant) bool {
+// isTrusted reports whether command, args, sandbox grant and tool ("" for the launch) exactly match a previously approved entry.
+func (s *trustStore) isTrusted(command string, args []string, grant launchGrant, tool string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.ContainsFunc(s.entries, func(entry trustEntry) bool { return entry.matches(command, args, grant) })
+	return slices.ContainsFunc(s.entries, func(entry trustEntry) bool { return entry.matches(command, args, grant, tool) })
 }
 
 // add appends one trusted entry, both in memory and durably on disk under an exclusive
 // lock (same D-32 reasoning as AddDecisionRule), so a concurrent writer never corrupts
 // the file and a crash right after never loses the in-memory half of the picture.
-func (s *trustStore) add(command string, args []string, grant launchGrant, source string, clock core.Clock) error {
+func (s *trustStore) add(command string, args []string, grant launchGrant, tool, source string, clock core.Clock) error {
 	entry := trustEntry{
 		Command: command, Args: slices.Clone(args),
 		Tier: string(grant.Tier), AllowNetwork: grant.AllowNetwork, ReadPaths: slices.Clone(grant.ReadPaths), WritePaths: slices.Clone(grant.WritePaths),
-		AddedAt: clock.ReportCurrentTime().UTC(), Source: source,
+		Tool: tool, AddedAt: clock.ReportCurrentTime().UTC(), Source: source,
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	file, err := openTrustFile(s.path)
+	file, err := openPrivateFileNoFollow(s.path)
 	if err != nil {
 		return fmt.Errorf("mcp trust: %w", err)
 	}
@@ -125,12 +127,12 @@ func (s *trustStore) add(command string, args []string, grant launchGrant, sourc
 	return nil
 }
 
-// openTrustFile opens the trust file without following a symlink at its directory or at
-// the file itself — the same R-26-style reasoning as decisions.go's openDecisionsFile: a
-// planted symlink must never redirect a trusted write somewhere else on disk.
-func openTrustFile(path string) (*os.File, error) {
+// openPrivateFileNoFollow opens mcp-trust.toml or mcp.lock without following a symlink at its directory or at
+// the file itself, as broker's function of the same name does (R-26): a planted symlink must never redirect a
+// trusted write somewhere else on disk.
+func openPrivateFileNoFollow(path string) (*os.File, error) {
 	dir := filepath.Dir(path)
-	if err := os.Mkdir(dir, trustDirMode); err != nil && !errors.Is(err, fs.ErrExist) {
+	if err := os.Mkdir(dir, privateStateDirMode); err != nil && !errors.Is(err, fs.ErrExist) {
 		return nil, err
 	}
 	if info, err := os.Lstat(dir); err != nil {
@@ -139,7 +141,7 @@ func openTrustFile(path string) (*os.File, error) {
 		return nil, fmt.Errorf("%q is not a real folder: %w", dir, core.ErrDenied)
 	}
 
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, trustFileMode)
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, privateStateFileMode)
 	if !errors.Is(err, fs.ErrExist) {
 		return file, err
 	}

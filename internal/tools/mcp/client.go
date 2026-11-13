@@ -28,6 +28,19 @@ type Manager struct {
 	processes map[string]*serverProcess
 }
 
+// CallApproval is [tools] approval_default: whether a call to an MCP tool asks first. Built-in tools keep the
+// broker's own rules; MCP calls never pass the broker, so they cannot be journalled or undone (DESIGN.md §5.5, §6.4).
+type CallApproval string
+
+const (
+	// CallApprovalAuto runs MCP tools without asking, except after untrusted intake.
+	CallApprovalAuto CallApproval = "auto"
+	// CallApprovalAsk asks before each tool until the user answers "always" for it, remembered per approved launch.
+	CallApprovalAsk CallApproval = "ask"
+	// CallApprovalNever keeps every MCP tool from the model, so no server is started at all.
+	CallApprovalNever CallApproval = "never"
+)
+
 // ServerState is where one configured server is in its life this session.
 type ServerState string
 
@@ -37,6 +50,7 @@ const (
 	ServerRunning     ServerState = "running"
 	ServerFailed      ServerState = "failed to start"
 	ServerUnavailable ServerState = "unavailable"
+	ServerOff         ServerState = "off ([tools] approval_default = never)"
 )
 
 // ServerStatus is one configured server as /mcp shows it; Reason explains a failed or unavailable server.
@@ -44,7 +58,9 @@ type ServerStatus struct {
 	Name      string
 	State     ServerState
 	ToolCount int
-	Reason    string
+	// HiddenToolCount is how many tools the server offers that its [tools] allow/deny filter withheld.
+	HiddenToolCount int
+	Reason          string
 }
 
 // BuildManager starts connecting every configured server in the background and registers
@@ -57,14 +73,18 @@ type ServerStatus struct {
 // skipped with a diagnostic rather than failing the session. stateDir is where the shared
 // trust store (mcp-trust.toml) lives — user-scoped, like the [mcp.servers] config itself —
 // and where each server's scratch folder (mcp/<name>) is created.
-func BuildManager(servers config.MCPCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, reg *registry.Registry, stateDir string, sandboxing Sandboxing) *Manager {
+func BuildManager(servers config.MCPCfg, pol policy.Policy, approver core.Approver, clock core.Clock, events core.EventSink, diagnostics io.Writer, reg *registry.Registry, stateDir string, sandboxing Sandboxing, callApproval CallApproval) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &Manager{cancel: cancel, reg: reg, processes: map[string]*serverProcess{}}
 
 	trust := buildTrustStore(filepath.Join(stateDir, trustFileName))
 	for name, serverCfg := range servers.Servers {
-		process := buildServerProcess(name, serverCfg, pol, approver, clock, events, diagnostics, trust, sandboxing, filepath.Join(stateDir, "mcp", name), buildUnregisterTools(reg, name))
+		process := buildServerProcess(name, serverCfg, pol, approver, clock, events, diagnostics, trust, sandboxing, buildScratchDir(stateDir, name), filepath.Join(stateDir, lockFileName), buildUnregisterTools(reg, name))
+		process.callApproval = callApproval
 		manager.processes[name] = process
+		if callApproval == CallApprovalNever {
+			continue // a server whose every tool is hidden is not worth a launch approval or a process
+		}
 		manager.done.Add(1)
 		go func(name string, process *serverProcess) {
 			defer manager.done.Done()
@@ -91,22 +111,26 @@ func buildUnregisterTools(reg *registry.Registry, server string) func() {
 func connectAndRegister(ctx context.Context, name string, process *serverProcess, reg *registry.Registry, diagnostics io.Writer) {
 	session, err := process.connectAndSupervise(ctx)
 	if err != nil {
-		fmt.Fprintf(diagnostics, "travis: mcp server %q did not start: %v\n", name, err)
-		process.recordStartFailure(err)
+		process.recordStartFailure(ctx, err)
 		return
 	}
 	listed, err := session.ListTools(ctx, &mcpsdk.ListToolsParams{})
 	if err != nil {
-		fmt.Fprintf(diagnostics, "travis: mcp server %q: listing tools failed: %v\n", name, err)
-		process.recordStartFailure(fmt.Errorf("listing tools failed: %w", err))
+		process.recordStartFailure(ctx, fmt.Errorf("listing tools failed: %w", err))
 		return
 	}
+	hidden := 0
 	for _, remoteTool := range listed.Tools {
+		if !process.cfg.Tools.PermitsTool(remoteTool.Name) {
+			hidden++
+			continue
+		}
 		tool := buildAdaptedTool(process, name, remoteTool)
 		if err := reg.Register(registry.SourceMCP, tool); err != nil {
 			fmt.Fprintf(diagnostics, "travis: mcp server %q: registering tool %q failed: %v\n", name, tool.Name(), err)
 		}
 	}
+	process.recordHiddenToolCount(hidden)
 }
 
 // WaitUntilStarted blocks until every configured server has registered its tools or failed to.
@@ -121,7 +145,7 @@ func (m *Manager) ReportServerStatuses() []ServerStatus {
 	for _, name := range slices.Sorted(maps.Keys(m.processes)) {
 		state, reason := m.processes[name].reportState()
 		tools := m.reg.List(registry.Filter{Source: registry.SourceMCP, NamePrefix: toolNamePrefix(name)})
-		statuses = append(statuses, ServerStatus{Name: name, State: state, ToolCount: len(tools), Reason: reason})
+		statuses = append(statuses, ServerStatus{Name: name, State: state, ToolCount: len(tools), HiddenToolCount: m.processes[name].reportHiddenToolCount(), Reason: reason})
 	}
 	return statuses
 }

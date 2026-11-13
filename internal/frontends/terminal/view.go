@@ -37,6 +37,19 @@ func reportSandboxStatus(tier string) string {
 	}
 }
 
+// reportMCPHealth is empty while every server is fine; the glyph keeps it visible without colour.
+func reportMCPHealth(unavailable map[string]bool) string {
+	switch len(unavailable) {
+	case 0:
+		return ""
+	case 1:
+		for name := range unavailable {
+			return " · " + errorStyle.Render("● mcp "+name)
+		}
+	}
+	return " · " + errorStyle.Render(fmt.Sprintf("● mcp %d down", len(unavailable)))
+}
+
 // renderStatusBar leads with the lantern mark and tints only the words that change: turn state and outcome.
 func (m chatModel) renderStatusBar() string {
 	state := m.reportTurnState()
@@ -65,6 +78,7 @@ func (m chatModel) renderStatusBar() string {
 		dimStyle.Render(" · ") + stateStyle.Render(state) +
 		dimStyle.Render(" · last turn: ") + outcomeStyle.Render(reportOutcome(m.lastTurnOutcome)) + copied +
 		dimStyle.Render(reportSandboxStatus(m.sandboxTier)+m.reportDictationStatus()+m.reportSpendStatus())
+	status += reportMCPHealth(m.unavailableMCPServers)
 	return status + dimStyle.Render(m.reportTokenUsage(ansi.StringWidth(status)))
 }
 

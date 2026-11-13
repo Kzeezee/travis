@@ -49,8 +49,13 @@ func ResolveRunnerReadPaths(executable string) []string {
 	return []string{filepath.Dir(executable)}
 }
 
-func prepareCommandForOS(*exec.Cmd, Spec) (Tier, error) {
+// ReportAvailability reports the tier BuildCommand confines with on this machine, or ErrUnsupported without one.
+func ReportAvailability() (Tier, error) {
 	return TierRestrictedToken, nil
+}
+
+func prepareCommandForOS(*exec.Cmd, Spec) (Tier, error) {
+	return ReportAvailability()
 }
 
 func applyToSelf(spec Spec) error {

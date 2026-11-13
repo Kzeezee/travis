@@ -94,7 +94,7 @@ func TestRedTeamGateRememberedMCPTrustCannotBypassRemovedExecGrant(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := process.trust.add(process.cfg.Command, process.cfg.Args, grant, "previously approved", clock); err != nil {
+	if err := process.trust.add(process.cfg.Command, process.cfg.Args, grant, "", "previously approved", clock); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := process.connect(t.Context()); !errors.Is(err, core.ErrDenied) {

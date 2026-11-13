@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,6 @@ import (
 // Config is the fully merged, validated settings every subsystem reads from. Fields
 // are added by whichever ticket first needs that subsystem's config, not all at once.
 type Config struct {
-	Profile  string      `toml:"profile"`
 	Provider ProviderCfg `toml:"provider"`
 	Brain    BrainCfg    `toml:"brain"`
 	Tools    ToolsCfg    `toml:"tools"`
@@ -60,6 +60,8 @@ type VoiceOutputCfg struct {
 // (see decodeWorkspaceLayerFile), so a cloned repo cannot grant itself a program to run or a
 // host to reach.
 type SecurityCfg struct {
+	// Profile names the capability profile every session runs under (capabilities.BuildProfileSet).
+	Profile   string   `toml:"profile"`
 	ExecAllow []string `toml:"exec_allow"`
 	// HostAllow are the hosts fetch may reach, as glob patterns matched case-insensitively.
 	HostAllow []string `toml:"host_allow"`
@@ -104,6 +106,22 @@ type MCPServerCfg struct {
 	// ReadPaths and WritePaths are absolute paths the sandboxed server may use beyond its own scratch folder.
 	ReadPaths  []string `toml:"read_paths"`
 	WritePaths []string `toml:"write_paths"`
+	// Tools narrows which of the server's own tools reach the model.
+	Tools MCPToolFilterCfg `toml:"tools"`
+}
+
+// MCPToolFilterCfg holds doublestar globs over a server's own (un-prefixed) tool names: deny wins, an empty Allow means all.
+type MCPToolFilterCfg struct {
+	Allow []string `toml:"allow"`
+	Deny  []string `toml:"deny"`
+}
+
+// PermitsTool reports whether a tool called name (as the server names it) passes the filter.
+func (f MCPToolFilterCfg) PermitsTool(name string) bool {
+	if slices.ContainsFunc(f.Deny, func(pattern string) bool { return doublestar.MatchUnvalidated(pattern, name) }) {
+		return false
+	}
+	return len(f.Allow) == 0 || slices.ContainsFunc(f.Allow, func(pattern string) bool { return doublestar.MatchUnvalidated(pattern, name) })
 }
 
 // SkillsCfg configures the SKILL.md loader (DESIGN.md §5.8). User-config only, same
@@ -137,9 +155,10 @@ type BrainCfg struct {
 }
 
 // ToolsCfg bounds what the registry exposes to the model each step (DESIGN.md 5.5).
-// Per-tool approval overrides ([tools.approval]) are deferred: they resolve against
-// `security`, which doesn't exist yet.
+// Per-tool approval overrides ([tools.approval]) are deferred.
 type ToolsCfg struct {
+	// ApprovalDefault (auto | ask | never) governs MCP tool calls; built-in tools follow the broker's fixed rules.
+	// User-config only: decodeWorkspaceLayerFile discards the workspace's value.
 	ApprovalDefault string `toml:"approval_default"`
 	MaxExposed      int    `toml:"max_exposed"`
 }
@@ -192,9 +211,8 @@ func ParseSessionRetention(raw string) (time.Duration, error) {
 // their destination instead of trusting whichever file set it — at that point this
 // restriction becomes redundant, not complementary, and can be removed.
 type workspaceLayerCfg struct {
-	Profile string
-	Brain   BrainCfg
-	Tools   ToolsCfg
+	Brain BrainCfg
+	Tools ToolsCfg
 }
 
 // DiagnosticSeverity distinguishes a warning a user can ignore from a hard failure.
@@ -317,7 +335,7 @@ func buildDefaultConfig() Config {
 		Brain:    BrainCfg{MaxSteps: 40},
 		Tools:    ToolsCfg{ApprovalDefault: "ask", MaxExposed: 60},
 		Eval:     EvalCfg{Traces: true},
-		Security: SecurityCfg{RequireSandbox: true},
+		Security: SecurityCfg{Profile: "default", RequireSandbox: true},
 		Session:  SessionCfg{SnapshotMaxBytes: 16 << 20, Retention: "30d"},
 		MCP:      MCPCfg{},
 		Skills:   SkillsCfg{Roots: []string{"config:skills"}},
@@ -400,12 +418,13 @@ func decodeWorkspaceLayerFile(readFile fileReader, path string, cfg *Config) (Di
 		}
 	}
 
-	seed := workspaceLayerCfg{Profile: cfg.Profile, Brain: cfg.Brain, Tools: cfg.Tools}
+	seed := workspaceLayerCfg{Brain: cfg.Brain, Tools: cfg.Tools}
 	if err := toml.Unmarshal(data, &seed); err != nil {
 		return diags, fmt.Errorf("config %s: %w", path, err)
 	}
 	seed.Brain.MaxDailyCostUSD = cfg.Brain.MaxDailyCostUSD // a cloned repo must not raise the user's daily limit
-	cfg.Profile, cfg.Brain, cfg.Tools = seed.Profile, seed.Brain, seed.Tools
+	seed.Tools.ApprovalDefault = cfg.Tools.ApprovalDefault // nor stop MCP tools asking first
+	cfg.Brain, cfg.Tools = seed.Brain, seed.Tools
 	return diags, nil
 }
 
@@ -584,6 +603,13 @@ func (c *Config) Validate() Diagnostics {
 		}
 		if server.Command == "" {
 			diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("mcp.servers.%s.command is empty", name)})
+		}
+		for key, patterns := range map[string][]string{"tools.allow": server.Tools.Allow, "tools.deny": server.Tools.Deny} {
+			for _, pattern := range patterns {
+				if !doublestar.ValidatePattern(pattern) {
+					diags = append(diags, Diagnostic{Severity: SeverityError, Message: fmt.Sprintf("mcp.servers.%s.%s has invalid pattern %q", name, key, pattern)})
+				}
+			}
 		}
 		for key, paths := range map[string][]string{"read_paths": server.ReadPaths, "write_paths": server.WritePaths} {
 			for _, path := range paths {

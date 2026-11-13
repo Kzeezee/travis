@@ -22,7 +22,7 @@ func TestBuildManagerConnectsAndRegistersAdaptedTools(t *testing.T) {
 
 	returned := make(chan *Manager, 1)
 	go func() {
-		returned <- BuildManager(servers, grantedExecPolicy(), approver, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir(), testSandboxing())
+		returned <- BuildManager(servers, grantedExecPolicy(), approver, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir(), testSandboxing(), CallApprovalAuto)
 	}()
 
 	var manager *Manager
@@ -100,7 +100,7 @@ func TestBuildManagerDoesNotBlockOnAPendingApproval(t *testing.T) {
 
 	returned := make(chan *Manager, 1)
 	go func() {
-		returned <- BuildManager(servers, grantedExecPolicy(), approver, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir(), testSandboxing())
+		returned <- BuildManager(servers, grantedExecPolicy(), approver, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir(), testSandboxing(), CallApprovalAuto)
 	}()
 
 	select {
@@ -116,7 +116,7 @@ func TestBuildManagerDoesNotBlockOnAPendingApproval(t *testing.T) {
 func TestWaitUntilStartedReturnsWithEveryToolRegistered(t *testing.T) {
 	servers := config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": buildTestServerConfig()}}
 	reg := registry.BuildRegistry(100)
-	manager := BuildManager(servers, grantedExecPolicy(), &fakeApprover{decision: core.ApprovalOnce}, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir(), testSandboxing())
+	manager := BuildManager(servers, grantedExecPolicy(), &fakeApprover{decision: core.ApprovalOnce}, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir(), testSandboxing(), CallApprovalAuto)
 	t.Cleanup(manager.Close)
 
 	manager.WaitUntilStarted()
@@ -134,7 +134,7 @@ func TestTrustPersistsAcrossManagersSharingAStateDir(t *testing.T) {
 	servers := config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": buildTestServerConfig()}}
 
 	firstApprover := &fakeApprover{decision: core.ApprovalAlways}
-	first := BuildManager(servers, grantedExecPolicy(), firstApprover, core.FixedClock{}, nil, &syncBuffer{}, registry.BuildRegistry(100), stateDir, testSandboxing())
+	first := BuildManager(servers, grantedExecPolicy(), firstApprover, core.FixedClock{}, nil, &syncBuffer{}, registry.BuildRegistry(100), stateDir, testSandboxing(), CallApprovalAuto)
 	pollUntil(t, 10*time.Second, func() bool { return len(firstApprover.askedOps()) == 1 })
 	first.Close()
 	if asked := firstApprover.askedOps(); len(asked) != 1 {
@@ -143,7 +143,7 @@ func TestTrustPersistsAcrossManagersSharingAStateDir(t *testing.T) {
 
 	secondApprover := &fakeApprover{decision: core.ApprovalOnce} // must never be reached
 	reg := registry.BuildRegistry(100)
-	second := BuildManager(servers, grantedExecPolicy(), secondApprover, core.FixedClock{}, nil, &syncBuffer{}, reg, stateDir, testSandboxing())
+	second := BuildManager(servers, grantedExecPolicy(), secondApprover, core.FixedClock{}, nil, &syncBuffer{}, reg, stateDir, testSandboxing(), CallApprovalAuto)
 	t.Cleanup(second.Close)
 
 	pollUntil(t, 10*time.Second, func() bool {
@@ -159,7 +159,7 @@ func TestBuildManagerSkipsAServerDeniedByPolicy(t *testing.T) {
 	servers := config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": buildTestServerConfig()}}
 	diagnostics := &syncBuffer{}
 	reg := registry.BuildRegistry(100)
-	manager := BuildManager(servers, deniedExecPolicy(), nil, core.FixedClock{}, nil, diagnostics, reg, t.TempDir(), testSandboxing())
+	manager := BuildManager(servers, deniedExecPolicy(), nil, core.FixedClock{}, nil, diagnostics, reg, t.TempDir(), testSandboxing(), CallApprovalAuto)
 	t.Cleanup(manager.Close)
 
 	pollUntil(t, 2*time.Second, func() bool {
@@ -171,5 +171,83 @@ func TestBuildManagerSkipsAServerDeniedByPolicy(t *testing.T) {
 	pollUntil(t, 2*time.Second, func() bool { return manager.ReportServerStatuses()[0].State == ServerFailed })
 	if status := manager.ReportServerStatuses()[0]; status.Reason == "" || status.ToolCount != 0 {
 		t.Fatalf("ReportServerStatuses() = %+v, want the denial as the reason and no tools", status)
+	}
+}
+
+func TestFailedServerStartReportsItsStderrLineInStatusAndEvent(t *testing.T) {
+	servers := config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": buildTestServerConfig("-require-home", "/nowhere")}}
+	sink, diagnostics := &recordingSink{}, &syncBuffer{}
+	manager := BuildManager(servers, grantedExecPolicy(), &fakeApprover{decision: core.ApprovalOnce}, core.FixedClock{}, sink, diagnostics, registry.BuildRegistry(100), t.TempDir(), testSandboxing(), CallApprovalAuto)
+	t.Cleanup(manager.Close)
+
+	pollUntil(t, 10*time.Second, func() bool { return manager.ReportServerStatuses()[0].State == ServerFailed })
+	const stderrLine = `want "/nowhere"`
+	if status := manager.ReportServerStatuses()[0]; !strings.Contains(status.Reason, stderrLine) {
+		t.Fatalf("status reason = %q, want it to carry the server's stderr line", status.Reason)
+	}
+	if !strings.Contains(diagnostics.String(), "did not start") || !strings.Contains(diagnostics.String(), stderrLine) {
+		t.Fatalf("diagnostics = %q, want the line chat shows to carry the stderr line", diagnostics.String())
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.events) != 1 {
+		t.Fatalf("events = %+v, want exactly one MCPServerUnavailable", sink.events)
+	}
+	if unavailable, ok := sink.events[0].(core.MCPServerUnavailable); !ok || unavailable.Server != "fake" || !strings.Contains(unavailable.Reason, stderrLine) {
+		t.Fatalf("event = %+v, want MCPServerUnavailable for fake carrying the stderr line", sink.events[0])
+	}
+}
+
+// startFilteredFakeServer registers the fake server's tools under filter and waits for it to be running.
+func startFilteredFakeServer(t *testing.T, filter config.MCPToolFilterCfg) (*registry.Registry, *Manager) {
+	t.Helper()
+	cfg := buildTestServerConfig()
+	cfg.Tools = filter
+	reg := registry.BuildRegistry(100)
+	manager := BuildManager(config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": cfg}}, grantedExecPolicy(), &fakeApprover{decision: core.ApprovalOnce}, core.FixedClock{}, nil, &syncBuffer{}, reg, t.TempDir(), testSandboxing(), CallApprovalAuto)
+	t.Cleanup(manager.Close)
+	pollUntil(t, 10*time.Second, func() bool { return manager.ReportServerStatuses()[0].State == ServerRunning })
+	return reg, manager
+}
+
+func TestBuildManagerSkipsToolsTheDenyFilterExcludes(t *testing.T) {
+	reg, manager := startFilteredFakeServer(t, config.MCPToolFilterCfg{Deny: []string{"crash"}})
+
+	if _, ok := reg.Lookup("mcp_fake_crash"); ok {
+		t.Fatal("mcp_fake_crash was registered despite tools.deny")
+	}
+	if _, ok := reg.Lookup("mcp_fake_echo"); !ok {
+		t.Fatal("mcp_fake_echo is missing; tools.deny must only remove the denied tool")
+	}
+	if status := manager.ReportServerStatuses()[0]; status.ToolCount != 1 || status.HiddenToolCount != 1 {
+		t.Fatalf("status = %+v, want 1 tool shown and 1 hidden", status)
+	}
+}
+
+func TestBuildManagerRegistersOnlyAllowedTools(t *testing.T) {
+	reg, manager := startFilteredFakeServer(t, config.MCPToolFilterCfg{Allow: []string{"ec*"}})
+
+	if _, ok := reg.Lookup("mcp_fake_echo"); !ok {
+		t.Fatal("mcp_fake_echo was not registered despite tools.allow")
+	}
+	if _, ok := reg.Lookup("mcp_fake_crash"); ok {
+		t.Fatal("mcp_fake_crash was registered though tools.allow does not list it")
+	}
+	if status := manager.ReportServerStatuses()[0]; status.HiddenToolCount != 1 {
+		t.Fatalf("HiddenToolCount = %d, want 1", status.HiddenToolCount)
+	}
+}
+
+func TestBuildManagerDenyBeatsAllow(t *testing.T) {
+	reg, manager := startFilteredFakeServer(t, config.MCPToolFilterCfg{Allow: []string{"*"}, Deny: []string{"echo"}})
+
+	if _, ok := reg.Lookup("mcp_fake_echo"); ok {
+		t.Fatal("mcp_fake_echo was registered though tools.deny lists it")
+	}
+	if _, ok := reg.Lookup("mcp_fake_crash"); !ok {
+		t.Fatal("mcp_fake_crash is missing; tools.allow = [\"*\"] permits it")
+	}
+	if status := manager.ReportServerStatuses()[0]; status.HiddenToolCount != 1 {
+		t.Fatalf("HiddenToolCount = %d, want 1", status.HiddenToolCount)
 	}
 }

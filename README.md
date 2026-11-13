@@ -48,7 +48,8 @@ Ollama, llama.cpp, OpenRouter. Switch mid-chat with `/provider`.
 
 **Uses the ecosystems that already exist.** MCP servers and `SKILL.md` skills plug in
 with zero Go code. `travis mcp add` shows a provenance card (publisher, downloads,
-integrity) and pins an exact version before anything is installed.
+integrity) and pins an exact version and its integrity hash before anything is installed;
+`travis mcp verify` re-checks every installed package against that pin.
 
 **Speaks selectively.** The model marks what's worth saying out loud, so you hear the
 summary, not the 400-line diff. Speech-to-text runs on your machine.
@@ -87,8 +88,14 @@ travis chat
 ```
 
 The first run opens a setup wizard: pick a provider, paste a key (saved to your OS
-keychain, never to a file), toggle voice, and review the security summary. Re-run it any
-time with `travis init`.
+keychain, never to a file), toggle voice, choose when MCP tools ask first, and pick a
+security profile. Ollama and
+llama.cpp running on this machine are detected and offered as `ollama` and `llamacpp`
+profiles; a server with several models starts on the first, and `←`/`→` picks another.
+The chosen model's context length is filled in when the server reports it; `t` on a
+provider sends it one tiny request to check it is reachable, streams, and calls tools.
+Quit part-way and the next `travis init` opens at the step you left. Re-run it any time
+with `travis init`.
 
 For a local model, point a profile at Ollama:
 
@@ -117,7 +124,7 @@ model    = "qwen3:14b"
 | `travis config path\|init\|check\|show` | Find, create, validate, or print the merged config |
 | `travis provider list` | Profiles, which one is active, and whether each has a key |
 | `travis models` | Models offered by the active endpoint |
-| `travis mcp list\|add\|remove` | Manage MCP servers |
+| `travis mcp list\|verify\|add\|remove` | Manage MCP servers |
 | `travis version` | Print the version |
 
 ### In chat
@@ -163,7 +170,8 @@ exec_allow = ["npx", "uvx"]
 ```
 
 `allow_net` lets the first launch download the package. Without it the sandbox blocks
-the network (where the OS can).
+the network (where the OS can). `tools = { allow = [...], deny = [...] }` limits which of
+the server's tools the model sees (globs on the server's own tool names; deny wins).
 
 ### Skills
 

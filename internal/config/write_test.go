@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -75,15 +76,30 @@ func TestUpdateUserConfigLeavesAnInvalidFileAlone(t *testing.T) {
 	}
 }
 
+func TestSaveSecurityProfileKeepsTheOtherSecuritySettings(t *testing.T) {
+	paths := buildWritablePathSet(t)
+	writeTestFile(t, paths.ReportUserConfigFile(), "[security]\nexec_allow = [\"node\"]\n")
+
+	if err := SaveSecurityProfile(paths, "paranoid"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := loadUserConfigOnly(t, paths)
+	if cfg.Security.Profile != "paranoid" || strings.Join(cfg.Security.ExecAllow, ",") != "node" {
+		t.Fatalf("got profile %q and exec_allow %v, want paranoid and the hand-set node", cfg.Security.Profile, cfg.Security.ExecAllow)
+	}
+}
+
 func TestSaveAndRemoveMCPServerRoundTrip(t *testing.T) {
 	paths := buildWritablePathSet(t)
-	server := MCPServerCfg{Command: "npx", Args: []string{"-y", "pkg@1.2.3"}, Env: map[string]string{"A": "b"}, AllowNet: true}
+	server := MCPServerCfg{Command: "npx", Args: []string{"-y", "pkg@1.2.3"}, Env: map[string]string{"A": "b"}, AllowNet: true,
+		Tools: MCPToolFilterCfg{Deny: []string{"delete_*"}}}
 
 	if err := SaveMCPServer(paths, "files", server); err != nil {
 		t.Fatal(err)
 	}
 	got := loadUserConfigOnly(t, paths).MCP.Servers["files"]
-	if got.Command != "npx" || strings.Join(got.Args, " ") != "-y pkg@1.2.3" || got.Env["A"] != "b" || !got.AllowNet {
+	if got.Command != "npx" || strings.Join(got.Args, " ") != "-y pkg@1.2.3" || got.Env["A"] != "b" || !got.AllowNet || !slices.Equal(got.Tools.Deny, []string{"delete_*"}) {
 		t.Fatalf("got %+v, want the saved server", got)
 	}
 
@@ -98,6 +114,28 @@ func TestSaveAndRemoveMCPServerRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSaveProviderProfileUpdatesTheEndpointAndKeepsTheRest(t *testing.T) {
+	paths := buildWritablePathSet(t)
+	writeTestFile(t, paths.ReportUserConfigFile(), `
+[provider.profiles.ollama]
+base_url = "http://old:11434/v1"
+model = "old"
+context_length = 4096
+max_tokens = 512
+`)
+
+	err := SaveProviderProfile(paths, "ollama", ProviderProfileCfg{Kind: "openai_compatible", BaseURL: "http://127.0.0.1:11434/v1", Model: "qwen3:14b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := loadUserConfigOnly(t, paths).Provider.Profiles["ollama"]
+	want := ProviderProfileCfg{Kind: "openai_compatible", BaseURL: "http://127.0.0.1:11434/v1", Model: "qwen3:14b", ContextLength: 4096, MaxTokens: 512}
+	if got != want {
+		t.Fatalf("got %+v, want %+v: a context length the probe did not find keeps the hand-set one", got, want)
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -105,5 +143,15 @@ func writeTestFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSaveApprovalDefaultRoundTrips(t *testing.T) {
+	paths := buildWritablePathSet(t)
+	if err := SaveApprovalDefault(paths, "never"); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadUserConfigOnly(t, paths).Tools; got.ApprovalDefault != "never" || got.MaxExposed != 60 {
+		t.Fatalf("got %+v; want never saved and the other [tools] defaults kept", got)
 	}
 }

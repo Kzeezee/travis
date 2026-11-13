@@ -303,6 +303,8 @@ type chatModel struct {
 	brokerFailure string
 	// sandboxTier is the tier MCP servers run under, empty until one starts (DESIGN §9.2.1: always shown).
 	sandboxTier string
+	// unavailableMCPServers holds servers that failed to start or ran out of restarts, until a later start clears them.
+	unavailableMCPServers map[string]bool
 
 	dictation       dictationState
 	finishDictation func() (string, error) // set only while recording
@@ -402,6 +404,13 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if started, isStarted := event.(core.MCPServerStarted); isStarted {
 				m.sandboxTier = recordSandboxTier(m.sandboxTier, started.Tier)
+				delete(m.unavailableMCPServers, started.Server)
+			}
+			if unavailable, isUnavailable := event.(core.MCPServerUnavailable); isUnavailable {
+				if m.unavailableMCPServers == nil {
+					m.unavailableMCPServers = map[string]bool{}
+				}
+				m.unavailableMCPServers[unavailable.Server] = true
 			}
 			m.transcript.applyEvent(event)
 		}

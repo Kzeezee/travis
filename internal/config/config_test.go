@@ -597,3 +597,28 @@ func TestLoadWorkspaceLayerCannotSetTheDailyCostCeiling(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateRejectsAnInvalidMCPToolPattern(t *testing.T) {
+	cfg := buildDefaultConfig()
+	cfg.MCP.Servers = map[string]MCPServerCfg{"github": {Command: "npx", Tools: MCPToolFilterCfg{Deny: []string{"delete_[repo"}}}}
+
+	diags := cfg.Validate()
+	for _, d := range diags {
+		if d.Severity == SeverityError && strings.Contains(d.Message, "mcp.servers.github.tools.deny") {
+			return
+		}
+	}
+	t.Fatalf("diags = %v, want a SeverityError naming mcp.servers.github.tools.deny", diags)
+}
+
+func TestMCPToolFilterPermitsTool(t *testing.T) {
+	filter := MCPToolFilterCfg{Allow: []string{"get_*", "delete_repository"}, Deny: []string{"delete_*"}}
+	for name, want := range map[string]bool{"get_issue": true, "delete_repository": false, "create_issue": false} {
+		if got := filter.PermitsTool(name); got != want {
+			t.Errorf("PermitsTool(%q) = %v, want %v", name, got, want)
+		}
+	}
+	if !(MCPToolFilterCfg{}).PermitsTool("anything") {
+		t.Error("an empty filter must permit every tool")
+	}
+}

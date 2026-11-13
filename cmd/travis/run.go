@@ -212,7 +212,7 @@ func runHeadless(args []string, out io.Writer) error {
 	redactor := redact.New(apiKey)
 	bus := buildSessionBus(os.Stderr)
 	sessionID := id.BuildULIDGenerator(core.SystemClock{}).GenerateID()
-	sessionBroker, err := startSessionBroker(paths, sessionStart{ID: sessionID}, cfg.Session, os.Stderr, broker.RemoteOptions{
+	sessionBroker, err := startSessionBroker(paths, sessionStart{ID: sessionID}, cfg.Security.Profile, cfg.Session, os.Stderr, broker.RemoteOptions{
 		Events:   redact.WrapSink(bus, redactor),
 		Approver: human,
 		Clock:    core.SystemClock{},

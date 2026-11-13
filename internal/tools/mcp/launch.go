@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
@@ -89,6 +92,50 @@ func createStderrLog(scratchDir string) (*os.File, error) {
 		return nil, fmt.Errorf("create stderr log: %w", err)
 	}
 	return file, nil
+}
+
+const (
+	stderrTailBytes    = 4096
+	maxStderrLineRunes = 200
+)
+
+// readLastStderrLine reports the last non-empty line within the log's final 4 KiB, made safe to print; an unreadable log has none.
+func readLastStderrLine(scratchDir string) string {
+	path := filepath.Join(scratchDir, stderrLogName)
+	// The server writes its scratch folder, so refuse anything but a plain file: a planted link would surface another file's text.
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	if opened, err := file.Stat(); err != nil || !os.SameFile(info, opened) {
+		return ""
+	}
+	tail := make([]byte, min(info.Size(), stderrTailBytes))
+	n, err := file.ReadAt(tail, info.Size()-int64(len(tail)))
+	if err != nil && !errors.Is(err, io.EOF) {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(tail[:n])), "\n")
+	return sanitizeServerText(lines[len(lines)-1])
+}
+
+// sanitizeServerText drops control characters, ESC included, so server-written text cannot drive the terminal, and caps its length.
+func sanitizeServerText(text string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == utf8.RuneError {
+			return -1
+		}
+		return r
+	}, text)
+	if runes := []rune(strings.TrimSpace(cleaned)); len(runes) > maxStderrLineRunes {
+		return string(runes[:maxStderrLineRunes]) + "…"
+	}
+	return strings.TrimSpace(cleaned)
 }
 
 // buildSandboxSpec gives the server its runner's install folder to read and only its own scratch folder to write.

@@ -7,3 +7,7 @@ command = "/usr/local/bin/fakeserver"
 args = ["--reply-file", "/eval/reply.txt"]
 # The sandbox shows the server only what it is granted, so the reply file must be listed.
 read_paths = ["/eval/reply.txt"]
+
+# Calls run without asking, as they did when the published results were recorded; approvals cover the launch only.
+[tools]
+approval_default = "auto"

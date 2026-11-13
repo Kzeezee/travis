@@ -199,7 +199,21 @@ when no user config exists), `/provider` and `travis mcp add|remove` change the 
 and changes only its own setting, so every value you set by hand, including keys travis
 does not know, survives; comments and key order do not. Before its first rewrite of a
 file with comments, travis keeps a copy as `config.toml.bak`. It never writes the
-workspace `.travis/config.toml`, and never writes a key into any file.
+workspace `.travis/config.toml`, and never writes a key into any file. Choosing a
+detected Ollama (`127.0.0.1:11434`) or llama.cpp (`127.0.0.1:8080`) server in `travis
+init` creates or updates the `ollama` or `llamacpp` profile: endpoint, model and, when
+the server reports it, `context_length`; its other settings are kept. A server with
+several models starts on the first; `←`/`→` on its row picks another, and the pick is
+what is saved and what `t` tests. For Ollama, `context_length` is only an explicit
+`num_ctx` set on that model, never the length it was trained on. The step a quit
+`travis init` stopped at is kept in `<state dir>/setup-progress` until a run finishes.
+
+**When MCP tools ask.** `[tools] approval_default` governs MCP tool calls only; built-in
+tools keep the broker's fixed rules. `ask` (the default) asks before an MCP tool runs, and
+answering `a` remembers that tool in `mcp-trust.toml` for as long as the server's approved
+launch stays the same; `auto` runs them without asking; `never` hides every MCP tool from the
+model and starts none of the servers. After untrusted content in the same step every MCP call asks, whatever the setting,
+and that answer is never remembered. The workspace config cannot change this setting.
 
 **Adding MCP servers.** `travis mcp add <name> [--allow-net] [--env KEY=VALUE] -- <command>
 [args...]` shows a provenance card (publisher, publish date, weekly downloads, direct
@@ -211,6 +225,10 @@ or `travis mcp add time --allow-net pypi:mcp-server-time`; travis pins the regis
 version (or the one you give, `npm:pkg@1.2.3`, `pypi:pkg==1.2.3`) and passes any further
 arguments to the server. Re-adding a name replaces it, which is how you update one;
 `travis mcp remove <name>` deletes it. `--env` values are stored in plain text.
+npm servers are pinned in `mcp.lock` (state dir) by integrity hash, down to every package npx
+installs on first launch; a later launch that differs, or a registry server added by hand
+instead of through `travis mcp add`, is refused. `travis mcp verify` reports each server
+and exits non-zero if any would be refused.
 
 **Seeing what is set up.** `travis provider list` shows each profile, the active one and
 whether it has a key; `travis models` lists what the active endpoint offers; `travis mcp
@@ -413,7 +431,11 @@ args = ["-y", "@modelcontextprotocol/server-everything"]
 allow_net = true             # the first launch downloads the package
 read_paths = []              # absolute paths beyond the defaults
 write_paths = []
+tools = { allow = ["*"], deny = ["delete_repository"] }   # globs over the server's own tool names
 ```
+
+`tools.deny` wins over `tools.allow`, and an empty `allow` means every tool. Tools the filter
+withholds never reach the model; `/mcp` shows the count as `N tools (M hidden)`.
 
 The status bar shows the tier (`sandbox: seatbelt`, `landlock`, `landlock-no-net`,
 `restricted-token`). Where this OS has no sandbox, `[security] require_sandbox = true`

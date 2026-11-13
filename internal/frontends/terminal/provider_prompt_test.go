@@ -116,6 +116,7 @@ func TestMCPListsEachServerWithItsStateAndTools(t *testing.T) {
 	actions.ListMCPServers = func() []MCPServerSummary {
 		return []MCPServerSummary{
 			{Name: "github", State: "running", ToolCount: 12},
+			{Name: "slack", State: "running", ToolCount: 3, HiddenToolCount: 2},
 			{Name: "notes", State: "failed to start", Reason: "denied by policy\nsecond line"},
 		}
 	}
@@ -124,7 +125,7 @@ func TestMCPListsEachServerWithItsStateAndTools(t *testing.T) {
 	m, _ = pressKeys(m, append(typedKeys("/mcp"), enterKey)...)
 
 	view := renderPlainView(m)
-	if !strings.Contains(view, "github · running · 12 tools") || !strings.Contains(view, "notes · failed to start · 0 tools · denied by policy") || strings.Contains(view, "second line") {
+	if !strings.Contains(view, "github · running · 12 tools") || !strings.Contains(view, "notes · failed to start · 0 tools · denied by policy") || !strings.Contains(view, "slack · running · 3 tools (2 hidden)") || strings.Contains(view, "github · running · 12 tools (") || strings.Contains(view, "second line") {
 		t.Fatalf("got view\n%s\nwant each server, its state, its tools and the first line of its reason", view)
 	}
 }

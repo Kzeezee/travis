@@ -75,7 +75,7 @@ func TestRedTeamGateInjectedMCPResultCannotWriteWithoutApproval(t *testing.T) {
 	approver := &hardeningApprover{}
 	remote, _ := startTestSessionBroker(t, paths, &diagnostics, broker.RemoteOptions{Events: bus, Approver: approver})
 	cfg := &config.Config{
-		Brain: config.BrainCfg{MaxSteps: 3}, Tools: config.ToolsCfg{MaxExposed: 60},
+		Brain: config.BrainCfg{MaxSteps: 3}, Tools: config.ToolsCfg{MaxExposed: 60, ApprovalDefault: "auto"},
 		Security: config.SecurityCfg{ExecAllow: []string{filepath.ToSlash(serverPath)}},
 		MCP:      config.MCPCfg{Servers: map[string]config.MCPServerCfg{"fake": {Command: serverPath, Args: []string{"-require-no-provider-key"}}}},
 	}

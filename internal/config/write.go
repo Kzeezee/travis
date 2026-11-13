@@ -32,6 +32,38 @@ func SaveVoiceOutput(paths PathSet, isEnabled bool) error {
 	})
 }
 
+// SaveApprovalDefault sets [tools] approval_default, which governs MCP tool calls.
+func SaveApprovalDefault(paths PathSet, mode string) error {
+	return updateUserConfig(paths, func(doc configDocument) error {
+		doc.ensureTable("tools")["approval_default"] = mode
+		return nil
+	})
+}
+
+// SaveSecurityProfile makes profileName the security profile every later session runs under.
+func SaveSecurityProfile(paths PathSet, profileName string) error {
+	return updateUserConfig(paths, func(doc configDocument) error {
+		doc.ensureTable("security")["profile"] = profileName
+		return nil
+	})
+}
+
+// SaveProviderProfile creates the named profile, or updates the endpoint, model and a known context
+// length of one that exists, keeping every other setting it has, such as auth or prices.
+func SaveProviderProfile(paths PathSet, name string, profile ProviderProfileCfg) error {
+	if name == "" || profile.BaseURL == "" || profile.Model == "" {
+		return fmt.Errorf("a provider profile needs a name, a base URL and a model: %w", core.ErrInvalid)
+	}
+	return updateUserConfig(paths, func(doc configDocument) error {
+		entry := doc.ensureTable("provider").ensureTable("profiles").ensureTable(name)
+		entry["kind"], entry["base_url"], entry["model"] = profile.Kind, profile.BaseURL, profile.Model
+		if profile.ContextLength > 0 {
+			entry["context_length"] = profile.ContextLength
+		}
+		return nil
+	})
+}
+
 // SaveMCPServer adds the named server, or replaces it when one by that name exists.
 func SaveMCPServer(paths PathSet, name string, server MCPServerCfg) error {
 	if name == "" || server.Command == "" {
@@ -53,6 +85,15 @@ func SaveMCPServer(paths PathSet, name string, server MCPServerCfg) error {
 		}
 		if len(server.WritePaths) > 0 {
 			entry["write_paths"] = server.WritePaths
+		}
+		if tools := map[string]any{}; len(server.Tools.Allow)+len(server.Tools.Deny) > 0 {
+			if len(server.Tools.Allow) > 0 {
+				tools["allow"] = server.Tools.Allow
+			}
+			if len(server.Tools.Deny) > 0 {
+				tools["deny"] = server.Tools.Deny
+			}
+			entry["tools"] = tools
 		}
 		doc.ensureTable("mcp").ensureTable("servers")[name] = entry
 		return nil

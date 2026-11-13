@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	mcpUsage = "usage: travis mcp list | add <name> [--allow-net] [--env KEY=VALUE]... [--] <command | npm:<pkg>[@version] | pypi:<pkg>[==version]> [args...] | remove <name>"
+	mcpUsage = "usage: travis mcp list | verify | add <name> [--allow-net] [--env KEY=VALUE]... [--] <command | npm:<pkg>[@version] | pypi:<pkg>[==version]> [args...] | remove <name>"
 	// registryTimeout bounds the provenance lookup; npm's full document for a busy package can be slow.
 	registryTimeout = 20 * time.Second
 )
@@ -54,6 +54,15 @@ func runMCP(args []string, in io.Reader, out io.Writer) error {
 			return errors.New(mcpUsage)
 		}
 		return listMCPServers(out)
+	case "verify":
+		if len(args) != 1 {
+			return errors.New(mcpUsage)
+		}
+		paths, err := config.BuildCurrentPathSet()
+		if err != nil {
+			return err
+		}
+		return verifyMCPServers(out, paths)
 	case "add", "remove":
 		paths, err := config.BuildCurrentPathSet()
 		if err != nil {
@@ -102,6 +111,32 @@ func listMCPServers(out io.Writer) error {
 	return table.Flush()
 }
 
+// verifyMCPServers re-checks every configured server against mcp.lock, failing when any would be refused at launch.
+func verifyMCPServers(out io.Writer, paths config.PathSet) error {
+	cfg, _, err := config.Load()
+	if err != nil {
+		return err
+	}
+	table := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	failures := 0
+	for _, name := range slices.Sorted(maps.Keys(cfg.MCP.Servers)) {
+		state, err := mcp.VerifyInstall(paths.StateDir, name, cfg.MCP.Servers[name])
+		if err != nil {
+			failures++
+			fmt.Fprintf(table, "%s\tFAILED: %v\n", name, err)
+			continue
+		}
+		fmt.Fprintf(table, "%s\t%s\n", name, state)
+	}
+	if err := table.Flush(); err != nil {
+		return err
+	}
+	if failures > 0 {
+		return fmt.Errorf("%d MCP server(s) would be refused at launch: %w", failures, core.ErrDenied)
+	}
+	return nil
+}
+
 // describeLaunch scrubs known secret formats: args can carry a token, as `config show` assumes of env.
 func describeLaunch(server config.MCPServerCfg) string {
 	return redact.New().RedactText(strings.Join(append([]string{server.Command}, server.Args...), " "))
@@ -113,6 +148,9 @@ func removeMCPServer(args []string, out io.Writer, paths config.PathSet) error {
 	}
 	wasConfigured, err := config.RemoveMCPServer(paths, args[0])
 	if err != nil {
+		return err
+	}
+	if err := mcp.ForgetInstall(paths.StateDir, args[0]); err != nil {
 		return err
 	}
 	if !wasConfigured {
@@ -174,11 +212,15 @@ func (i mcpInstall) addServer(args []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), registryTimeout)
 		provenance, lookupErr = i.lookup.FetchProvenance(ctx, ref)
 		cancel()
-		if errors.Is(lookupErr, core.ErrInvalid) || (lookupErr != nil && ref.Version == "") {
+		// An npm package is pinned by its registry integrity hash, so an unreachable registry cannot install one.
+		if errors.Is(lookupErr, core.ErrInvalid) || (lookupErr != nil && (ref.Version == "" || ref.Registry == mcp.RegistryNPM)) {
 			return lookupErr
 		}
 		if lookupErr == nil {
 			ref = provenance.Ref
+		}
+		if ref.Registry == mcp.RegistryNPM && provenance.Integrity == "" {
+			return fmt.Errorf("npm reports no integrity hash for %s, so travis cannot pin it: %w", ref, core.ErrInvalid)
 		}
 	}
 	if isShorthand {
@@ -210,6 +252,14 @@ func (i mcpInstall) addServer(args []string) error {
 	if answer = strings.ToLower(strings.TrimSpace(answer)); answer != "y" && answer != "yes" {
 		fmt.Fprintln(i.out, "not installed")
 		return nil
+	}
+	// The pin is written before the config, so a half-finished add leaves a server refused at launch, never an unpinned one.
+	pinErr := mcp.ForgetInstall(i.paths.StateDir, name)
+	if isRegistry {
+		pinErr = mcp.RecordInstall(i.paths.StateDir, name, ref, provenance.Integrity)
+	}
+	if pinErr != nil {
+		return pinErr
 	}
 	if err := config.SaveMCPServer(i.paths, name, server); err != nil {
 		return err
@@ -245,7 +295,7 @@ func (i mcpInstall) describeProvenance(ref mcp.PackageRef, provenance mcp.Proven
 	}
 	lines = append(lines,
 		fmt.Sprintf("  deps        %d direct", provenance.DependencyCount),
-		"  integrity   "+reportOrUnknown(provenance.Integrity),
+		"  integrity   "+reportOrUnknown(provenance.Integrity)+describePinning(ref.Registry),
 	)
 	return lines
 }
@@ -260,6 +310,14 @@ func (i mcpInstall) describeRequests(server config.MCPServerCfg) []string {
 		lines = append(lines, "  env         "+strings.Join(slices.Sorted(maps.Keys(server.Env)), ", ")+" (stored in config.toml as plain text)")
 	}
 	return lines
+}
+
+// describePinning says what mcp.lock will do with the integrity hash shown beside it.
+func describePinning(registry mcp.Registry) string {
+	if registry == mcp.RegistryNPM {
+		return " (pinned in mcp.lock and checked before every launch)"
+	}
+	return " (recorded only: uvx cannot check it)"
 }
 
 func reportOrUnknown(value string) string {

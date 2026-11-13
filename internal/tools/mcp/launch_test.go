@@ -257,3 +257,51 @@ func TestSandboxSummaryNeverClaimsNetworkContainmentATierLacks(t *testing.T) {
 		}
 	}
 }
+
+func TestReadLastStderrLineReportsTheLastNonEmptyLineOfTheTail(t *testing.T) {
+	scratch := t.TempDir()
+	logPath := filepath.Join(scratch, stderrLogName)
+	cases := map[string]struct{ content, want string }{
+		"trailing blanks": {"first\nnpm ERR! network\n\n  \n", "npm ERR! network"},
+		"only the tail":   {strings.Repeat("x", 3*stderrTailBytes) + "\nlast", "last"},
+		"empty":           {"", ""},
+	}
+	for name, c := range cases {
+		if err := os.WriteFile(logPath, []byte(c.content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := readLastStderrLine(scratch); got != c.want {
+			t.Errorf("%s: readLastStderrLine = %q, want %q", name, got, c.want)
+		}
+	}
+	if got := readLastStderrLine(t.TempDir()); got != "" {
+		t.Errorf("missing log: readLastStderrLine = %q, want nothing", got)
+	}
+}
+
+// The server can write its scratch folder, so a planted link must not make travis quote another file.
+func TestRedTeamGateStderrLogLinkIsNotQuoted(t *testing.T) {
+	scratch := t.TempDir()
+	secret := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(secret, []byte("top secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(scratch, stderrLogName)); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	if got := readLastStderrLine(scratch); got != "" {
+		t.Fatalf("readLastStderrLine = %q, want nothing through a symlink", got)
+	}
+}
+
+func TestRedTeamGateServerStderrCannotDriveTheTerminal(t *testing.T) {
+	scratchDir := t.TempDir()
+	line := "boom \x1b]52;c;ZXZpbA==\x07\x1b[2J" + strings.Repeat("x", 500)
+	if err := os.WriteFile(filepath.Join(scratchDir, stderrLogName), []byte("first\n"+line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := readLastStderrLine(scratchDir)
+	if strings.ContainsAny(got, "\x1b\x07") || !strings.HasPrefix(got, "boom ]52;c;") || len([]rune(got)) > maxStderrLineRunes+1 {
+		t.Fatalf("got %q; want control characters dropped and the line capped", got)
+	}
+}
