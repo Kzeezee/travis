@@ -48,7 +48,8 @@ Ollama, llama.cpp, OpenRouter. Switch mid-chat with `/provider`.
 
 **Uses the ecosystems that already exist.** MCP servers and `SKILL.md` skills plug in
 with zero Go code. `travis mcp add` shows a provenance card (publisher, downloads,
-integrity) and pins an exact version before anything is installed.
+integrity) and pins an exact version and its integrity hash before anything is installed;
+`travis mcp verify` re-checks every installed package against that pin.
 
 **Speaks selectively.** The model marks what's worth saying out loud, so you hear the
 summary, not the 400-line diff. Speech-to-text runs on your machine.
@@ -117,7 +118,7 @@ model    = "qwen3:14b"
 | `travis config path\|init\|check\|show` | Find, create, validate, or print the merged config |
 | `travis provider list` | Profiles, which one is active, and whether each has a key |
 | `travis models` | Models offered by the active endpoint |
-| `travis mcp list\|add\|remove` | Manage MCP servers |
+| `travis mcp list\|verify\|add\|remove` | Manage MCP servers |
 | `travis version` | Print the version |
 
 ### In chat

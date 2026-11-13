@@ -1,6 +1,6 @@
 # Implementation plan: TRA-71 MCP install integrity and full §7.1 onboarding
 
-Status: **draft, not started**, against `main` at `9c40e28` (after sessions resume/fork and
+Status: **phases 1–3 implemented; 4–5 in progress**, against `main` at `9c40e28` (after sessions resume/fork and
 retention landed). Sources: Linear TRA-71, `DESIGN.md` §5.7, §7.1, §9.2, D-22,
 D-27, D-32, D-33, `Code-Conventions.md`.
 
@@ -42,8 +42,8 @@ guard against tampering at runtime: the sandbox does that, and the server can wr
 scratch folder. Mark that in code:
 `// ponytail: lock checks supply chain, not in-place tampering; upgrade path is option C`.
 
-Data shape (`mcp.lock`, TOML, beside the user `config.toml` because `[mcp.servers]` is
-user-only):
+Data shape (`mcp.lock`, TOML, in the state dir beside `mcp-trust.toml`, which is user-scoped like
+`[mcp.servers]`; the manager already receives that dir, so it needs no new parameter):
 
 ```toml
 [server.github]
@@ -102,51 +102,57 @@ independent of phase 1 and can run in parallel with it.
 
 ### Phase 1: `mcp.lock` and `travis mcp verify` (§5.7, D-32)
 
-- [ ] 1.1 `lock.go`: `lockFile`/`lockedServer` types, load (missing file = empty), save under
+- [x] 1.1 `lock.go`: `lockFile`/`lockedServer` types, load (missing file = empty), save under
       an exclusive lock, `compareResolved`, `readResolvedNPXLock` (find the `_npx/*` directory
       whose `package.json` depends on `ref.Name`)
-- [ ] 1.2 `mcp add`: after "y", write the entry (ref + registry integrity). Refuse an npm
+- [x] 1.2 `mcp add`: after "y", write the entry (ref + registry integrity). Refuse an npm
       registry ref whose registry reported no integrity. PyPI records its sha256 and the card
       says "not enforced (uvx has no hash check)"
-- [ ] 1.3 `mcp remove`: delete the entry
-- [ ] 1.4 `buildLaunchCommand`: check before launch (no entry or ref mismatch → `ErrDenied`
+- [x] 1.3 `mcp remove`: delete the entry
+- [x] 1.4 `buildLaunchCommand`: check before launch (no entry or ref mismatch → `ErrDenied`
       with a hint; resolved mismatch → `ErrDenied` naming the packages). `connectAndRegister`
       records `resolved` after the first successful handshake
-- [ ] 1.5 `travis mcp verify`: one line per server: `ok`, `not launched yet`, `mismatch: <pkgs>`,
+- [x] 1.5 `travis mcp verify`: one line per server: `ok`, `not launched yet`, `mismatch: <pkgs>`,
       `unverified (pypi)`, `local`. Non-zero exit on any mismatch. Add it to `mcpUsage` and to
       the `unknown command` hint in `main.go`
-- [ ] 1.6 Tests (fakes, temp dirs): tampered transitive integrity refuses the launch;
+- [x] 1.6 Tests (fakes, temp dirs): tampered transitive integrity refuses the launch;
       root ≠ add-time integrity refuses; first launch records; a missing entry refuses
       a registry launch and allows a local one. Red-team case (D-29): assert the denial fired
-- [ ] 1.7 Docs: §5.7 paragraph on what the lock does and doesn't guard, plus the user docs
+- [x] 1.7 Docs: §5.7 paragraph on what the lock does and doesn't guard, plus the user docs
 
 **Proof:** install a real pinned npm server, chat once, edit one integrity in the npx lock,
 `travis mcp verify` reports it, and the next chat refuses that server.
+**Done:** `@modelcontextprotocol/server-memory@2.1.1` added, first `travis run` recorded 4
+packages, a swapped `zod` hash made `mcp verify` exit 1 and the next launch refused before
+asking for approval.
 **Rollback:** revert the PR; `mcp.lock` is inert without the code.
 
 ### Phase 2: real security profile (§5.12.2, §7.1 step 5)
 
-- [ ] 2.1 Move `Profile` into `SecurityCfg` (`toml:"profile"`, default `"default"`); delete
+- [x] 2.1 Move `Profile` into `SecurityCfg` (`toml:"profile"`, default `"default"`); delete
       the top-level field and `workspaceLayerCfg.Profile`
-- [ ] 2.2 Replace the `"default"` pins in `main.go` (`buildMCPPolicy`, `startSessionBroker`)
+- [x] 2.2 Replace the `"default"` pins in `main.go` (`buildMCPPolicy`, `startSessionBroker`)
       with `cfg.Security.Profile`; delete the two "Not cfg.Profile" comments. A `--resume`d or
       `--fork`ed session runs under the profile configured now, not the one it started with.
       The broker re-checks every effect, so nothing needs storing; say so in `--resume`'s help
-- [ ] 2.3 `sandbox.ReportAvailability() (Tier, error)` per OS (interface + all OS files
+- [x] 2.3 `sandbox.ReportAvailability() (Tier, error)` per OS (interface + all OS files
       together, D-25) for the security screen
-- [ ] 2.4 Setup security step becomes a choice (paranoid · default · dev) saved through a new
+- [x] 2.4 Setup security step becomes a choice (paranoid · default · dev) saved through a new
       `config.SaveSecurityProfile`; `describeSecurity` per profile, plus the sandbox line from 2.3
-- [ ] 2.5 Tests: a workspace `[security] profile` is still a hard error; `paranoid` from the
+- [x] 2.5 Tests: a workspace `[security] profile` is still a hard error; `paranoid` from the
       user config reaches the broker (existing `enforced_test` covers grants); setup saves the choice
 
 **Proof:** set `profile = "paranoid"`, start a chat, ask for a file write, and it is denied by
 the broker.
+**Done (partly):** with `profile = "paranoid"` the broker process runs `-profile paranoid` and an
+`npx` MCP launch is denied despite `exec_allow`; a workspace `[security] profile` is a hard error.
+The broker's own paranoid grants are covered by `enforced_test.go`.
 
 ### Phase 3: `tools.allow` / `tools.deny` per server (§5.7)
 
-- [ ] 3.1 `MCPServerCfg.Tools struct{ Allow, Deny []string }` (globs, deny wins, empty allow = all)
-- [ ] 3.2 Filter in `connectAndRegister` before `reg.Register`; `/mcp` shows "N tools (M hidden)"
-- [ ] 3.3 Test: a denied tool never reaches the registry
+- [x] 3.1 `MCPServerCfg.Tools struct{ Allow, Deny []string }` (globs, deny wins, empty allow = all)
+- [x] 3.2 Filter in `connectAndRegister` before `reg.Register`; `/mcp` shows "N tools (M hidden)"
+- [x] 3.3 Test: a denied tool never reaches the registry
 
 **Proof:** deny one tool of a real server; `/tools` doesn't list it.
 
@@ -170,7 +176,8 @@ the broker.
 - [ ] 5.3 Pre-fill `context_length` from Ollama `/api/show` or llama.cpp `/props` (D-33: config
       stays the source of truth)
 - [ ] 5.4 Connection test on keypress only (it costs a model call): reachable · streaming · tool call
-- [ ] 5.5 "tools" step: `approval_default` (supervised · collaborative · autonomous, §6.4),
+- [ ] ~~5.5~~ **Skipped:** `[tools] approval_default` is validated but nothing reads it, so a wizard
+      step for it would change nothing. Wire it into policy first (separate ticket, §5.5/§6.4). Was: "tools" step: `approval_default` (supervised · collaborative · autonomous, §6.4),
       making it six steps
 - [ ] 5.6 Tests: fake HTTP servers for detection and pre-fill; resume starts at the saved step
 
