@@ -1,6 +1,6 @@
 # Implementation plan: TRA-71 MCP install integrity and full §7.1 onboarding
 
-Status: **phases 1–3 implemented; 4–5 in progress**, against `main` at `9c40e28` (after sessions resume/fork and
+Status: **phases 1–4 implemented; 5 in progress**, against `main` at `9c40e28` (after sessions resume/fork and
 retention landed). Sources: Linear TRA-71, `DESIGN.md` §5.7, §7.1, §9.2, D-22,
 D-27, D-32, D-33, `Code-Conventions.md`.
 
@@ -158,13 +158,16 @@ The broker's own paranoid grants are covered by `enforced_test.go`.
 
 ### Phase 4: health signal (§5.7 lifecycle)
 
-- [ ] 4.1 `reportUnavailable` and the start failure path append the last stderr line to the reason
-- [ ] 4.2 Publish `MCPServerUnavailable` on a first-start failure
-- [ ] 4.3 Status bar: red `● mcp <name>` while any server is unavailable; `/mcp` shows the line
-- [ ] 4.4 Tests: a crashing fake server's stderr line appears in the status and the event
+- [x] 4.1 `reportUnavailable` and the start failure path append the last stderr line to the reason
+- [x] 4.2 Publish `MCPServerUnavailable` on a first-start failure
+- [x] 4.3 Status bar: red `● mcp <name>` while any server is unavailable; `/mcp` shows the line
+- [x] 4.4 Tests: a crashing fake server's stderr line appears in the status and the event
 
 **Proof:** configure a server that exits with an error; the status bar shows the red dot and
 `/mcp` shows the error line.
+**Done (partly):** a real local server that prints `fatal: <ESC>[31mbad token` and exits shows
+`did not start: … ; stderr: fatal: [31mbad token[0m` (ESC stripped, length capped). The red dot is
+covered by a terminal test only; not seen in a live chat.
 
 ### Phase 5: onboarding completeness (§7.1)
 
