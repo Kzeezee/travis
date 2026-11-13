@@ -32,6 +32,14 @@ func SaveVoiceOutput(paths PathSet, isEnabled bool) error {
 	})
 }
 
+// SaveSecurityProfile makes profileName the security profile every later session runs under.
+func SaveSecurityProfile(paths PathSet, profileName string) error {
+	return updateUserConfig(paths, func(doc configDocument) error {
+		doc.ensureTable("security")["profile"] = profileName
+		return nil
+	})
+}
+
 // SaveMCPServer adds the named server, or replaces it when one by that name exists.
 func SaveMCPServer(paths PathSet, name string, server MCPServerCfg) error {
 	if name == "" || server.Command == "" {

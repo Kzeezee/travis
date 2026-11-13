@@ -18,7 +18,7 @@ import (
 func runBrokeredSession(t *testing.T, paths config.PathSet, start sessionStart, prompts ...string) []core.SessionEntry {
 	t.Helper()
 	var diagnostics strings.Builder
-	sessionBroker, err := startSessionBroker(paths, start, config.SessionCfg{SnapshotMaxBytes: 1 << 20}, &diagnostics, broker.RemoteOptions{Events: buildSessionBus(io.Discard)})
+	sessionBroker, err := startSessionBroker(paths, start, "default", config.SessionCfg{SnapshotMaxBytes: 1 << 20}, &diagnostics, broker.RemoteOptions{Events: buildSessionBus(io.Discard)})
 	if err != nil {
 		t.Fatalf("start session broker: %v (diagnostics: %s)", err, &diagnostics)
 	}

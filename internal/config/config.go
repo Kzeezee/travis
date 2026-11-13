@@ -23,7 +23,6 @@ import (
 // Config is the fully merged, validated settings every subsystem reads from. Fields
 // are added by whichever ticket first needs that subsystem's config, not all at once.
 type Config struct {
-	Profile  string      `toml:"profile"`
 	Provider ProviderCfg `toml:"provider"`
 	Brain    BrainCfg    `toml:"brain"`
 	Tools    ToolsCfg    `toml:"tools"`
@@ -60,6 +59,8 @@ type VoiceOutputCfg struct {
 // (see decodeWorkspaceLayerFile), so a cloned repo cannot grant itself a program to run or a
 // host to reach.
 type SecurityCfg struct {
+	// Profile names the capability profile every session runs under (capabilities.BuildProfileSet).
+	Profile   string   `toml:"profile"`
 	ExecAllow []string `toml:"exec_allow"`
 	// HostAllow are the hosts fetch may reach, as glob patterns matched case-insensitively.
 	HostAllow []string `toml:"host_allow"`
@@ -192,9 +193,8 @@ func ParseSessionRetention(raw string) (time.Duration, error) {
 // their destination instead of trusting whichever file set it — at that point this
 // restriction becomes redundant, not complementary, and can be removed.
 type workspaceLayerCfg struct {
-	Profile string
-	Brain   BrainCfg
-	Tools   ToolsCfg
+	Brain BrainCfg
+	Tools ToolsCfg
 }
 
 // DiagnosticSeverity distinguishes a warning a user can ignore from a hard failure.
@@ -317,7 +317,7 @@ func buildDefaultConfig() Config {
 		Brain:    BrainCfg{MaxSteps: 40},
 		Tools:    ToolsCfg{ApprovalDefault: "ask", MaxExposed: 60},
 		Eval:     EvalCfg{Traces: true},
-		Security: SecurityCfg{RequireSandbox: true},
+		Security: SecurityCfg{Profile: "default", RequireSandbox: true},
 		Session:  SessionCfg{SnapshotMaxBytes: 16 << 20, Retention: "30d"},
 		MCP:      MCPCfg{},
 		Skills:   SkillsCfg{Roots: []string{"config:skills"}},
@@ -400,12 +400,12 @@ func decodeWorkspaceLayerFile(readFile fileReader, path string, cfg *Config) (Di
 		}
 	}
 
-	seed := workspaceLayerCfg{Profile: cfg.Profile, Brain: cfg.Brain, Tools: cfg.Tools}
+	seed := workspaceLayerCfg{Brain: cfg.Brain, Tools: cfg.Tools}
 	if err := toml.Unmarshal(data, &seed); err != nil {
 		return diags, fmt.Errorf("config %s: %w", path, err)
 	}
 	seed.Brain.MaxDailyCostUSD = cfg.Brain.MaxDailyCostUSD // a cloned repo must not raise the user's daily limit
-	cfg.Profile, cfg.Brain, cfg.Tools = seed.Profile, seed.Brain, seed.Tools
+	cfg.Brain, cfg.Tools = seed.Brain, seed.Tools
 	return diags, nil
 }
 

@@ -18,8 +18,13 @@ func ResolveRunnerReadPaths(string) []string {
 	return nil
 }
 
-func prepareCommandForOS(*exec.Cmd, Spec) (Tier, error) {
+// ReportAvailability reports the tier BuildCommand confines with on this machine, or ErrUnsupported without one.
+func ReportAvailability() (Tier, error) {
 	return TierNone, errSandboxUnsupportedOS
+}
+
+func prepareCommandForOS(*exec.Cmd, Spec) (Tier, error) {
+	return ReportAvailability()
 }
 
 func applyToSelf(Spec) error {

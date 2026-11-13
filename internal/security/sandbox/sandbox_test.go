@@ -67,3 +67,12 @@ func TestLauncherRejectsMalformedArguments(t *testing.T) {
 		})
 	}
 }
+
+// The security screen's sandbox line must name the tier a launch would actually get.
+func TestReportAvailabilityMatchesWhatBuildCommandConfinesWith(t *testing.T) {
+	tier, err := sandbox.ReportAvailability()
+	_, builtTier, buildErr := sandbox.BuildCommand(t.Context(), buildValidSpec(t))
+	if tier != builtTier || errors.Is(err, core.ErrUnsupported) != errors.Is(buildErr, core.ErrUnsupported) {
+		t.Fatalf("ReportAvailability = %q, %v; BuildCommand = %q, %v; want the same tier", tier, err, builtTier, buildErr)
+	}
+}

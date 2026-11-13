@@ -11,6 +11,7 @@ import (
 
 type setupRecorder struct {
 	savedProfile, savedKey string
+	savedSecurityProfile   string
 	voice                  *bool
 	saveErr                error
 }
@@ -27,10 +28,11 @@ func (r *setupRecorder) buildSetupModel() setupModel {
 			r.savedProfile, r.savedKey = profile, apiKey
 			return r.saveErr
 		},
-		SaveVoiceOutput:  func(isEnabled bool) error { r.voice = &isEnabled; return nil },
-		ListMCPServers:   func() []string { return nil },
-		DescribeSecurity: func() []string { return []string{"can read and write   /work"} },
-	}, SetupOptions{ConfigFile: "/config/config.toml"})
+		SaveVoiceOutput:     func(isEnabled bool) error { r.voice = &isEnabled; return nil },
+		ListMCPServers:      func() []string { return nil },
+		DescribeSecurity:    func(profile string) []string { return []string{profile + " can read   /work"} },
+		SaveSecurityProfile: func(profile string) error { r.savedSecurityProfile = profile; return nil },
+	}, SetupOptions{ConfigFile: "/config/config.toml", SecurityProfile: "default"})
 	next, _ := m.Update(m.Init()())
 	return next.(setupModel)
 }
@@ -76,16 +78,32 @@ func TestSetupWalksEveryStepToTheEnd(t *testing.T) {
 		t.Fatalf("got view\n%s\nwant the MCP step", renderSetup(m))
 	}
 	m, _ = pressSetupKeys(m, enterKey)
-	if !strings.Contains(renderSetup(m), "can read and write   /work") {
-		t.Fatalf("got view\n%s\nwant the security summary", renderSetup(m))
+	if !strings.Contains(renderSetup(m), "default can read   /work") {
+		t.Fatalf("got view\n%s\nwant the configured profile's security summary", renderSetup(m))
 	}
 	m, cmd := pressSetupKeys(m, enterKey, enterKey)
 
-	if recorder.savedProfile != "local" || recorder.savedKey != "" || recorder.voice == nil || !*recorder.voice {
-		t.Fatalf("saved %q/%q and voice %v, want local with no key and voice on", recorder.savedProfile, recorder.savedKey, recorder.voice)
+	if recorder.savedProfile != "local" || recorder.savedKey != "" || recorder.voice == nil || !*recorder.voice || recorder.savedSecurityProfile != "default" {
+		t.Fatalf("saved %q/%q, voice %v and profile %q, want local with no key, voice on and default", recorder.savedProfile, recorder.savedKey, recorder.voice, recorder.savedSecurityProfile)
 	}
 	if !m.isFinished || cmd == nil {
 		t.Fatal("setup did not finish on the last enter")
+	}
+}
+
+func TestSetupSavesTheChosenSecurityProfile(t *testing.T) {
+	recorder := &setupRecorder{}
+	m := recorder.buildSetupModel()
+	m.step = setupSecurity
+
+	m, _ = pressSetupKeys(m, tea.KeyPressMsg{Code: tea.KeyUp})
+	if !strings.Contains(renderSetup(m), "paranoid can read   /work") {
+		t.Fatalf("got view\n%s\nwant paranoid described once the cursor is on it", renderSetup(m))
+	}
+	m, _ = pressSetupKeys(m, enterKey)
+
+	if recorder.savedSecurityProfile != "paranoid" || m.step != setupDone {
+		t.Fatalf("saved %q at step %d, want paranoid and the done step next", recorder.savedSecurityProfile, m.step)
 	}
 }
 

@@ -21,7 +21,7 @@ import (
 // denies any command outside [security] exec_allow, so no dev-style exec "**" remains.
 func TestRedTeamGateMCPPolicyGrantsOnlyExecAllow(t *testing.T) {
 	paths := config.PathSet{WorkspaceDir: t.TempDir(), StateDir: t.TempDir()}
-	cfg := &config.Config{Security: config.SecurityCfg{ExecAllow: []string{"npx"}}}
+	cfg := &config.Config{Security: config.SecurityCfg{Profile: "default", ExecAllow: []string{"npx"}}}
 	mcpPolicy, err := buildMCPPolicy(cfg, paths, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +30,19 @@ func TestRedTeamGateMCPPolicyGrantsOnlyExecAllow(t *testing.T) {
 		if got := mcpPolicy.Evaluate(t.Context(), policy.Request{Kind: core.CapabilityExec, Target: target}).Verdict; got != want {
 			t.Errorf("exec %q = %v, want %v", target, got, want)
 		}
+	}
+}
+
+// The user's paranoid profile reaches MCP launches: exec_allow cannot grant what the profile withholds.
+func TestRedTeamGateParanoidProfileDeniesMCPLaunches(t *testing.T) {
+	paths := config.PathSet{WorkspaceDir: t.TempDir(), StateDir: t.TempDir()}
+	cfg := &config.Config{Security: config.SecurityCfg{Profile: "paranoid", ExecAllow: []string{"npx"}}}
+	mcpPolicy, err := buildMCPPolicy(cfg, paths, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mcpPolicy.Evaluate(t.Context(), policy.Request{Kind: core.CapabilityExec, Target: "npx"}).Verdict; got != policy.Deny {
+		t.Fatalf("exec npx under paranoid = %v, want deny", got)
 	}
 }
 

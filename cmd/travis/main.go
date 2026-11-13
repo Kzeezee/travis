@@ -106,7 +106,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	flags.SetOutput(os.Stderr)
 	baseURL := flags.String("base-url", "", "override the active provider profile's endpoint base URL")
 	model := flags.String("model", "", "override the active provider profile's model name")
-	resume := flags.String("resume", "", "continue a past session by id or \"last\"; with no value, pick from a list")
+	resume := flags.String("resume", "", "continue a past session by id or \"last\"; with no value, pick from a list. It runs under the security profile configured now")
 	fork := flags.String("fork", "", "start a new session from a past session's log, which is left unchanged")
 	forkTurns := flags.Int("at", 0, "with --fork, how many of its turns to keep; 0 keeps them all")
 	if err := flags.Parse(allowBareResume(args)); err != nil {
@@ -170,9 +170,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		}
 		*resume = string(picked)
 	}
-	// Not cfg.Profile, for the same reason startSessionBroker below pins "default": the
-	// workspace config layer can set that, and a cloned repo must not choose its own
-	// security profile. This is the same policy construction the broker process uses
+	// This is the same policy construction the broker process uses
 	// (BuildSessionPolicy), reused here because MCP server launches are exec-capability
 	// decisions made in this process, not round-tripped through the broker. The servers
 	// themselves then run inside the OS sandbox (mcp.Sandboxing below).
@@ -214,7 +212,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		return err
 	}
 	sessionID := start.ID
-	sessionBroker, err := startSessionBroker(paths, start, cfg.Session, diagnostics, broker.RemoteOptions{
+	sessionBroker, err := startSessionBroker(paths, start, cfg.Security.Profile, cfg.Session, diagnostics, broker.RemoteOptions{
 		Events:   redact.WrapSink(bus, redactor),
 		Approver: approver,
 		Clock:    core.SystemClock{},
@@ -308,10 +306,10 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	return chatErr
 }
 
-// buildMCPPolicy is the policy MCP server launches run under: the default profile plus the
-// user's exec_allow, which config refuses to take from the workspace layer.
+// buildMCPPolicy is the policy MCP server launches run under: the user's security profile plus
+// their exec_allow, both of which config refuses to take from the workspace layer.
 func buildMCPPolicy(cfg *config.Config, paths config.PathSet, home string) (policy.Policy, error) {
-	return broker.BuildSessionPolicy("default", broker.SessionRoots{
+	return broker.BuildSessionPolicy(cfg.Security.Profile, broker.SessionRoots{
 		Paths: paths, Home: home, Temp: os.TempDir(),
 		ExecAllow: cfg.Security.ExecAllow, HostAllow: cfg.Security.HostAllow,
 	})
@@ -420,20 +418,18 @@ func runSessionRetentionSweep(stateDir, retentionSetting string, diagnostics io.
 
 // startSessionBroker launches this session's travis-broker and connects to it. A chat never
 // runs without one: there is no unenforced fallback (§5.12.5). The broker keeps the session's
-// log start names, seeding it first for a fork, and backs up files up to sessionCfg's limit before writing them.
-func startSessionBroker(paths config.PathSet, start sessionStart, sessionCfg config.SessionCfg, diagnostics io.Writer, client broker.RemoteOptions) (*broker.SessionBroker, error) {
+// log start names, seeding it first for a fork, enforces profile, and backs up files up to sessionCfg's limit before writing them.
+func startSessionBroker(paths config.PathSet, start sessionStart, profile string, sessionCfg config.SessionCfg, diagnostics io.Writer, client broker.RemoteOptions) (*broker.SessionBroker, error) {
 	brokerExecutable, err := broker.ResolveBrokerExecutable()
 	if err != nil {
 		return nil, fmt.Errorf("start the security broker: %w", err)
 	}
 	sessionBroker, err := broker.StartSessionBroker(context.Background(), broker.SessionLaunch{
-		Executable:     brokerExecutable,
-		ExpectedSHA256: brokerSHA256,
-		WorkspaceDir:   paths.WorkspaceDir,
-		RuntimeDir:     paths.RuntimeDir,
-		// Not cfg.Profile: the workspace config layer can set that, and a cloned repo must not
-		// choose its own security profile. Selectable once [security] config exists.
-		Profile:          "default",
+		Executable:       brokerExecutable,
+		ExpectedSHA256:   brokerSHA256,
+		WorkspaceDir:     paths.WorkspaceDir,
+		RuntimeDir:       paths.RuntimeDir,
+		Profile:          profile,
 		SessionID:        start.ID,
 		SnapshotMaxBytes: sessionCfg.SnapshotMaxBytes,
 		ForkFrom:         start.ForkFrom,
