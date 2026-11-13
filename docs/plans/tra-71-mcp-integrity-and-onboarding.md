@@ -1,6 +1,6 @@
 # Implementation plan: TRA-71 MCP install integrity and full §7.1 onboarding
 
-Status: **phases 1–4 implemented; 5 in progress**, against `main` at `9c40e28` (after sessions resume/fork and
+Status: **implemented** (5.5 skipped), against `main` at `9c40e28` (after sessions resume/fork and
 retention landed). Sources: Linear TRA-71, `DESIGN.md` §5.7, §7.1, §9.2, D-22,
 D-27, D-32, D-33, `Code-Conventions.md`.
 
@@ -171,21 +171,26 @@ covered by a terminal test only; not seen in a live chat.
 
 ### Phase 5: onboarding completeness (§7.1)
 
-- [ ] 5.1 Resume: save the last finished step in the state dir; `travis init` opens at the
+- [x] 5.1 Resume: save the last finished step in the state dir; `travis init` opens at the
       first unfinished step
-- [ ] 5.2 Local model detection: probe Ollama (`127.0.0.1:11434/api/tags`) and llama.cpp
+- [x] 5.2 Local model detection: probe Ollama (`127.0.0.1:11434/api/tags`) and llama.cpp
       (`127.0.0.1:8080/v1/models`) with a short timeout, and offer each as an
       OpenAI-compatible profile
-- [ ] 5.3 Pre-fill `context_length` from Ollama `/api/show` or llama.cpp `/props` (D-33: config
+- [x] 5.3 Pre-fill `context_length` from Ollama `/api/show` or llama.cpp `/props` (D-33: config
       stays the source of truth)
-- [ ] 5.4 Connection test on keypress only (it costs a model call): reachable · streaming · tool call
+- [x] 5.4 Connection test on keypress only (it costs a model call): reachable · streaming · tool call
 - [ ] ~~5.5~~ **Skipped:** `[tools] approval_default` is validated but nothing reads it, so a wizard
       step for it would change nothing. Wire it into policy first (separate ticket, §5.5/§6.4). Was: "tools" step: `approval_default` (supervised · collaborative · autonomous, §6.4),
       making it six steps
-- [ ] 5.6 Tests: fake HTTP servers for detection and pre-fill; resume starts at the saved step
+- [x] 5.6 Tests: fake HTTP servers for detection and pre-fill; resume starts at the saved step
 
 **Proof:** with Ollama running, a fresh `travis init` detects it, pre-fills the context length,
 the test passes, and quitting at step 3 then re-running opens at step 3.
+**Done (partly):** a real `llama-server -c 8192` is detected with context 8192 and passes reachable ·
+streaming · tool call. Ollama was not installed here, so it is covered only by httptest fakes.
+Ollama pre-fills only an explicit `num_ctx`: `model_info`'s trained length overstates the window
+Ollama runs, and Ollama truncates silently rather than erroring, which defeats D-33's correction.
+Resume is covered by tests, not a live quit-and-rerun.
 
 ## 3. Open questions
 
