@@ -101,6 +101,66 @@ func TestSubmittedPromptRunsATurnAndReportsItsOutcome(t *testing.T) {
 	}
 }
 
+func TestRunningTurnContinuouslyReportsTokensAndElapsedTime(t *testing.T) {
+	startedAt := time.Date(2026, 11, 15, 15, 30, 0, 0, time.UTC)
+	m := buildTestModel(ChatActions{RunTurn: func(context.Context, string) error { return nil }})
+	m.clock = &core.FixedClock{Time: startedAt}
+	m, _ = pressKeys(m, append(typedKeys("measure this"), enterKey)...)
+	m, _ = updateModel(m, eventBatchMsg{events: []core.Event{
+		core.UserMessageSubmitted{},
+		core.StepCompleted{Usage: core.Usage{InputTokens: 1000, OutputTokens: 30}},
+		core.StepCompleted{Usage: core.Usage{InputTokens: 200, OutputTokens: 4}},
+	}})
+	m, cmd := updateModel(m, mascotTickMsg{at: startedAt.Add(3 * time.Second)})
+
+	status := ansi.Strip(m.renderStatusBar())
+	if !strings.Contains(status, "1.2k tok · 3s") {
+		t.Fatalf("status = %q, want live turn tokens and elapsed time", status)
+	}
+	if cmd == nil {
+		t.Fatal("running turn stopped its activity ticker")
+	}
+}
+
+func TestCompletedTurnShowsFinalTokensAndElapsedTimeAtBottom(t *testing.T) {
+	startedAt := time.Date(2026, 11, 15, 15, 30, 0, 0, time.UTC)
+	clock := &core.FixedClock{Time: startedAt}
+	m := buildTestModel(ChatActions{RunTurn: func(context.Context, string) error { return nil }})
+	m.clock = clock
+	m, _ = pressKeys(m, append(typedKeys("measure this"), enterKey)...)
+	m, _ = updateModel(m, eventBatchMsg{events: []core.Event{
+		core.UserMessageSubmitted{},
+		core.AssistantTextStreamed{Text: "Done."},
+		core.TurnCompleted{Usage: core.Usage{InputTokens: 1200, OutputTokens: 34}},
+	}})
+	clock.Time = startedAt.Add(4 * time.Second)
+	m, _ = updateModel(m, turnFinishedMsg{turnNumber: 1})
+
+	view := renderPlainView(m)
+	responseAt, metricsAt := strings.Index(view, "travis › Done."), strings.Index(view, "◆ 1.2k tokens · 4s")
+	if responseAt < 0 || metricsAt < responseAt {
+		t.Fatalf("got view\n%s\nwant final metrics below the response", view)
+	}
+}
+
+func TestReducedMotionKeepsTheDiamondStaticWhileElapsedTimeUpdates(t *testing.T) {
+	startedAt := time.Date(2026, 11, 15, 15, 30, 0, 0, time.UTC)
+	m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{
+		RunTurn: func(context.Context, string) error { return nil },
+	}, Options{ModelName: "test-model", ReducedMotion: true})
+	m.clock = &core.FixedClock{Time: startedAt}
+	m, _ = pressKeys(m, append(typedKeys("measure this"), enterKey)...)
+	frame := m.mascotFrame
+	m, _ = updateModel(m, mascotTickMsg{at: startedAt.Add(2 * time.Second)})
+
+	if m.mascotFrame != frame {
+		t.Fatalf("reduced-motion frame changed from %d to %d", frame, m.mascotFrame)
+	}
+	if status := ansi.Strip(m.renderStatusBar()); !strings.Contains(status, "0 tok · 2s") {
+		t.Fatalf("status = %q, want elapsed time to update without motion", status)
+	}
+}
+
 func TestStartupWarningsShowInTheFirstFrame(t *testing.T) {
 	m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{},
 		Options{ModelName: "test-model", StartupWarnings: []string{"config: unknown key brain.max_stepz"}})
@@ -365,7 +425,7 @@ func TestRenderTurnLabelsOnlyRepliesNeverWorkOrBlankText(t *testing.T) {
 		{text: "\nOn the 13th.\n"},
 	}}
 
-	got := ansi.Strip(renderTurn(turn, 80, &replyRenderer{}))
+	got := ansi.Strip(renderTurn(turn, 80, &replyRenderer{}, buildTerminalTheme(themeDark)))
 	if strings.Count(got, "travis ›") != 2 || !strings.Contains(got, "travis › Let me look.") || !strings.Contains(got, "travis › On the 13th.") {
 		t.Fatalf("got\n%s\nwant a label on each reply only, none on the blank chunk, card, or thought", got)
 	}
@@ -436,7 +496,7 @@ func TestPasteIsIgnoredWhileAModalIsOpen(t *testing.T) {
 }
 
 func TestRenderReplyShowsMarkdownWithoutRawMarkers(t *testing.T) {
-	got := ansi.Strip((&replyRenderer{}).renderReply("A **bold** claim:\n\n- one\n- two\n\n```\ncode here\n```", 60))
+	got := ansi.Strip((&replyRenderer{}).renderReply("A **bold** claim:\n\n- one\n- two\n\n```\ncode here\n```", 60, buildTerminalTheme(themeDark)))
 
 	for _, raw := range []string{"**", "```", "- one"} {
 		if strings.Contains(got, raw) {
@@ -454,10 +514,10 @@ func TestRenderReplyKeepsTextOfHalfFinishedMarkdown(t *testing.T) {
 	// The 33ms coalescer can emit any prefix of a reply, so every prefix must render.
 	reply := "Try:\n\n```go\nfmt.Println(\"hi\")\n"
 	for end := range len(reply) + 1 {
-		(&replyRenderer{}).renderReply(reply[:end], 60)
+		(&replyRenderer{}).renderReply(reply[:end], 60, buildTerminalTheme(themeDark))
 	}
 
-	got := ansi.Strip((&replyRenderer{}).renderReply(reply, 60))
+	got := ansi.Strip((&replyRenderer{}).renderReply(reply, 60, buildTerminalTheme(themeDark)))
 	if !strings.Contains(got, `fmt.Println("hi")`) || !strings.Contains(got, "travis › Try:") {
 		t.Fatalf("got\n%s\nwant the text of the unclosed fence", got)
 	}

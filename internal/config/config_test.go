@@ -515,6 +515,37 @@ func TestValidateRejectsAnEmptyPushToTalkKeyOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestLoadUIConfigIsUserOwned(t *testing.T) {
+	paths := testPathSet()
+	for _, tt := range []struct {
+		name  string
+		files map[string]string
+		want  UICfg
+	}{
+		{"compiled defaults", nil, UICfg{Theme: "auto"}},
+		{"user file", map[string]string{testUserConfigFile(paths): "[ui]\ntheme = 'light'\nreduced_motion = true\n"}, UICfg{Theme: "light", ReducedMotion: true}},
+		{"workspace file is ignored", map[string]string{paths.WorkspaceConfigFile: "[ui]\ntheme = 'mono'\nreduced_motion = true\n"}, UICfg{Theme: "auto"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, _, err := load(buildFileReaderFromMap(tt.files), paths, nil, buildEnvLookupFromMap(nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.UI != tt.want {
+				t.Fatalf("UI = %+v, want %+v", cfg.UI, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsUnknownUITheme(t *testing.T) {
+	cfg := buildDefaultConfig()
+	cfg.UI.Theme = "ultraviolet"
+	if diags := cfg.Validate(); !diags.HasErrors() {
+		t.Fatalf("Validate() = %v, want invalid ui.theme rejected", diags)
+	}
+}
+
 func TestLoadSnapshotMaxBytesDefaultsTo16MiBAndOnlyTrustedLayersChangeIt(t *testing.T) {
 	pathSet := testPathSet()
 	for _, tc := range []struct {

@@ -11,6 +11,9 @@ type Operation struct {
 	// IsIrreversible means the effect cannot be undone, so it may be approved once but never
 	// learned as an always rule (§6.4).
 	IsIrreversible bool
+	// RequiresOneTimeApproval prevents an always rule when approval is tied to this exact
+	// content version rather than an irreversible effect.
+	RequiresOneTimeApproval bool
 }
 
 // ApprovalDecision is the human's answer to a pending Operation.

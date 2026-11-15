@@ -189,3 +189,23 @@ func TestIrreversibleApprovalOffersNoAlways(t *testing.T) {
 	default:
 	}
 }
+
+func TestContentVersionApprovalExplainsWhyAlwaysIsUnavailable(t *testing.T) {
+	m, answers := buildPendingApproval(t)
+	m.pendingApproval.Operation.RequiresOneTimeApproval = true
+
+	view := renderPlainView(m)
+	if strings.Contains(view, "can't be undone") || strings.Contains(view, "[a] always") ||
+		!strings.Contains(view, "this version only · [y] once · [n] deny") {
+		t.Fatalf("got view\n%s\nwant a content-version legend without irreversible wording", view)
+	}
+	next, cmd := updateModel(m, tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if next.pendingApproval == nil || cmd != nil {
+		t.Fatal("want a ignored while a one-time approval is pending")
+	}
+	select {
+	case got := <-answers:
+		t.Fatalf("a answered a one-time approval with %v", got)
+	default:
+	}
+}

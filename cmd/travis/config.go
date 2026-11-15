@@ -36,6 +36,10 @@ const starterConfig = `# Travis user config. Uncomment and edit; run "travis con
 # [eval]
 # traces = true
 
+# [ui]
+# theme = "auto"             # auto | dark | light | high_contrast | mono
+# reduced_motion = false
+
 # [voice.output]
 # enabled = true
 

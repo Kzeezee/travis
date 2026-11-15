@@ -92,7 +92,7 @@ func copySelectedText(content string, selection textSelection) string {
 }
 
 // highlightSelection paints the selected cells of the visible transcript; firstRow is the content row at the top.
-func highlightSelection(view string, selection textSelection, firstRow int) string {
+func highlightSelection(view string, selection textSelection, firstRow int, theme terminalTheme) string {
 	if !selection.isActive {
 		return view
 	}
@@ -100,7 +100,7 @@ func highlightSelection(view string, selection textSelection, firstRow int) stri
 	for i, line := range lines {
 		if from, to, ok := selection.spanOnRow(firstRow + i); ok {
 			selected := ansi.Strip(ansi.Cut(line, from, to))
-			lines[i] = ansi.Truncate(line, from, "") + ansi.ResetStyle + selectedRowStyle.Render(selected) + ansi.TruncateLeft(line, to, "")
+			lines[i] = ansi.Truncate(line, from, "") + ansi.ResetStyle + theme.selectedRow.Render(selected) + ansi.TruncateLeft(line, to, "")
 		}
 	}
 	return strings.Join(lines, "\n")

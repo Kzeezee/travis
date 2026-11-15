@@ -47,10 +47,12 @@ func (m chatModel) handlePushToTalkPress(key tea.KeyPressMsg) (tea.Model, tea.Cm
 		m.dictation, m.pushToTalkCode, m.isDictationStopRequested = dictationStarting, key.Code, false
 		start := m.actions.StartDictation
 		ctx := m.ctx
-		return m, func() tea.Msg {
+		startCmd := func() tea.Msg {
 			finish, err := start(ctx)
 			return dictationStartedMsg{finish: finish, err: err}
 		}
+		cmd := m.armMascotAnimation(startCmd)
+		return m, cmd
 	case !m.canHoldToTalk:
 		return m.stopDictation(false)
 	}

@@ -39,6 +39,11 @@ var ErrNotInteractive = errors.New("chat needs an interactive terminal (non-inte
 // Options carries the runtime choices for one chat session.
 type Options struct {
 	ModelName string
+	// Clock drives elapsed-turn timing and animation ticks.
+	Clock core.Clock
+	// Theme is auto, dark, light, high_contrast, or mono. ReducedMotion keeps every mascot static.
+	Theme         string
+	ReducedMotion bool
 	// ContextLength is the model's context window in tokens for the status bar; 0 means unknown.
 	ContextLength int
 	// MaxTurnCostUSD and MaxDailyCostUSD are the spending ceilings for the status bar; 0 means off.
@@ -319,6 +324,18 @@ type chatModel struct {
 	isCancelRequested bool
 	hasInputEnded     bool
 	lastTurnOutcome   turnOutcome
+	themePreference   string
+	theme             terminalTheme
+	isDarkBackground  bool
+	isReducedMotion   bool
+	mascotFrame       int
+	startupFrames     int
+	settleFrames      int
+	isMascotTickArmed bool
+	clock             core.Clock
+	turnStartedAt     time.Time
+	turnElapsed       time.Duration
+	activeTurnUsage   core.Usage
 }
 
 func buildChatModel(
@@ -330,29 +347,45 @@ func buildChatModel(
 ) chatModel {
 	input := textinput.New()
 	input.Prompt = " › "
-	inputStyles := input.Styles()
-	inputStyles.Focused.Prompt = assistantLabelStyle
-	inputStyles.Cursor.Color = lantern
-	input.SetStyles(inputStyles)
 	input.SetVirtualCursor(false)
 	input.Focus()
 
+	themePreference := opts.Theme
+	if themePreference == "" {
+		themePreference = themeAuto
+	}
+	clock := opts.Clock
+	if clock == nil {
+		clock = core.SystemClock{}
+	}
 	m := chatModel{
 		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, actions: actions, commands: buildSlashCommands(), modelName: opts.ModelName, contextLength: opts.ContextLength,
 		maxTurnCostUSD: opts.MaxTurnCostUSD, maxDailyCostUSD: opts.MaxDailyCostUSD, spentTodayUSD: opts.SpentTodayUSD, isPriced: opts.IsPriced,
 		viewport: viewport.New(), input: input, replies: &replyRenderer{}, pushToTalkKey: opts.PushToTalkKey,
+		themePreference: themePreference, theme: buildTerminalTheme(themePreference), isDarkBackground: true, isReducedMotion: opts.ReducedMotion,
+		clock: clock,
 	}
 	if m.pushToTalkKey == "" {
 		m.pushToTalkKey = defaultPushToTalkKey
 	}
 	m.transcript.warnings = opts.StartupWarnings
 	m.transcript.restoreTurns(opts.History)
+	if len(opts.History) == 0 && len(opts.StartupWarnings) == 0 && !opts.ReducedMotion {
+		m.startupFrames, m.isMascotTickArmed = startupFrameCount, true
+	}
+	m.applyTheme(m.theme)
 	m.resize(defaultWidth, defaultHeight)
 	return m
 }
 
 func (m chatModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{listenForEvents(m.events), listenForApprovals(m.approvals)}
+	if m.themePreference == themeAuto {
+		cmds = append(cmds, tea.RequestBackgroundColor)
+	}
+	if m.isMascotTickArmed {
+		cmds = append(cmds, scheduleMascotTick(m.clock, m.reportMascotTickInterval()))
+	}
 	if m.questions != nil {
 		cmds = append(cmds, listenForQuestions(m.questions))
 	}
@@ -373,6 +406,35 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Markdown is the default until this arrives (once at startup), so tests need no message to be deterministic.
 		m.replies.isPlainTextOnly = msg.Profile < colorprofile.ANSI256
 		m.refreshTranscript()
+	case tea.BackgroundColorMsg:
+		m.isDarkBackground = msg.IsDark()
+		if m.themePreference == themeAuto {
+			if m.isDarkBackground {
+				m.applyTheme(buildTerminalTheme(themeDark))
+			} else {
+				m.applyTheme(buildTerminalTheme(themeLight))
+			}
+			m.refreshTranscript()
+		}
+	case mascotTickMsg:
+		m.isMascotTickArmed = false
+		tickedAt := msg.at
+		if tickedAt.IsZero() {
+			tickedAt = m.clock.ReportCurrentTime()
+		}
+		m.updateTurnElapsed(tickedAt)
+		if m.shouldAnimateMascot() {
+			m.mascotFrame++
+			if m.startupFrames > 0 {
+				m.startupFrames--
+			}
+			if m.settleFrames > 0 {
+				m.settleFrames--
+			}
+		}
+		m.refreshTranscript()
+		cmd := m.armMascotAnimation(nil)
+		return m, cmd
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	case tea.KeyReleaseMsg:
@@ -398,9 +460,16 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if stepDone, isStepDone := event.(core.StepCompleted); isStepDone {
 				m.contextTokens = stepDone.Usage.InputTokens
+				if m.cancelTurn != nil {
+					m.activeTurnUsage.InputTokens += stepDone.Usage.InputTokens
+					m.activeTurnUsage.OutputTokens += stepDone.Usage.OutputTokens
+				}
 			}
 			if turnDone, isTurnDone := event.(core.TurnCompleted); isTurnDone {
 				m.turnCostUSD, m.spentTodayUSD = turnDone.CostUSD, turnDone.SpentTodayUSD
+				if m.cancelTurn != nil {
+					m.activeTurnUsage = turnDone.Usage
+				}
 			}
 			if started, isStarted := event.(core.MCPServerStarted); isStarted {
 				m.sandboxTier = recordSandboxTier(m.sandboxTier, started.Tier)
@@ -595,8 +664,8 @@ func (m chatModel) handleApprovalKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "y":
 		decision = core.ApprovalOnce
 	case "a":
-		if m.pendingApproval.Operation.IsIrreversible {
-			return m, nil // §6.4: what cannot be undone is never learned as always
+		if m.pendingApproval.Operation.IsIrreversible || m.pendingApproval.Operation.RequiresOneTimeApproval {
+			return m, nil
 		}
 		decision = core.ApprovalAlways
 	case "n", "esc":
@@ -607,10 +676,12 @@ func (m chatModel) handleApprovalKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	respond := m.pendingApproval.Respond
 	m.pendingApproval = nil
-	return m, tea.Batch(
+	cmd := tea.Batch(
 		func() tea.Msg { respond(decision); return nil },
 		listenForApprovals(m.approvals),
 	)
+	cmd = m.armMascotAnimation(cmd)
+	return m, cmd
 }
 
 // paletteRow is one palette suggestion: completion is the input text tab fills in.
@@ -634,6 +705,15 @@ func (m chatModel) listPaletteRows() []paletteRow {
 		for _, name := range m.modelNames {
 			if strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
 				rows = append(rows, paletteRow{completion: "/model " + name, label: name})
+			}
+		}
+	} else if prefix, isThemeArgument := strings.CutPrefix(value, "/theme "); isThemeArgument {
+		if strings.Contains(prefix, " ") {
+			return nil
+		}
+		for _, name := range themeNames {
+			if strings.HasPrefix(name, strings.ToLower(prefix)) {
+				rows = append(rows, paletteRow{completion: "/theme " + name, label: name})
 			}
 		}
 	} else if prefix, isProviderArgument := strings.CutPrefix(value, "/provider "); isProviderArgument {
@@ -671,14 +751,18 @@ func (m chatModel) submitPrompt() (tea.Model, tea.Cmd) {
 
 	turnCtx, cancel := context.WithCancel(m.ctx)
 	m.cancelTurn, m.isCancelRequested = cancel, false
+	m.turnStartedAt, m.turnElapsed = m.clock.ReportCurrentTime(), 0
+	m.activeTurnUsage = core.Usage{}
 	turnNumber := m.transcript.startTurn(prompt)
 	m.refreshTranscript()
 	m.viewport.GotoBottom()
 
 	runTurn := m.actions.RunTurn
-	return m, func() tea.Msg {
+	runTurnCmd := func() tea.Msg {
 		return turnFinishedMsg{turnNumber: turnNumber, err: runTurn(turnCtx, prompt)}
 	}
+	cmd := m.armMascotAnimation(runTurnCmd)
+	return m, cmd
 }
 
 func (m *chatModel) requestCancel() {
@@ -687,6 +771,7 @@ func (m *chatModel) requestCancel() {
 }
 
 func (m chatModel) finishTurn(msg turnFinishedMsg) (tea.Model, tea.Cmd) {
+	m.updateTurnElapsed(m.clock.ReportCurrentTime())
 	m.cancelTurn()
 	m.cancelTurn = nil
 	hadPendingQuestion := m.pendingQuestion != nil
@@ -704,16 +789,21 @@ func (m chatModel) finishTurn(msg turnFinishedMsg) (tea.Model, tea.Cmd) {
 		failure = msg.err.Error()
 	}
 	m.lastTurnOutcome = outcome
-	m.transcript.finishTurn(msg.turnNumber, outcome, failure)
+	if !m.isReducedMotion && (outcome == turnSucceeded || outcome == turnFailed) {
+		m.settleFrames = settleFrameCount
+	}
+	m.transcript.finishTurn(msg.turnNumber, outcome, failure, m.turnElapsed)
 	m.refreshTranscript()
 
 	if m.hasInputEnded {
 		return m, tea.Quit
 	}
 	if hadPendingQuestion {
-		return m, listenForQuestions(m.questions)
+		cmd := m.armMascotAnimation(listenForQuestions(m.questions))
+		return m, cmd
 	}
-	return m, nil
+	cmd := m.armMascotAnimation(nil)
+	return m, cmd
 }
 
 func (m *chatModel) resize(width, height int) {
@@ -722,13 +812,13 @@ func (m *chatModel) resize(width, height int) {
 	m.viewport.SetWidth(m.width)
 	m.fitViewport()
 	m.input.SetWidth(max(m.width-lipgloss.Width(m.input.Prompt)-1, 1))
-	m.refreshTranscript()
 }
 
 // fitViewport gives the transcript whatever height the chrome and the open palette leave.
 func (m *chatModel) fitViewport() {
 	isFollowingLatest := m.viewport.AtBottom()
 	m.viewport.SetHeight(max(m.height-chromeHeight-len(m.listPaletteRows()), 1))
+	m.refreshTranscript()
 	if isFollowingLatest {
 		m.viewport.GotoBottom()
 	}
@@ -737,12 +827,35 @@ func (m *chatModel) fitViewport() {
 // refreshTranscript re-renders the transcript, following new output unless the user scrolled up.
 func (m *chatModel) refreshTranscript() {
 	isFollowingLatest := m.viewport.AtBottom()
-	content := renderTranscript(m.transcript, m.width, m.replies)
+	content := renderTranscript(m.transcript, m.width, m.viewport.Height(), m.modelName, m.isDictationAvailable(), m.theme, m.replies, m.mascotFrame)
 	if m.pendingQuestion != nil {
-		content += "\n\n" + wrapWithMargin(assistantLabelStyle.Render("travis asks ›")+" "+m.pendingQuestion.Text, m.width)
+		content += "\n\n" + wrapWithMargin(m.theme.assistantLabel.Render("travis asks ›")+" "+m.pendingQuestion.Text, m.width)
 	}
 	m.viewport.SetContent(content)
 	if isFollowingLatest {
 		m.viewport.GotoBottom()
 	}
+}
+
+func (m *chatModel) applyTheme(theme terminalTheme) {
+	m.theme = theme
+	styles := m.input.Styles()
+	styles.Focused.Prompt = theme.assistantLabel
+	styles.Cursor.Color = theme.cursor
+	m.input.SetStyles(styles)
+}
+
+func (m *chatModel) armMascotAnimation(cmd tea.Cmd) tea.Cmd {
+	if !m.shouldTickMascot() || m.isMascotTickArmed {
+		return cmd
+	}
+	m.isMascotTickArmed = true
+	return tea.Batch(cmd, scheduleMascotTick(m.clock, m.reportMascotTickInterval()))
+}
+
+func (m *chatModel) updateTurnElapsed(at time.Time) {
+	if m.cancelTurn == nil || m.turnStartedAt.IsZero() {
+		return
+	}
+	m.turnElapsed = max(at.Sub(m.turnStartedAt), 0)
 }

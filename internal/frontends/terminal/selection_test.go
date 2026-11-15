@@ -33,7 +33,7 @@ func TestDraggingOverTheTranscriptSelectsAndCopiesThatText(t *testing.T) {
 			if view := renderPlainView(m); !strings.Contains(view, "⧉ copied") {
 				t.Fatalf("status bar does not confirm the copy:\n%s", view)
 			}
-			if !strings.Contains(m.View().Content, selectedRowStyle.Render("copy the")) {
+			if !strings.Contains(m.View().Content, m.theme.selectedRow.Render("copy the")) {
 				t.Fatal("the selected cells are not highlighted")
 			}
 		})
@@ -51,7 +51,7 @@ func TestDraggingOverTheTranscriptSelectsAndCopiesThatText(t *testing.T) {
 }
 
 func TestCopySelectedTextSpansRowsWithoutStylingOrPadding(t *testing.T) {
-	content := " " + userLabelStyle.Render("you ›") + " first line   \n second line\n third line"
+	content := " " + buildTerminalTheme(themeDark).userLabel.Render("you ›") + " first line   \n second line\n third line"
 	selection := textSelection{anchor: cellPos{row: 0, col: 7}, head: cellPos{row: 2, col: 6}, isActive: true}
 	if got, want := copySelectedText(content, selection), "first line\n second line\n third"; got != want {
 		t.Fatalf("got %q, want %q", got, want)

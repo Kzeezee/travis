@@ -138,18 +138,18 @@ func describeRewind(mode core.RewindMode, files core.FileReverts) string {
 
 // renderUndoPicker fills the transcript area: turns newest first, the mode, what the choice
 // would take back, and the keys. Rows scroll to keep the cursor visible.
-func renderUndoPicker(picker undoPicker, width, height int) string {
+func renderUndoPicker(picker undoPicker, width, height int, theme terminalTheme) string {
 	footer := []string{
 		"",
 		truncateWithMargin(renderUndoModes(picker.mode), width),
-		truncateWithMargin(dimStyle.Render(describeUndoChoice(picker)), width),
-		truncateWithMargin(dimStyle.Render(undoPickerLegend), width),
+		truncateWithMargin(theme.dim.Render(describeUndoChoice(picker)), width),
+		truncateWithMargin(theme.dim.Render(undoPickerLegend), width),
 	}
 	rowsAvailable := max(height-1-len(footer), 1)
 	first := max(picker.cursor-rowsAvailable+1, 0)
-	lines := []string{truncateWithMargin(assistantLabelStyle.Render("/undo · rewind to before…"), width)}
+	lines := []string{truncateWithMargin(theme.assistantLabel.Render("/undo · rewind to before…"), width)}
 	for i := first; i < len(picker.turns) && i < first+rowsAvailable; i++ {
-		lines = append(lines, truncateWithMargin(renderUndoRow(picker.turns[i], i == picker.cursor, width), width))
+		lines = append(lines, truncateWithMargin(renderUndoRow(picker.turns[i], i == picker.cursor, width, theme), width))
 	}
 	for len(lines) < height-len(footer) {
 		lines = append(lines, "")
@@ -157,7 +157,7 @@ func renderUndoPicker(picker undoPicker, width, height int) string {
 	return strings.Join(append(lines, footer...), "\n")
 }
 
-func renderUndoRow(turn core.TurnSummary, isSelected bool, width int) string {
+func renderUndoRow(turn core.TurnSummary, isSelected bool, width int, theme terminalTheme) string {
 	marker := "  "
 	if isSelected {
 		marker = "▸ "
@@ -178,7 +178,7 @@ func renderUndoRow(turn core.TurnSummary, isSelected bool, width int) string {
 	prompt := ansi.Truncate(strings.Join(strings.Fields(turn.Prompt), " "), promptWidth, ellipsis)
 	row := prefix + prompt + strings.Repeat(" ", max(promptWidth-ansi.StringWidth(prompt), 0)) + suffix
 	if isSelected {
-		return userLabelStyle.Render(row)
+		return theme.userLabel.Render(row)
 	}
 	return row
 }

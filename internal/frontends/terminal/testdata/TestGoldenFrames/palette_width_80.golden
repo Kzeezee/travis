@@ -1,15 +1,15 @@
  ◆ travis                                                                       
-   / for commands · drag to copy · wheel or PgUp/PgDn to scroll                 
+   / commands · PgUp/PgDn scroll                                                
                                                                                 
                                                                                 
    /help            list commands
  › /quit            exit travis
    /new             start a new conversation
    /model [name]    show or switch the model
+   /theme [name]    preview a colour theme
    /provider [name] list or switch provider profiles
    /mcp             list MCP servers and their state
    /tools           list available tools
-   /skills          list loaded skills
 ────────────────────────────────────────────────────────────────────────────────
  › /                                                                            
 ────────────────────────────────────────────────────────────────────────────────
