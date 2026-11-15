@@ -25,8 +25,9 @@ import (
 // Version 2 added write_file, approve_once, add_decision_rule, the needs_approval error and
 // list_directory paging. Version 3 added session entries and irreversible approvals; version 4
 // added rewind; version 5 added managed memory operations; version 6 added run_command;
-// version 7 added fetch_page; version 8 adds search_history.
-const ProtocolVersion uint16 = 8
+// version 7 added fetch_page; version 8 added search_history; version 9 adds conflict-safe
+// human memory editing and security inspection.
+const ProtocolVersion uint16 = 9
 
 const (
 	// MaxFrameBytes bounds what either side allocates for one message.
@@ -69,9 +70,13 @@ const (
 	OpAppendEntries Op = "append_entries"
 	OpListTurns     Op = "list_turns"
 	// OpRewind takes back FromTurn and every later turn, as Mode says.
-	OpRewind        Op = "rewind"
-	OpReadMemory    Op = "read_memory"
-	OpReplaceMemory Op = "replace_memory"
+	OpRewind             Op = "rewind"
+	OpReadMemory         Op = "read_memory"
+	OpReplaceMemory      Op = "replace_memory"
+	OpReadMemoryDocument Op = "read_memory_document"
+	OpChangeMemory       Op = "change_memory"
+	OpInspectSecurity    Op = "inspect_security"
+	OpRevokeDecisionRule Op = "revoke_decision_rule"
 	// OpRunCommand runs Argv with no shell; it always needs approval (D-27).
 	OpRunCommand Op = "run_command"
 	// OpFetchPage reads the page at URL over HTTPS, under the §9.3 rules.
@@ -317,6 +322,23 @@ func validateRequest(req Request) error {
 		if req.Path != "memory" || len(req.Data) > 8<<10 {
 			return fmt.Errorf("%s needs the fixed memory target and at most 8 KB: %w", req.Op, core.ErrInvalid)
 		}
+	case OpReadMemoryDocument:
+		if req.Path != "memory" || len(req.Data) != 0 {
+			return fmt.Errorf("%s needs the fixed memory target: %w", req.Op, core.ErrInvalid)
+		}
+	case OpChangeMemory:
+		if req.Path != "memory" || len(req.Data) == 0 || len(req.Data) > 16<<10 {
+			return fmt.Errorf("%s needs a bounded memory change: %w", req.Op, core.ErrInvalid)
+		}
+	case OpInspectSecurity:
+		if req.Path != "" || len(req.Data) != 0 {
+			return fmt.Errorf("%s takes no arguments: %w", req.Op, core.ErrInvalid)
+		}
+	case OpRevokeDecisionRule:
+		if req.Path == "" || len(req.Path) > 128 || len(req.Data) != 0 {
+			return fmt.Errorf("%s needs a rule ID: %w", req.Op, core.ErrInvalid)
+		}
+		return validateDecisionRuleID(req.Path)
 	case OpRunCommand:
 		return validateCommandArgv(req.Argv)
 	case OpFetchPage:

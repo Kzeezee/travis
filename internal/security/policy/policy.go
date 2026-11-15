@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Kzeezee/travis/internal/core"
@@ -111,6 +112,10 @@ func (p Policy) Evaluate(_ context.Context, req Request) Decision {
 
 func (p Policy) Explain(req Request) string {
 	return strings.Join(p.Evaluate(context.Background(), req).Trace, "\n")
+}
+
+func (p Policy) ReportCapabilities() (grants, denies []core.Capability) {
+	return slices.Clone(p.grants), slices.Clone(p.deny)
 }
 
 func isResolvedPath(target string) bool {

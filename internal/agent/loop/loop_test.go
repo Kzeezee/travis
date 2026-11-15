@@ -873,6 +873,33 @@ func TestRunWithoutSpeechLeavesTagsAsText(t *testing.T) {
 	}
 }
 
+func TestSetSpeechEnabledChangesLaterTurns(t *testing.T) {
+	provider := &fakeProvider{streams: []*fakeStream{
+		buildTextStream(core.Chunk{Text: "quiet"}),
+		buildTextStream(core.Chunk{Text: "spoken"}),
+	}}
+	conversation := loop.BuildAssistantConversation(loop.Dependencies{
+		Provider: provider,
+		Events:   &recordingSink{},
+		Clock:    core.FixedClock{Time: time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)},
+		IDs:      &core.SequentialIDGenerator{Prefix: "id-"},
+	}, "test-model", testMaxSteps)
+
+	if err := conversation.RunAssistantTurn(context.Background(), "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := conversation.SetSpeechEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := conversation.RunAssistantTurn(context.Background(), "second"); err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(provider.requests[0].System, "<speak>") || !strings.Contains(provider.requests[1].System, "<speak>") {
+		t.Fatal("speech instructions did not change after SetSpeechEnabled")
+	}
+}
+
 // §5.11 tier 3: a reply the model marked nothing in speaks its first sentence, with no second call.
 func TestRunSpeaksTheFirstSentenceWhenTheReplyMarkedNothing(t *testing.T) {
 	provider, sink := runSpeechTurn(t, true, core.Chunk{Text: "The capital of **France** is Paris. "}, core.Chunk{Text: "It sits on the Seine."})

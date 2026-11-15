@@ -15,6 +15,11 @@ type Speaker interface {
 	Speak(ctx context.Context, text string) error
 }
 
+// LineQueuer accepts speech without blocking the caller while it is played.
+type LineQueuer interface {
+	Say(text string)
+}
+
 const (
 	// A model that ignores the prompt must not hold the speaker for minutes (§5.11 max_chars).
 	maxSpokenRunes = 600
@@ -33,6 +38,69 @@ type Narrator struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	once    sync.Once
+}
+
+// Output owns the optional narrator so voice can be turned on and off during a chat.
+type Output struct {
+	mu           sync.Mutex
+	logger       core.Logger
+	buildSpeaker func() (Speaker, error)
+	narrator     *Narrator
+}
+
+// BuildOutput returns disabled voice output backed by this OS's speech program when enabled.
+func BuildOutput(logger core.Logger) *Output {
+	return &Output{logger: logger, buildSpeaker: BuildSystemSpeaker}
+}
+
+// SetEnabled starts or stops speech. Enabling is idempotent and reports a missing system speaker.
+func (o *Output) SetEnabled(isEnabled bool) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if isEnabled == (o.narrator != nil) {
+		return nil
+	}
+	if isEnabled {
+		speaker, err := o.buildSpeaker()
+		if err != nil {
+			return err
+		}
+		o.narrator = StartNarrator(speaker, o.logger)
+		return nil
+	}
+	o.narrator.Close()
+	o.narrator = nil
+	return nil
+}
+
+// ReportIsEnabled answers whether speech is active now.
+func (o *Output) ReportIsEnabled() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.narrator != nil
+}
+
+// Say queues text when output is enabled and otherwise does nothing.
+func (o *Output) Say(text string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.narrator != nil {
+		o.narrator.Say(text)
+	}
+}
+
+// SpeakRequestedSpeech says every SpeechRequested while output is enabled.
+func (o *Output) SpeakRequestedSpeech(events <-chan core.Event) {
+	for event := range events {
+		if speech, ok := event.(core.SpeechRequested); ok {
+			o.Say(speech.Text)
+		}
+	}
+}
+
+// Close stops current speech and disables output.
+func (o *Output) Close() {
+	_ = o.SetEnabled(false)
 }
 
 // StartNarrator starts speaking lines as they are queued, until Close.
@@ -98,7 +166,7 @@ func truncateToRunes(text string, limit int) string {
 
 // WrapApprover announces every approval request aloud. The answer still comes only from the
 // keyboard (D-10): this speaks, it never listens. A nil approver stays nil, so fail-closed holds.
-func WrapApprover(next core.Approver, narrator *Narrator) core.Approver {
+func WrapApprover(next core.Approver, narrator LineQueuer) core.Approver {
 	if next == nil {
 		return nil
 	}
@@ -107,7 +175,7 @@ func WrapApprover(next core.Approver, narrator *Narrator) core.Approver {
 
 type alertingApprover struct {
 	next     core.Approver
-	narrator *Narrator
+	narrator LineQueuer
 }
 
 func (a alertingApprover) RequestApproval(ctx context.Context, op core.Operation) (core.ApprovalDecision, error) {
@@ -116,7 +184,7 @@ func (a alertingApprover) RequestApproval(ctx context.Context, op core.Operation
 }
 
 // WrapQuestioner announces every ask_user question aloud; the answer is still typed.
-func WrapQuestioner(next core.Questioner, narrator *Narrator) core.Questioner {
+func WrapQuestioner(next core.Questioner, narrator LineQueuer) core.Questioner {
 	if next == nil {
 		return nil
 	}
@@ -125,7 +193,7 @@ func WrapQuestioner(next core.Questioner, narrator *Narrator) core.Questioner {
 
 type alertingQuestioner struct {
 	next     core.Questioner
-	narrator *Narrator
+	narrator LineQueuer
 }
 
 func (q alertingQuestioner) AskUser(ctx context.Context, question string) (string, error) {

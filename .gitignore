@@ -5,6 +5,7 @@
 *.exe
 /bin/
 /dist/
+/.manual-test/
 
 # Go test and coverage artefacts
 *.test

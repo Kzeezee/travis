@@ -64,7 +64,11 @@ const (
 // RunAssistantTurn and Rewind mutate the conversation, so they never overlap: a turn waits for
 // the one before it, and a rewind is refused while a turn runs.
 type AssistantConversation struct {
-	busy sync.Mutex
+	busy                   sync.Mutex
+	contextSnapshotMu      sync.RWMutex
+	contextSnapshot        ContextSnapshot
+	pendingSummaryUsage    core.Usage
+	hasPendingSummaryUsage bool
 
 	provider core.Provider
 	tools    ToolLookup
@@ -125,10 +129,11 @@ func BuildAssistantConversation(deps Dependencies, model string, maxSteps int) *
 
 // stepReply is what one provider call produced.
 type stepReply struct {
-	text   string
-	calls  []core.ToolCall
-	usage  core.Usage
-	reason core.StopReason
+	text     string
+	calls    []core.ToolCall
+	usage    core.Usage
+	hasUsage bool
+	reason   core.StopReason
 }
 
 // RunAssistantTurn sends one prompt and keeps calling the provider, running the tools it
@@ -253,6 +258,7 @@ func (c *AssistantConversation) ResetHistory() {
 	c.entries = nil
 	c.blocks = nil
 	c.isNextStepUntrusted = false
+	c.clearContextSnapshot()
 }
 
 // RestoreHistory continues a resumed or forked session from its log, before its first turn. It keeps
@@ -274,6 +280,17 @@ func (c *AssistantConversation) RestoreHistory(entries []core.SessionEntry) {
 // SelectModel sends every later turn to the named model.
 func (c *AssistantConversation) SelectModel(name string) {
 	c.model = name
+	c.clearContextSnapshot()
+}
+
+// SetSpeechEnabled changes whether later turns request and publish spoken text.
+func (c *AssistantConversation) SetSpeechEnabled(isEnabled bool) error {
+	if !c.busy.TryLock() {
+		return fmt.Errorf("a turn is running; change voice output once it ends: %w", core.ErrInvalid)
+	}
+	defer c.busy.Unlock()
+	c.isSpeechEnabled = isEnabled
+	return nil
 }
 
 // SelectProvider sends every later turn to provider and model, priced as pricing says and compacted to fit
@@ -286,6 +303,7 @@ func (c *AssistantConversation) SelectProvider(provider core.Provider, model str
 	defer c.busy.Unlock()
 	c.provider, c.model, c.budget.Pricing, c.contextLength = provider, model, pricing, contextLength
 	c.compactAtFraction = initialCompactAtFraction // a lowered threshold was learned from the old model
+	c.clearContextSnapshot()
 	return nil
 }
 
@@ -321,13 +339,18 @@ func (c *AssistantConversation) buildRequest(system string, tools []core.ToolSpe
 
 // exchangeRequest makes one provider call and reads its stream to the end.
 func (c *AssistantConversation) exchangeRequest(ctx context.Context, request core.ProviderRequest) (stepReply, error) {
+	c.captureContextSnapshot(request)
 	stream, err := c.provider.Chat(ctx, request)
 	if err != nil {
 		return stepReply{}, err
 	}
 	defer func() { _ = stream.Close() }()
 
-	return c.consumeStream(ctx, stream)
+	reply, err := c.consumeStream(ctx, stream)
+	if err == nil {
+		c.attachContextUsage(reply.usage, reply.hasUsage)
+	}
+	return reply, err
 }
 
 func (c *AssistantConversation) buildToolSpecs(ctx context.Context) []core.ToolSpec {
@@ -377,6 +400,7 @@ func (c *AssistantConversation) consumeStream(ctx context.Context, stream core.S
 		reply.calls = append(reply.calls, chunk.ToolCalls...)
 		if chunk.Usage != nil {
 			reply.usage = *chunk.Usage
+			reply.hasUsage = true
 		}
 		if chunk.Finish != "" {
 			reply.reason = chunk.Finish

@@ -75,25 +75,12 @@ func (m chatModel) renderStatusBar() string {
 	if m.selection.isActive && !m.selection.isDragging {
 		copied = m.theme.dim.Render(" · ") + m.theme.assistantLabel.Render("⧉ copied")
 	}
-	markStyle := m.theme.mascotMark
-	if m.cancelTurn != nil && m.pendingApproval == nil && m.mascotFrame%4 == 0 {
-		markStyle = m.theme.dim
-	}
-	status := markStyle.Render(" "+m.renderCompactMascot()) + " " + lipgloss.NewStyle().Bold(true).Render(m.modelName) +
+	status := m.theme.mascotMark.Render(" ◆") + " " + lipgloss.NewStyle().Bold(true).Render(m.modelName) +
 		m.theme.dim.Render(" · ") + stateStyle.Render(state) +
-		m.theme.dim.Render(m.reportActiveTurnMetrics()) +
 		m.theme.dim.Render(" · last turn: ") + outcomeStyle.Render(reportOutcome(m.lastTurnOutcome)) + copied +
 		m.theme.dim.Render(reportSandboxStatus(m.sandboxTier, m.theme)+m.reportDictationStatus()+m.reportSpendStatus())
 	status += reportMCPHealth(m.unavailableMCPServers, m.theme)
 	return status + m.theme.dim.Render(m.reportTokenUsage(ansi.StringWidth(status)))
-}
-
-func (m chatModel) reportActiveTurnMetrics() string {
-	if m.cancelTurn == nil {
-		return ""
-	}
-	tokens := m.activeTurnUsage.InputTokens + m.activeTurnUsage.OutputTokens
-	return fmt.Sprintf(" · %s tok · %s", formatTokenCount(tokens), formatTurnDuration(m.turnElapsed))
 }
 
 // reportSpendStatus shows today against the daily ceiling, or the last turn against the turn ceiling when only that is set.
@@ -150,6 +137,10 @@ func (m chatModel) View() tea.View {
 	inputLine := m.input.View()
 	if m.pendingApproval != nil {
 		inputLine = renderApprovalModal(*m.pendingApproval, m.width, m.theme)
+	} else if m.confirmation != nil {
+		inputLine = renderConfirmation(*m.confirmation, m.width, m.theme)
+	} else if m.keyPromptProfile != "" {
+		inputLine = renderKeyPromptInput(inputLine, m.width, m.theme)
 	}
 	statusLine := ansi.Truncate(m.renderStatusBar(), m.width, ellipsis)
 	if m.brokerFailure != "" {
@@ -159,8 +150,15 @@ func (m chatModel) View() tea.View {
 	}
 	rows := m.listPaletteRows()
 	sections := []string{highlightSelection(m.viewport.View(), m.selection, m.viewport.YOffset(), m.theme)}
+	panelHeight := m.inlinePanelHeight()
 	if m.undoPicker != nil {
-		sections[0] = renderUndoPicker(*m.undoPicker, m.width, m.viewport.Height(), m.theme)
+		sections = append(sections, limitPanelRows(renderUndoPicker(*m.undoPicker, m.width, panelHeight, m.theme), panelHeight))
+	} else if m.memoryEditor != nil {
+		sections = append(sections, limitPanelRows(renderMemoryEditor(*m.memoryEditor, m.width, panelHeight, m.theme), panelHeight))
+	} else if m.settingsPanel != nil {
+		sections = append(sections, limitPanelRows(renderSettingsPanel(*m.settingsPanel, m.width, panelHeight, m.theme), panelHeight))
+	} else if m.commandPanel != nil {
+		sections = append(sections, limitPanelRows(renderCommandPanel(*m.commandPanel, m.width, panelHeight, m.theme), panelHeight))
 	}
 	if len(rows) > 0 {
 		sections = append(sections, m.renderPalette(rows))
@@ -175,11 +173,38 @@ func (m chatModel) View() tea.View {
 	view.MouseMode = tea.MouseModeCellMotion
 	// Hold-to-talk needs key releases; terminals without them report so, and push-to-talk toggles.
 	view.KeyboardEnhancements.ReportEventTypes = m.isDictationAvailable()
-	if cursor := m.input.Cursor(); cursor != nil && m.pendingApproval == nil && m.undoPicker == nil {
-		cursor.Y += m.viewport.Height() + len(rows) + 1
-		view.Cursor = cursor
+	if m.memoryEditor != nil {
+		if cursor := m.memoryEditor.textarea.Cursor(); cursor != nil {
+			view.Cursor = placeCursorAfterContent(cursor, sections[0], 0, 2)
+		}
+	} else if m.settingsPanel != nil {
+		cursor := m.settingsPanel.search.Cursor()
+		localX := 0
+		if m.settingsPanel.isEditing {
+			cursor = m.settingsPanel.editor.Cursor()
+			localX = 1
+		}
+		if cursor != nil {
+			view.Cursor = placeCursorAfterContent(cursor, sections[0], localX, 1)
+		}
+	} else if cursor := m.input.Cursor(); cursor != nil && m.pendingApproval == nil && m.undoPicker == nil &&
+		m.confirmation == nil && m.commandPanel == nil {
+		view.Cursor = placeCursorAfterContent(cursor, strings.Join(sections, "\n"), 0, 1)
 	}
 	return view
+}
+
+// placeCursorAfterContent translates a component cursor below already-rendered rows.
+func placeCursorAfterContent(cursor *tea.Cursor, content string, localX, localY int) *tea.Cursor {
+	cursor.X += localX
+	cursor.Y += strings.Count(content, "\n") + 1 + localY
+	return cursor
+}
+
+func renderKeyPromptInput(input string, width int, theme terminalTheme) string {
+	legend := "enter save · esc cancel"
+	available := max(width-ansi.StringWidth(legend)-2, 1)
+	return ansi.Truncate(input, available, ellipsis) + "  " + theme.dim.Render(legend)
 }
 
 // approvalLegend is the only three answers the keyboard accepts; it must always be fully
@@ -251,7 +276,31 @@ func reportOutcome(outcome turnOutcome) string {
 	return ""
 }
 
-func renderTranscript(t transcript, width, height int, modelName string, isDictationAvailable bool, theme terminalTheme, replies *replyRenderer, mascotFrame int) string {
+type activeTurnMetrics struct {
+	usage     core.Usage
+	elapsed   time.Duration
+	mark      string
+	isMarkDim bool
+}
+
+func (m chatModel) buildActiveTurnMetrics() *activeTurnMetrics {
+	if m.cancelTurn == nil {
+		return nil
+	}
+	mark := m.renderCompactMascot()
+	isMarkDim := m.pendingApproval == nil && m.mascotFrame%4 == 0
+	if m.isReducedMotion {
+		mark, isMarkDim = "◆", false
+	}
+	return &activeTurnMetrics{
+		usage:     m.activeTurnUsage,
+		elapsed:   m.turnElapsed,
+		mark:      mark,
+		isMarkDim: isMarkDim,
+	}
+}
+
+func renderTranscript(t transcript, width, height int, modelName string, isDictationAvailable bool, theme terminalTheme, replies *replyRenderer, mascotFrame int, activeMetrics *activeTurnMetrics) string {
 	sections := make([]string, 0, len(t.turns)+2)
 	if len(t.warnings) > 0 {
 		warnings := make([]string, 0, len(t.warnings))
@@ -266,10 +315,14 @@ func renderTranscript(t transcript, width, height int, modelName string, isDicta
 	if len(t.turns) == 0 && len(t.notices) == 0 {
 		sections = append(sections, renderWelcome(width, height, modelName, isDictationAvailable, theme, mascotFrame))
 	}
-	for _, turn := range t.turns {
+	for index, turn := range t.turns {
 		switch {
 		case !turn.isRewound:
-			sections = append(sections, renderTurn(turn, width, replies, theme))
+			var metrics *activeTurnMetrics
+			if index == len(t.turns)-1 {
+				metrics = activeMetrics
+			}
+			sections = append(sections, renderTurnWithActiveMetrics(turn, width, replies, theme, metrics))
 		case len(turn.notices) > 0: // a rewound turn shows only what /undo did, in its place
 			sections = append(sections, renderNotices(turn.notices, width, theme))
 		}
@@ -280,7 +333,15 @@ func renderTranscript(t transcript, width, height int, modelName string, isDicta
 // renderTurn lays a turn out as the prompt, then replies, thoughts, and tool cards in arrival order.
 // Only replies carry the travis label; thoughts and cards stay faint so they never read as the answer.
 func renderTurn(turn chatTurn, width int, replies *replyRenderer, theme terminalTheme) string {
-	lines := []string{wrapWithMargin(theme.userLabel.Render("you ›")+" "+turn.prompt, width), ""}
+	return renderTurnWithActiveMetrics(turn, width, replies, theme, nil)
+}
+
+func renderTurnWithActiveMetrics(turn chatTurn, width int, replies *replyRenderer, theme terminalTheme, activeMetrics *activeTurnMetrics) string {
+	lines := []string{wrapWithMargin(theme.userLabel.Render(">")+" "+turn.prompt, width)}
+	if activeMetrics != nil {
+		lines = append(lines, truncateWithMargin(renderActiveTurnMetrics(*activeMetrics, theme), width))
+	}
+	lines = append(lines, "")
 
 	for _, part := range turn.parts {
 		reply := strings.TrimSpace(part.text)
@@ -316,6 +377,16 @@ func renderTurn(turn chatTurn, width int, replies *replyRenderer, theme terminal
 	return strings.Join(lines, "\n")
 }
 
+func renderActiveTurnMetrics(metrics activeTurnMetrics, theme terminalTheme) string {
+	markStyle := theme.mascotMark
+	if metrics.isMarkDim {
+		markStyle = theme.dim
+	}
+	tokens := metrics.usage.InputTokens + metrics.usage.OutputTokens
+	return markStyle.Render("  "+metrics.mark) +
+		theme.dim.Render(fmt.Sprintf(" %s tokens · %s", formatTokenCount(tokens), formatTurnDuration(metrics.elapsed)))
+}
+
 func formatTurnDuration(elapsed time.Duration) string {
 	if elapsed < time.Second {
 		return "<1s"
@@ -330,7 +401,25 @@ func formatTurnDuration(elapsed time.Duration) string {
 func renderNotices(notices []string, width int, theme terminalTheme) string {
 	lines := make([]string, 0, len(notices))
 	for _, notice := range notices {
-		lines = append(lines, wrapWithMargin(theme.warning.Render("  "+notice), width))
+		if strings.HasPrefix(notice, "> ") {
+			lines = append(lines, wrapWithMargin(theme.userLabel.Render(notice), width))
+			continue
+		}
+		trimmed := strings.TrimSpace(notice)
+		style := theme.dim
+		switch {
+		case strings.HasPrefix(trimmed, "✓ "):
+			style = theme.success
+		case strings.HasPrefix(trimmed, "✗ "):
+			style = theme.error
+		case strings.HasPrefix(trimmed, "! "), strings.HasPrefix(trimmed, "usage:"):
+			style = theme.warning
+		case strings.HasPrefix(trimmed, "… "):
+			style = theme.tool
+		case strings.HasSuffix(trimmed, ":"):
+			style = theme.assistantLabel
+		}
+		lines = append(lines, wrapWithMargin(style.Render("  "+notice), width))
 	}
 	return strings.Join(lines, "\n")
 }

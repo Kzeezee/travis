@@ -62,7 +62,9 @@ type Options struct {
 	// Diagnostics, when set, shows its lines as notices while the chat runs.
 	Diagnostics *DiagnosticsWriter
 	// PushToTalkKey records while held; empty means ctrl+t (§5.10 ptt_key).
-	PushToTalkKey string
+	PushToTalkKey        string
+	IsVoiceInputEnabled  bool
+	IsVoiceOutputEnabled bool
 }
 
 // RestoredMessage is one logged message of a resumed session, with the turn it belongs to.
@@ -84,6 +86,21 @@ type SkillSummary struct {
 	Name, Tier, Description string
 }
 
+// VoiceConfiguration is the effective voice state after a configuration change.
+type VoiceConfiguration struct {
+	IsInputEnabled  bool
+	IsOutputEnabled bool
+	PushToTalkKey   string
+	StartDictation  func(ctx context.Context) (finish func() (string, error), err error)
+}
+
+// VoiceChange changes exactly one voice setting.
+type VoiceChange struct {
+	InputEnabled  *bool
+	OutputEnabled *bool
+	PushToTalkKey *string
+}
+
 // ChatActions are the operations the chat can ask of the session; the frontend calls them
 // without knowing what implements them.
 type ChatActions struct {
@@ -101,15 +118,18 @@ type ChatActions struct {
 	ListMCPServers    func() []MCPServerSummary
 	// ListModels names the models the active endpoint offers, for /model suggestions; nil means none.
 	ListModels func(ctx context.Context) ([]string, error)
-	// ListTools, ListSkills and ReadMemory query the session live, not a startup snapshot:
-	// a server that connects or dies mid-session must show up correctly in /tools.
+	// ListTools and ListSkills query the session live, not a startup snapshot.
 	ListTools  func() []string
 	ListSkills func() []SkillSummary
-	ReadMemory func(ctx context.Context) (string, error)
 	Undo       UndoActions
 	// StartDictation begins a push-to-talk recording; finish stops it and returns the transcript.
 	// Nil means voice input is off.
 	StartDictation func(ctx context.Context) (finish func() (string, error), err error)
+	// ConfigureVoice applies a voice change now and persists it to the user config.
+	ConfigureVoice func(change VoiceChange) (VoiceConfiguration, error)
+	Inspect        InspectionActions
+	Memory         MemoryActions
+	Settings       SettingsActions
 }
 
 // RunChat runs the interactive chat until the user quits or input ends.
@@ -303,6 +323,10 @@ type chatModel struct {
 	undoPicker *undoPicker
 	// keyPromptProfile names the provider profile whose API key the masked input is collecting.
 	keyPromptProfile string
+	confirmation     *confirmation
+	memoryEditor     *memoryEditor
+	settingsPanel    *settingsPanel
+	commandPanel     *commandPanel
 	// brokerFailure is set once the broker connection breaks; it never clears, since every
 	// later effect fails closed until travis restarts.
 	brokerFailure string
@@ -316,26 +340,32 @@ type chatModel struct {
 	// isDictationStopRequested remembers a release that came before the recording had started.
 	isDictationStopRequested bool
 	// canHoldToTalk is true once the terminal reports key releases; until then push-to-talk toggles.
-	canHoldToTalk  bool
-	pushToTalkKey  string
-	pushToTalkCode rune
+	canHoldToTalk        bool
+	pushToTalkKey        string
+	pushToTalkCode       rune
+	isVoiceInputEnabled  bool
+	isVoiceOutputEnabled bool
+	isVoiceConfiguring   bool
 
-	cancelTurn        context.CancelFunc // set only while a turn runs
-	isCancelRequested bool
-	hasInputEnded     bool
-	lastTurnOutcome   turnOutcome
-	themePreference   string
-	theme             terminalTheme
-	isDarkBackground  bool
-	isReducedMotion   bool
-	mascotFrame       int
-	startupFrames     int
-	settleFrames      int
-	isMascotTickArmed bool
-	clock             core.Clock
-	turnStartedAt     time.Time
-	turnElapsed       time.Duration
-	activeTurnUsage   core.Usage
+	cancelTurn           context.CancelFunc // set only while a turn runs
+	isCancelRequested    bool
+	hasInputEnded        bool
+	lastTurnOutcome      turnOutcome
+	themePreference      string
+	theme                terminalTheme
+	isDarkBackground     bool
+	isReducedMotion      bool
+	mascotFrame          int
+	startupFrames        int
+	settleFrames         int
+	isMascotBlinking     bool
+	isMascotTickArmed    bool
+	mascotTickInterval   time.Duration
+	mascotTickGeneration uint64
+	clock                core.Clock
+	turnStartedAt        time.Time
+	turnElapsed          time.Duration
+	activeTurnUsage      core.Usage
 }
 
 func buildChatModel(
@@ -362,6 +392,7 @@ func buildChatModel(
 		ctx: ctx, events: events, approvals: approvals, questions: opts.Questions, actions: actions, commands: buildSlashCommands(), modelName: opts.ModelName, contextLength: opts.ContextLength,
 		maxTurnCostUSD: opts.MaxTurnCostUSD, maxDailyCostUSD: opts.MaxDailyCostUSD, spentTodayUSD: opts.SpentTodayUSD, isPriced: opts.IsPriced,
 		viewport: viewport.New(), input: input, replies: &replyRenderer{}, pushToTalkKey: opts.PushToTalkKey,
+		isVoiceInputEnabled: opts.IsVoiceInputEnabled, isVoiceOutputEnabled: opts.IsVoiceOutputEnabled,
 		themePreference: themePreference, theme: buildTerminalTheme(themePreference), isDarkBackground: true, isReducedMotion: opts.ReducedMotion,
 		clock: clock,
 	}
@@ -370,8 +401,13 @@ func buildChatModel(
 	}
 	m.transcript.warnings = opts.StartupWarnings
 	m.transcript.restoreTurns(opts.History)
-	if len(opts.History) == 0 && len(opts.StartupWarnings) == 0 && !opts.ReducedMotion {
-		m.startupFrames, m.isMascotTickArmed = startupFrameCount, true
+	if len(opts.History) == 0 && !opts.ReducedMotion {
+		if len(opts.StartupWarnings) == 0 {
+			m.startupFrames = startupFrameCount
+		}
+		m.isMascotTickArmed = true
+		m.mascotTickInterval = m.reportMascotTickInterval()
+		m.mascotTickGeneration = 1
 	}
 	m.applyTheme(m.theme)
 	m.resize(defaultWidth, defaultHeight)
@@ -384,7 +420,7 @@ func (m chatModel) Init() tea.Cmd {
 		cmds = append(cmds, tea.RequestBackgroundColor)
 	}
 	if m.isMascotTickArmed {
-		cmds = append(cmds, scheduleMascotTick(m.clock, m.reportMascotTickInterval()))
+		cmds = append(cmds, scheduleMascotTick(m.clock, m.mascotTickInterval, m.mascotTickGeneration))
 	}
 	if m.questions != nil {
 		cmds = append(cmds, listenForQuestions(m.questions))
@@ -417,13 +453,18 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshTranscript()
 		}
 	case mascotTickMsg:
+		if msg.generation != 0 && msg.generation != m.mascotTickGeneration {
+			return m, nil
+		}
 		m.isMascotTickArmed = false
+		m.mascotTickInterval = 0
 		tickedAt := msg.at
 		if tickedAt.IsZero() {
 			tickedAt = m.clock.ReportCurrentTime()
 		}
 		m.updateTurnElapsed(tickedAt)
 		if m.shouldAnimateMascot() {
+			m.isMascotBlinking = false
 			m.mascotFrame++
 			if m.startupFrames > 0 {
 				m.startupFrames--
@@ -431,6 +472,12 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.settleFrames > 0 {
 				m.settleFrames--
 			}
+		} else if m.isMascotBlinking {
+			m.isMascotBlinking = false
+			m.mascotFrame = 2
+		} else if m.shouldBlinkMascot() {
+			m.isMascotBlinking = true
+			m.mascotFrame = 1
 		}
 		m.refreshTranscript()
 		cmd := m.armMascotAnimation(nil)
@@ -445,6 +492,20 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleDictationStarted(msg)
 	case dictationFinishedMsg:
 		return m.handleDictationFinished(msg)
+	case voiceConfiguredMsg:
+		return m.finishVoiceConfiguration(msg)
+	case inspectionFinishedMsg:
+		return m.finishInspection(msg)
+	case permissionRevokedMsg:
+		return m.finishPermissionRevocation(msg)
+	case memoryReadMsg:
+		return m.finishMemoryRead(msg)
+	case memoryChangedMsg:
+		return m.finishMemoryChange(msg)
+	case settingsLoadedMsg:
+		return m.finishSettingsLoad(msg)
+	case settingAppliedMsg:
+		return m.finishSettingApply(msg)
 	case tea.PasteMsg:
 		return m.handlePaste(msg)
 	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
@@ -532,7 +593,26 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // text landing in a prompt hidden behind a modal is text the user cannot see they are about
 // to send.
 func (m chatModel) handlePaste(paste tea.PasteMsg) (tea.Model, tea.Cmd) {
-	if m.pendingApproval != nil || m.pendingQuestion != nil || m.undoPicker != nil {
+	if m.memoryEditor != nil {
+		editor := *m.memoryEditor
+		var cmd tea.Cmd
+		editor.textarea, cmd = editor.textarea.Update(paste)
+		m.memoryEditor = &editor
+		return m, cmd
+	}
+	if m.settingsPanel != nil {
+		panel := *m.settingsPanel
+		var cmd tea.Cmd
+		if panel.isEditing {
+			panel.editor, cmd = panel.editor.Update(paste)
+		} else {
+			panel.search, cmd = panel.search.Update(paste)
+		}
+		m.settingsPanel = &panel
+		return m, cmd
+	}
+	if m.pendingApproval != nil || m.pendingQuestion != nil || m.undoPicker != nil || m.confirmation != nil ||
+		m.commandPanel != nil {
 		return m, nil
 	}
 	var cmd tea.Cmd
@@ -557,6 +637,18 @@ func (m chatModel) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.undoPicker != nil {
 		return m.handleUndoPickerKey(key)
+	}
+	if m.confirmation != nil {
+		return m.handleConfirmationKey(key)
+	}
+	if m.memoryEditor != nil {
+		return m.handleMemoryEditorKey(key)
+	}
+	if m.settingsPanel != nil {
+		return m.handleSettingsKey(key)
+	}
+	if m.commandPanel != nil {
+		return m.handleCommandPanelKey(key)
 	}
 	if m.keyPromptProfile != "" {
 		return m.handleKeyPromptKey(key)
@@ -642,6 +734,7 @@ func (m chatModel) handleQuestionKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.pendingQuestion = nil
 		m.input.Reset()
 		m.input.Prompt = " › "
+		m.transcript.addNotice("> " + answer)
 		m.refreshTranscript()
 		respond(answer)
 		if m.questions != nil {
@@ -812,22 +905,47 @@ func (m *chatModel) resize(width, height int) {
 	m.viewport.SetWidth(m.width)
 	m.fitViewport()
 	m.input.SetWidth(max(m.width-lipgloss.Width(m.input.Prompt)-1, 1))
+	if m.memoryEditor != nil {
+		m.memoryEditor.textarea.SetWidth(max(m.width-4, 1))
+		m.memoryEditor.textarea.SetHeight(max(m.inlinePanelHeight()-3, 3))
+	}
+	if m.settingsPanel != nil {
+		m.settingsPanel.search.SetWidth(max(m.width-12, 1))
+		m.settingsPanel.editor.SetWidth(max(m.width-11, 1))
+	}
 }
 
-// fitViewport gives the transcript whatever height the chrome and the open palette leave.
+// fitViewport gives the transcript whatever height the chrome and open controls leave.
 func (m *chatModel) fitViewport() {
 	isFollowingLatest := m.viewport.AtBottom()
-	m.viewport.SetHeight(max(m.height-chromeHeight-len(m.listPaletteRows()), 1))
+	m.viewport.SetHeight(max(m.height-chromeHeight-len(m.listPaletteRows())-m.inlinePanelHeight(), 1))
 	m.refreshTranscript()
 	if isFollowingLatest {
 		m.viewport.GotoBottom()
 	}
 }
 
+func (m chatModel) inlinePanelHeight() int {
+	if m.undoPicker == nil && m.memoryEditor == nil && m.settingsPanel == nil && m.commandPanel == nil {
+		return 0
+	}
+	return min(max(m.height-chromeHeight-1, 1), 10)
+}
+
 // refreshTranscript re-renders the transcript, following new output unless the user scrolled up.
 func (m *chatModel) refreshTranscript() {
 	isFollowingLatest := m.viewport.AtBottom()
-	content := renderTranscript(m.transcript, m.width, m.viewport.Height(), m.modelName, m.isDictationAvailable(), m.theme, m.replies, m.mascotFrame)
+	content := renderTranscript(
+		m.transcript,
+		m.width,
+		m.viewport.Height(),
+		m.modelName,
+		m.isDictationAvailable(),
+		m.theme,
+		m.replies,
+		m.mascotFrame,
+		m.buildActiveTurnMetrics(),
+	)
 	if m.pendingQuestion != nil {
 		content += "\n\n" + wrapWithMargin(m.theme.assistantLabel.Render("travis asks ›")+" "+m.pendingQuestion.Text, m.width)
 	}
@@ -846,11 +964,17 @@ func (m *chatModel) applyTheme(theme terminalTheme) {
 }
 
 func (m *chatModel) armMascotAnimation(cmd tea.Cmd) tea.Cmd {
-	if !m.shouldTickMascot() || m.isMascotTickArmed {
+	if !m.shouldTickMascot() {
 		return cmd
 	}
+	interval := m.reportMascotTickInterval()
+	if m.isMascotTickArmed && m.mascotTickInterval == interval {
+		return cmd
+	}
+	m.mascotTickGeneration++
 	m.isMascotTickArmed = true
-	return tea.Batch(cmd, scheduleMascotTick(m.clock, m.reportMascotTickInterval()))
+	m.mascotTickInterval = interval
+	return tea.Batch(cmd, scheduleMascotTick(m.clock, interval, m.mascotTickGeneration))
 }
 
 func (m *chatModel) updateTurnElapsed(at time.Time) {

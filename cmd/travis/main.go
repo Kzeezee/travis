@@ -198,15 +198,13 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	questions := make(chan core.QuestionRequest)
 	approver := terminal.BuildApprover(approvals)
 	questioner := terminal.BuildQuestioner(questions)
-	narrator, voiceWarning := startVoiceOutput(cfg.Voice.Output, bus, diagnostics)
+	voiceOutput, voiceWarning := startVoiceOutput(cfg.Voice.Output, bus, diagnostics)
 	if voiceWarning != "" {
 		startupWarnings = append(startupWarnings, voiceWarning)
 	}
-	if narrator != nil {
-		defer narrator.Close()
-		approver = voiceout.WrapApprover(approver, narrator)
-		questioner = voiceout.WrapQuestioner(questioner, narrator)
-	}
+	defer voiceOutput.Close()
+	approver = voiceout.WrapApprover(approver, voiceOutput)
+	questioner = voiceout.WrapQuestioner(questioner, voiceOutput)
 	start, err := resolveSessionStart(paths, *resume, *fork, *forkTurns)
 	if err != nil {
 		return err
@@ -233,7 +231,7 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 		Memory: sessionBroker.Remote, Commands: sessionBroker.Remote, Pages: sessionBroker.Remote,
 		History: sessionBroker.Remote,
 		Bus:     bus, Diagnostics: diagnostics, Redactor: redactor,
-		Questioner: questioner, Approver: approver, MCPPolicy: mcpPolicy, IsSpeechEnabled: narrator != nil,
+		Questioner: questioner, Approver: approver, MCPPolicy: mcpPolicy, IsSpeechEnabled: voiceOutput.ReportIsEnabled(),
 		MCPSandboxing: mcp.Sandboxing{
 			// travis-broker doubles as the sandbox launcher; its hash is checked again before every launch.
 			ResolveLauncher: func() (string, error) { return broker.ResolveVerifiedBrokerExecutable(brokerSHA256) },
@@ -277,22 +275,27 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	if spendErr != nil {
 		startupWarnings = append(startupWarnings, "spend: today's total is unknown: "+spendErr.Error())
 	}
+	voiceConfiguration := buildVoiceConfigurator(paths, cfg.Voice, voiceOutput, session.conversation, startDictation)
+	commandConfiguration := buildCommandSuite(*cfg, paths, sessionID, session, switcher, voiceConfiguration)
 	actions := terminal.ChatActions{
 		RunTurn:               session.conversation.RunAssistantTurn,
 		ResetHistory:          session.conversation.ResetHistory,
-		SelectModel:           session.conversation.SelectModel,
-		SwitchProvider:        switcher.SwitchProvider,
-		SwitchProviderWithKey: switcher.SwitchProviderWithKey,
+		SelectModel:           commandConfiguration.selectSessionModel,
+		SwitchProvider:        commandConfiguration.switchProvider,
+		SwitchProviderWithKey: commandConfiguration.switchProviderWithKey,
 		ListProviders:         switcher.ListProviders,
 		DescribeProviders:     switcher.DescribeProviders,
 		ListMCPServers:        session.listMCPServers,
 		ListModels:            switcher.ListModels,
 		ListTools:             session.reportToolNames,
 		ListSkills:            session.reportSkillSummaries,
-		ReadMemory:            session.memoryStore.ReadMemory,
 		Undo:                  terminal.UndoActions{ListTurns: session.conversation.ListTurns, Rewind: session.conversation.Rewind},
 
 		StartDictation: startDictation,
+		ConfigureVoice: voiceConfiguration.Configure,
+		Inspect:        commandConfiguration.buildInspectionActions(),
+		Memory:         commandConfiguration.buildMemoryActions(),
+		Settings:       commandConfiguration.buildSettingsActions(),
 	}
 	chatErr := terminal.RunChat(context.Background(), events, approvals, actions,
 		terminal.Options{
@@ -301,7 +304,9 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 			Theme: cfg.UI.Theme, ReducedMotion: cfg.UI.ReducedMotion,
 			MaxTurnCostUSD: cfg.Brain.MaxTurnCostUSD, MaxDailyCostUSD: cfg.Brain.MaxDailyCostUSD, SpentTodayUSD: spentToday,
 			IsPriced:        profile.InputUSDPerMTok > 0 || profile.OutputUSDPerMTok > 0,
-			StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions, Diagnostics: diagnostics, PushToTalkKey: cfg.Voice.Input.PushToTalkKey, History: restoredHistory,
+			StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions, Diagnostics: diagnostics,
+			PushToTalkKey: cfg.Voice.Input.PushToTalkKey, IsVoiceInputEnabled: startDictation != nil,
+			IsVoiceOutputEnabled: voiceOutput.ReportIsEnabled(), History: restoredHistory,
 		})
 	session.close()
 	fmt.Fprintf(os.Stderr, "travis: resume with: travis chat --resume %s\n", sessionID)
@@ -360,38 +365,44 @@ func (s *chatSession) reportSkillSummaries() []terminal.SkillSummary {
 	return out
 }
 
-// startVoiceOutput starts speaking what the bus marks for speech when voice output is on. A
-// machine with no speech program keeps the chat and turns voice off, saying why (R-19).
-func startVoiceOutput(cfg config.VoiceOutputCfg, bus *core.Bus, diagnostics io.Writer) (*voiceout.Narrator, string) {
-	if !cfg.Enabled {
-		return nil, ""
-	}
-	speaker, err := voiceout.BuildSystemSpeaker()
-	if err != nil {
-		return nil, fmt.Sprintf("voice: %v; voice output is off", err)
-	}
-	narrator := voiceout.StartNarrator(speaker, log.BuildTextLogger(diagnostics, log.LevelWarn))
+// startVoiceOutput observes speech for the whole chat so /voice can turn playback on later.
+func startVoiceOutput(cfg config.VoiceOutputCfg, bus *core.Bus, diagnostics io.Writer) (*voiceout.Output, string) {
+	output := voiceout.BuildOutput(log.BuildTextLogger(diagnostics, log.LevelWarn))
 	speech, _ := bus.Subscribe(func(event core.Event) bool { return event.ReportEventType() == core.EventSpeechRequested })
-	go narrator.SpeakRequestedSpeech(speech)
-	return narrator, ""
+	go output.SpeakRequestedSpeech(speech)
+	if !cfg.Enabled {
+		return output, ""
+	}
+	if err := output.SetEnabled(true); err != nil {
+		return output, fmt.Sprintf("voice: %v; voice output is off", err)
+	}
+	return output, ""
 }
 
 // buildDictation is push-to-talk when voice input is on. A missing voice module, or an OS with no
 // capture backend, keeps the chat and turns voice input off, saying why (R-19).
 func buildDictation(cfg config.VoiceInputCfg) (func(context.Context) (func() (string, error), error), string) {
-	if !cfg.Enabled {
-		return nil, ""
-	}
-	if !voicein.ReportIsCaptureSupported() {
-		return nil, "voice: this OS has no microphone support; voice input is off"
-	}
-	module, err := voicein.ResolveModuleFiles()
+	start, err := resolveDictation(cfg)
 	if err != nil {
 		return nil, fmt.Sprintf("voice: %v; voice input is off", err)
 	}
+	return start, ""
+}
+
+func resolveDictation(cfg config.VoiceInputCfg) (func(context.Context) (func() (string, error), error), error) {
+	if !cfg.Enabled {
+		return nil, nil
+	}
+	if !voicein.ReportIsCaptureSupported() {
+		return nil, fmt.Errorf("this OS has no microphone support")
+	}
+	module, err := voicein.ResolveModuleFiles()
+	if err != nil {
+		return nil, err
+	}
 	dictation := voicein.BuildDictation(voicein.BuildHelperCapturer(module.AudioHelper),
 		voicein.BuildWhistleTranscriber(module.SpeechEngine, module.SpeechModel))
-	return dictation.StartDictation, ""
+	return dictation.StartDictation, nil
 }
 
 // buildSessionBus is the bus one chat session publishes to; diagnostics receives its warnings.

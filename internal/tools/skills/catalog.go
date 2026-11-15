@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -48,6 +50,7 @@ type skill struct {
 	Body        string
 	Tier        Tier
 	Root        string
+	Path        string
 	ContentHash [sha256.Size]byte
 }
 
@@ -184,6 +187,34 @@ type SkillSummary struct {
 	Name        string
 	Description string
 	Tier        Tier
+}
+
+// InstructionSource is metadata for an active prompt source; it never exposes a skill body.
+type InstructionSource struct {
+	Kind, Name, Path, Tier, Status, Hash string
+	Bytes                                int
+}
+
+// ReportInstructionSources lists the retained approved snapshot without rereading or asking.
+func (c *Catalog) ReportInstructionSources() []InstructionSource {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var sources []InstructionSource
+	if c.agentsBlock != "" {
+		hash := sha256.Sum256([]byte(c.agentsBlock))
+		sources = append(sources, InstructionSource{
+			Kind: "agents", Name: "AGENTS.md", Path: filepath.Join(c.paths.WorkspaceDir, agentsFileName),
+			Tier: TierWorkspace.String(), Status: "active", Hash: fmt.Sprintf("%x", hash), Bytes: len(c.agentsBlock),
+		})
+	}
+	for _, name := range slices.Sorted(maps.Keys(c.byName)) {
+		s := c.byName[name]
+		sources = append(sources, InstructionSource{
+			Kind: "skill-index", Name: s.Name, Path: s.Path, Tier: s.Tier.String(), Status: "active",
+			Hash: fmt.Sprintf("%x", s.ContentHash), Bytes: len(s.Body),
+		})
+	}
+	return sources
 }
 
 // ReportSkillSummaries lists every loaded skill, sorted by name.

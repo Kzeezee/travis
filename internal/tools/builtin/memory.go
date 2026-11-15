@@ -62,7 +62,10 @@ func (t *MemoryTool) Invoke(ctx context.Context, arguments json.RawMessage) (cor
 		if err := t.store.ReplaceMemory(ctx, *args.Content); err != nil {
 			return t.reportFailure(ctx, err)
 		}
-		return core.ToolOutput{Content: strings.TrimSpace(*args.Content), Display: "updated memory"}, nil
+		return core.ToolOutput{
+			Content: strings.TrimSpace(*args.Content), Display: "updated memory",
+			IsUntrusted: core.ReportIsFromUntrustedStep(ctx),
+		}, nil
 	default:
 		return buildErrorOutput(errorInvalidArguments, map[string]any{"detail": "action must be read or replace"}), nil
 	}

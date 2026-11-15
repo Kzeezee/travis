@@ -13,6 +13,7 @@ import (
 
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/security/broker"
+	"github.com/Kzeezee/travis/internal/security/policy"
 )
 
 func writeWorkspaceFile(t *testing.T, root, rel, content string) string {
@@ -223,6 +224,32 @@ func TestLocalBrokerAddDecisionRuleAccumulatesAcrossCalls(t *testing.T) {
 	}
 	if rules := readDecisionRules(t, root); len(rules) != 2 {
 		t.Fatalf("decisions.toml has %d rules, want 2: %+v", len(rules), rules)
+	}
+}
+
+func TestSecuritySnapshotLoadsAndRevokesDurableDecisionRules(t *testing.T) {
+	root := t.TempDir()
+	local := broker.BuildLocalBroker(root, core.SystemClock{})
+	rule := core.DecisionRule{
+		Kind: core.CapabilityFSWrite, Scope: filepath.Join(root, "notes.md"),
+		Decision: core.DecisionAllow, Source: "test",
+	}
+	if err := local.AddDecisionRule(context.Background(), rule); err != nil {
+		t.Fatal(err)
+	}
+	enforced := broker.BuildPolicyEnforcedBroker(
+		root, policy.New(nil, nil, nil, false, ""), discardRecords(), nil, "", core.SystemClock{},
+	)
+	snapshot, err := enforced.ReportSecuritySnapshot(context.Background())
+	if err != nil || len(snapshot.Rules) != 1 || snapshot.Rules[0].ID == "" {
+		t.Fatalf("snapshot = %+v, %v; want one stable rule", snapshot, err)
+	}
+	if err := enforced.RevokeDecisionRule(context.Background(), snapshot.Rules[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = enforced.ReportSecuritySnapshot(context.Background())
+	if err != nil || len(snapshot.Rules) != 0 {
+		t.Fatalf("snapshot after revoke = %+v, %v; want no rules", snapshot, err)
 	}
 }
 

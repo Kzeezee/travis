@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,6 +19,7 @@ func TestSlashCommandLookup(t *testing.T) {
 		wantFound bool
 	}{
 		{name: "by name", word: "model", wantName: "model", wantFound: true},
+		{name: "exit alias", word: "exit", wantName: "exit", wantFound: true},
 		{name: "former alias is unknown", word: "clear"},
 		{name: "unknown", word: "foo"},
 		{name: "empty word", word: ""},
@@ -31,6 +33,38 @@ func TestSlashCommandLookup(t *testing.T) {
 				t.Fatalf("got %q (found %v), want %q (found %v)", command.name, isFound, tt.wantName, tt.wantFound)
 			}
 		})
+	}
+}
+
+func TestSlashCommandInputIsRecordedOnlyWhenItProducesTranscriptOutput(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{input: "/help"},
+		{input: "/settings"},
+		{input: "/settings ignored"},
+		{input: "/theme"},
+		{input: "/model"},
+		{input: "/provider"},
+		{input: "/permissions"},
+		{input: "/memory"},
+		{input: "/memory edit"},
+		{input: "/memory clear"},
+		{input: "/undo"},
+		{input: "/theme light", want: true},
+		{input: "/model qwen", want: true},
+		{input: "/provider local", want: true},
+		{input: "/permissions revoke rule-1", want: true},
+		{input: "/memory add remember this", want: true},
+		{input: "/context", want: true},
+		{input: "/doctor live", want: true},
+	}
+	for _, tt := range tests {
+		name, args, _ := strings.Cut(strings.TrimPrefix(tt.input, "/"), " ")
+		if got := shouldRecordSlashCommand(name, strings.TrimSpace(args)); got != tt.want {
+			t.Errorf("%s: record = %v, want %v", tt.input, got, tt.want)
+		}
 	}
 }
 
@@ -59,10 +93,10 @@ type recordingActions struct {
 	resets        int
 	selectedModel string
 
-	toolNames []string
-	skills    []SkillSummary
-	memory    string
-	memoryErr error
+	toolNames    []string
+	skills       []SkillSummary
+	voiceState   VoiceConfiguration
+	voiceChanges []VoiceChange
 }
 
 func (r *recordingActions) buildChatActions() ChatActions {
@@ -75,11 +109,34 @@ func (r *recordingActions) buildChatActions() ChatActions {
 		SelectModel:  func(name string) { r.selectedModel = name },
 		ListTools:    func() []string { return r.toolNames },
 		ListSkills:   func() []SkillSummary { return r.skills },
-		ReadMemory:   func(context.Context) (string, error) { return r.memory, r.memoryErr },
+		ConfigureVoice: func(change VoiceChange) (VoiceConfiguration, error) {
+			r.voiceChanges = append(r.voiceChanges, change)
+			if change.InputEnabled != nil {
+				r.voiceState.IsInputEnabled = *change.InputEnabled
+			}
+			if change.OutputEnabled != nil {
+				r.voiceState.IsOutputEnabled = *change.OutputEnabled
+			}
+			if change.PushToTalkKey != nil {
+				r.voiceState.PushToTalkKey = *change.PushToTalkKey
+			}
+			return r.voiceState, nil
+		},
 	}
 }
 
 func TestSlashCommandsDispatch(t *testing.T) {
+	t.Run("/exit quits without reaching the model", func(t *testing.T) {
+		recorder := &recordingActions{}
+		m := buildTestModel(recorder.buildChatActions())
+
+		_, cmd := pressKeys(m, append(typedKeys("/exit"), enterKey)...)
+
+		if !isQuitCmd(cmd) || len(recorder.prompts) != 0 {
+			t.Fatalf("quit = %t, prompts = %v; want quit with no model dispatch", isQuitCmd(cmd), recorder.prompts)
+		}
+	})
+
 	t.Run("/new resets history and the transcript", func(t *testing.T) {
 		recorder := &recordingActions{}
 		m := buildTestModel(recorder.buildChatActions())
@@ -91,8 +148,9 @@ func TestSlashCommandsDispatch(t *testing.T) {
 			t.Fatalf("got %d resets, want 1", recorder.resets)
 		}
 		view := renderPlainView(m)
-		if strings.Contains(view, "earlier question") || !strings.Contains(view, "new conversation") {
-			t.Fatalf("got view\n%s\nwant earlier turns gone and a new conversation notice", view)
+		if strings.Contains(view, "earlier question") || !strings.Contains(view, "> /new") ||
+			!strings.Contains(view, "new conversation") {
+			t.Fatalf("got view\n%s\nwant earlier turns gone, the command marker, and a new conversation notice", view)
 		}
 	})
 
@@ -110,14 +168,52 @@ func TestSlashCommandsDispatch(t *testing.T) {
 		}
 	})
 
-	t.Run("/model without a name reports the current model", func(t *testing.T) {
+	t.Run("/model without a name opens a picker with the current model", func(t *testing.T) {
 		recorder := &recordingActions{}
 		m := buildTestModel(recorder.buildChatActions())
 
 		m, _ = pressKeys(m, append(typedKeys("/model"), enterKey)...)
 
-		if recorder.selectedModel != "" || !strings.Contains(renderPlainView(m), "model: test-model") {
-			t.Fatalf("got selected %q and view\n%s\nwant no switch and the current model shown", recorder.selectedModel, renderPlainView(m))
+		if recorder.selectedModel != "" || m.commandPanel == nil || !strings.Contains(renderPlainView(m), "current: test-model") {
+			t.Fatalf("got selected %q and view\n%s\nwant no switch and an open model panel", recorder.selectedModel, renderPlainView(m))
+		}
+	})
+
+	t.Run("/voice reports and changes input output and the key", func(t *testing.T) {
+		recorder := &recordingActions{voiceState: VoiceConfiguration{PushToTalkKey: defaultPushToTalkKey}}
+		m := buildTestModel(recorder.buildChatActions())
+
+		m, _ = pressKeys(m, append(typedKeys("/voice status"), enterKey)...)
+		if view := renderPlainView(m); !strings.Contains(view, "Voice input: Disabled") ||
+			!strings.Contains(view, "Voice output: Disabled") || !strings.Contains(view, "Push-to-talk key: ctrl+t") {
+			t.Fatalf("got view\n%s\nwant the initial voice status", view)
+		}
+
+		var cmd tea.Cmd
+		m, cmd = pressKeys(m, append(typedKeys("/voice input on"), enterKey)...)
+		m, _ = updateModel(m, cmd())
+		m, cmd = pressKeys(m, append(typedKeys("/voice output on"), enterKey)...)
+		m, _ = updateModel(m, cmd())
+		m, cmd = pressKeys(m, append(typedKeys("/voice key ctrl+r"), enterKey)...)
+		m, _ = updateModel(m, cmd())
+
+		if len(recorder.voiceChanges) != 3 || !m.isVoiceInputEnabled || !m.isVoiceOutputEnabled || m.pushToTalkKey != "ctrl+r" {
+			t.Fatalf("got changes %d and state input=%v output=%v key=%q", len(recorder.voiceChanges),
+				m.isVoiceInputEnabled, m.isVoiceOutputEnabled, m.pushToTalkKey)
+		}
+		if view := renderPlainView(m); !strings.Contains(view, "✓ Push-to-talk key: ctrl+r") {
+			t.Fatalf("got view\n%s\nwant the saved key notice", view)
+		}
+	})
+
+	t.Run("/voice rejects invalid syntax without changing configuration", func(t *testing.T) {
+		recorder := &recordingActions{}
+		m := buildTestModel(recorder.buildChatActions())
+
+		m, cmd := pressKeys(m, append(typedKeys("/voice output maybe"), enterKey)...)
+
+		if cmd != nil || len(recorder.voiceChanges) != 0 || !strings.Contains(renderPlainView(m), "usage: "+voiceCommandUsage) {
+			t.Fatalf("got cmd=%v changes=%d view\n%s", cmd != nil, len(recorder.voiceChanges), renderPlainView(m))
 		}
 	})
 
@@ -130,8 +226,10 @@ func TestSlashCommandsDispatch(t *testing.T) {
 		if len(recorder.prompts) != 0 || cmd != nil {
 			t.Fatalf("got prompts %q, want none sent to the model", recorder.prompts)
 		}
-		if view := renderPlainView(m); !strings.Contains(view, "unknown command /foo — try /help") {
-			t.Fatalf("got view\n%s\nwant the unknown command notice", view)
+		if view := renderPlainView(m); !strings.Contains(view, "> /foo bar") ||
+			!strings.Contains(view, "! Unknown command: /foo") ||
+			!strings.Contains(view, "Run /help to see available commands.") {
+			t.Fatalf("got view\n%s\nwant the submitted command and unknown command notice", view)
 		}
 	})
 
@@ -141,7 +239,8 @@ func TestSlashCommandsDispatch(t *testing.T) {
 
 		m, _ = pressKeys(m, append(typedKeys("/tools"), enterKey)...)
 
-		if view := renderPlainView(m); !strings.Contains(view, "tools: fs.read, fs.write") {
+		if view := renderPlainView(m); !strings.Contains(view, "✓ fs.read: Available") ||
+			!strings.Contains(view, "✓ fs.write: Available") {
 			t.Fatalf("got view\n%s\nwant the tool list", view)
 		}
 	})
@@ -154,19 +253,33 @@ func TestSlashCommandsDispatch(t *testing.T) {
 
 		m, _ = pressKeys(m, append(typedKeys("/skills"), enterKey)...)
 
-		if view := renderPlainView(m); !strings.Contains(view, "notes [user]: search and summarize notes") {
+		if view := renderPlainView(m); !strings.Contains(view, "✓ notes: search and summarize notes") ||
+			!strings.Contains(view, "Installed for your user account.") {
 			t.Fatalf("got view\n%s\nwant the skill summary", view)
 		}
 	})
 
-	t.Run("/memory shows the current memory content", func(t *testing.T) {
-		recorder := &recordingActions{memory: "# Memory\n\nremember the deadline"}
-		m := buildTestModel(recorder.buildChatActions())
+	t.Run("/memory opens the memory actions", func(t *testing.T) {
+		recorder := &recordingActions{}
+		actions := recorder.buildChatActions()
+		actions.Memory = MemoryActions{
+			Read:   func(context.Context) (MemoryDocument, error) { return MemoryDocument{}, nil },
+			Change: func(context.Context, MemoryChange) (MemoryDocument, error) { return MemoryDocument{}, nil },
+		}
+		m := buildTestModel(actions)
+		m.transcript.addNotice("earlier transcript output")
+		before := slices.Clone(m.transcript.notices)
 
 		m, _ = pressKeys(m, append(typedKeys("/memory"), enterKey)...)
 
-		if view := renderPlainView(m); !strings.Contains(view, "remember the deadline") {
-			t.Fatalf("got view\n%s\nwant the memory content", view)
+		if view := renderPlainView(m); m.commandPanel == nil || !strings.Contains(view, "Edit your trusted notes") ||
+			!strings.Contains(view, "Remove your trusted notes") || strings.Contains(view, "Show") {
+			t.Fatalf("got view\n%s\nwant the memory action panel", view)
+		}
+		m, _ = pressKeys(m, escKey)
+		if m.commandPanel != nil || m.input.Value() != "" || !slices.Equal(m.transcript.notices, before) {
+			t.Fatalf("panel = %v, input = %q, notices = %q; want unchanged transcript and empty prompt",
+				m.commandPanel != nil, m.input.Value(), m.transcript.notices)
 		}
 	})
 
@@ -180,7 +293,8 @@ func TestSlashCommandsDispatch(t *testing.T) {
 
 		m, _ = pressKeys(m, append(typedKeys("/cost"), enterKey)...)
 
-		if view := renderPlainView(m); !strings.Contains(view, "tokens: in 15 · out 5") {
+		if view := renderPlainView(m); !strings.Contains(view, "Input tokens: 15") ||
+			!strings.Contains(view, "Output tokens: 5") || !strings.Contains(view, "Total tokens: 20") {
 			t.Fatalf("got view\n%s\nwant the summed usage", view)
 		}
 	})
@@ -195,7 +309,8 @@ func TestSlashCommandsDispatch(t *testing.T) {
 
 		m, _ = pressKeys(m, append(typedKeys("/cost"), enterKey)...)
 
-		if view := renderPlainView(m); !strings.Contains(view, "tokens: in 15 · out 5 · ~$0.12") {
+		if view := renderPlainView(m); !strings.Contains(view, "Input tokens: 15") ||
+			!strings.Contains(view, "Output tokens: 5") || !strings.Contains(view, "Estimated cost: $0.12") {
 			t.Fatalf("got view\n%s\nwant the summed usage and spend", view)
 		}
 	})

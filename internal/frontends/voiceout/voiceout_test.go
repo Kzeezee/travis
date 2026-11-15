@@ -76,6 +76,42 @@ func TestNarratorCutsOverlongSpeech(t *testing.T) {
 	}
 }
 
+func TestOutputCanBeEnabledAndDisabledDuringAChat(t *testing.T) {
+	spoken := make(chan string, queuedLineLimit)
+	output := BuildOutput(discardLogger{})
+	output.buildSpeaker = func() (Speaker, error) { return recordingSpeaker{spoken: spoken}, nil }
+	t.Cleanup(output.Close)
+
+	output.Say("off")
+	if err := output.SetEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	output.Say("on")
+	if got := receiveSpoken(t, spoken); got != "on" {
+		t.Fatalf("spoke %q, want on", got)
+	}
+	if !output.ReportIsEnabled() {
+		t.Fatal("output did not report enabled")
+	}
+
+	if err := output.SetEnabled(false); err != nil {
+		t.Fatal(err)
+	}
+	output.Say("off again")
+	if output.ReportIsEnabled() {
+		t.Fatal("output still reported enabled")
+	}
+}
+
+func TestOutputReportsSpeakerSetupFailureAndStaysOff(t *testing.T) {
+	output := BuildOutput(discardLogger{})
+	output.buildSpeaker = func() (Speaker, error) { return nil, errors.New("speaker missing") }
+
+	if err := output.SetEnabled(true); err == nil || output.ReportIsEnabled() {
+		t.Fatalf("SetEnabled() error = %v, enabled = %v; want an error and disabled output", err, output.ReportIsEnabled())
+	}
+}
+
 type fixedApprover struct{ decision core.ApprovalDecision }
 
 func (a fixedApprover) RequestApproval(context.Context, core.Operation) (core.ApprovalDecision, error) {

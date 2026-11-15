@@ -93,6 +93,7 @@ type PolicyEnforcedBroker struct {
 	records       SessionRecords
 	memoryStore   core.MemoryStore
 	memoryPath    string
+	recentDenials []string
 	// dialFetchAddress and fetchTLSConfig are how fetch reaches the network; nil means the
 	// real §9.3 rules. Only a test in this package sets them — see buildFetchClient.
 	dialFetchAddress func(ctx context.Context, network, address string) (net.Conn, error)
@@ -116,6 +117,12 @@ func BuildPolicyEnforcedBroker(workspaceDir string, sessionPolicy policy.Policy,
 		b.memoryPath = filepath.Join(resolveRootSymlinks(stateDir), memory.FileName)
 	}
 	b.paths = config.PathSet{WorkspaceDir: b.resolvedRoot}
+	if rules, err := b.listDecisionRules(); err == nil {
+		for _, summary := range rules {
+			rule := summary.Rule
+			b.approvals.alwaysAllowed[core.Capability{Kind: rule.Kind, Scope: rule.Scope}] = true
+		}
+	}
 	b.authorizeRead = func(ctx context.Context, path string) error { return b.authorize(ctx, core.CapabilityFSRead, path) }
 	b.authorizeWrite = func(ctx context.Context, path string) error { return b.authorize(ctx, core.CapabilityFSWrite, path) }
 	b.recordWrite = b.backUpAndLogWrite
@@ -146,6 +153,34 @@ func (b *PolicyEnforcedBroker) ReplaceMemory(ctx context.Context, content string
 	err := b.memoryStore.ReplaceMemory(ctx, content)
 	b.approvals.settleOnce(err)
 	return err
+}
+
+func (b *PolicyEnforcedBroker) ReadMemoryDocument(ctx context.Context) (core.MemoryDocument, error) {
+	editor, ok := b.memoryStore.(core.MemoryEditor)
+	if !ok {
+		return core.MemoryDocument{}, fmt.Errorf("memory editing is unavailable: %w", core.ErrUnsupported)
+	}
+	if err := b.authorizeMemory(ctx, core.CapabilityFSRead); err != nil {
+		b.approvals.settleOnce(err)
+		return core.MemoryDocument{}, err
+	}
+	doc, err := editor.ReadMemoryDocument(ctx)
+	b.approvals.settleOnce(err)
+	return doc, err
+}
+
+func (b *PolicyEnforcedBroker) ChangeMemory(ctx context.Context, change core.MemoryChange) (core.MemoryDocument, error) {
+	editor, ok := b.memoryStore.(core.MemoryEditor)
+	if !ok {
+		return core.MemoryDocument{}, fmt.Errorf("memory editing is unavailable: %w", core.ErrUnsupported)
+	}
+	if err := b.authorizeMemory(ctx, core.CapabilityFSWrite); err != nil {
+		b.approvals.settleOnce(err)
+		return core.MemoryDocument{}, err
+	}
+	doc, err := editor.ChangeMemory(ctx, change)
+	b.approvals.settleOnce(err)
+	return doc, err
 }
 
 func (b *PolicyEnforcedBroker) DescribePath(ctx context.Context, path string) (core.PathInfo, error) {
@@ -264,6 +299,10 @@ func (b *PolicyEnforcedBroker) authorizeRequest(ctx context.Context, request pol
 	case policy.Deny:
 		rule := reportDecidingRule(decision)
 		denied := core.Capability{Kind: kind, Scope: path}
+		b.recentDenials = append(b.recentDenials, fmt.Sprintf("%s %s: %s", kind, path, rule))
+		if len(b.recentDenials) > 10 {
+			b.recentDenials = b.recentDenials[len(b.recentDenials)-10:]
+		}
 		refusal := fmt.Errorf("refused by policy (%s): %w", rule, core.ErrDenied)
 		return errors.Join(refusal, b.appendBrokerFact(ctx, core.SessionEntry{Kind: core.EntryPolicyDenied, Capability: &denied, Detail: rule}))
 	}

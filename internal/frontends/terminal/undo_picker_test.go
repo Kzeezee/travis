@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -82,7 +83,7 @@ func TestUndoSaysWhenThereIsNothingToUndoOrItCannot(t *testing.T) {
 		want string
 	}{
 		"no turns":    {&fakeUndo{}, "nothing to undo yet"},
-		"list failed": {&fakeUndo{listErr: errors.New("broker unreachable")}, "✗ undo: broker unreachable"},
+		"list failed": {&fakeUndo{listErr: errors.New("broker unreachable")}, "✗ broker unreachable"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := submitUndo(t, buildUndoModel(tc.undo))
@@ -119,14 +120,19 @@ func TestUndoPickerChoosesTurnAndModeAndRewinds(t *testing.T) {
 
 func TestUndoPickerTakesEveryKeyAndEscCancels(t *testing.T) {
 	undo := &fakeUndo{turns: buildThreeTurns()}
-	m := submitUndo(t, buildUndoModel(undo))
+	m := buildUndoModel(undo)
+	m.transcript.addNotice("earlier transcript output")
+	before := slices.Clone(m.transcript.notices)
+	m = submitUndo(t, m)
 	m, _ = pressKeys(m, typedKeys("hello")...)
 	if m.input.Value() != "" {
 		t.Fatalf("input = %q, want keys kept from it while the picker is open", m.input.Value())
 	}
 	m, cmd := pressKeys(m, escKey)
-	if m.undoPicker != nil || cmd != nil || undo.rewoundFrom != "" {
-		t.Fatal("esc should close the picker without rewinding")
+	if m.undoPicker != nil || cmd != nil || undo.rewoundFrom != "" || m.input.Value() != "" ||
+		!slices.Equal(m.transcript.notices, before) {
+		t.Fatalf("picker = %v, input = %q, notices = %q; want unchanged transcript and empty prompt",
+			m.undoPicker != nil, m.input.Value(), m.transcript.notices)
 	}
 }
 
@@ -174,7 +180,7 @@ func TestRewindingTheConversationHidesTurnsAndReturnsThePrompt(t *testing.T) {
 	m, _ = updateModel(m, rewindFinishedMsg{fromTurn: "t2", mode: core.RewindFilesAndConversation, report: report})
 
 	view := renderPlainView(m)
-	if strings.Contains(view, "you › second ask") || strings.Contains(view, "answer to second ask") {
+	if strings.Contains(view, "> second ask") || strings.Contains(view, "answer to second ask") {
 		t.Fatalf("view\n%s\nwant the second turn gone", view)
 	}
 	if !strings.Contains(view, "answer to first ask") || !strings.Contains(view, "↺ rewound the conversation · restored notes/today.md · left b.md (changed") {
@@ -204,7 +210,11 @@ func TestUndoPickerGoldenFrames(t *testing.T) {
 		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
 			m := submitUndo(t, buildUndoModel(&fakeUndo{turns: buildThreeTurns()}))
 			m, _ = pressKeys(m, tea.WindowSizeMsg{Width: width, Height: 16}, tea.KeyPressMsg{Code: tea.KeyDown})
-			teatest.RequireEqualOutput(t, []byte(renderPlainView(m)))
+			lines := strings.Split(renderPlainView(m), "\n")
+			for index := range lines {
+				lines[index] = strings.TrimRight(lines[index], " ")
+			}
+			teatest.RequireEqualOutput(t, []byte(strings.Join(lines, "\n")))
 		})
 	}
 }

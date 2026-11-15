@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,7 +53,7 @@ func TestGoldenFrames(t *testing.T) {
 			tm.Send(inputEndedMsg{}) // quit once the turn finishes
 
 			final := tm.FinalModel(t, teatest.WithFinalTimeout(5*time.Second)).(chatModel)
-			teatest.RequireEqualOutput(t, []byte(renderPlainView(final)))
+			teatest.RequireEqualOutput(t, []byte(trimDynamicTranscriptPadding(renderPlainView(final))))
 		})
 	}
 
@@ -79,7 +80,7 @@ func TestGoldenFrames(t *testing.T) {
 				core.AssistantTextStreamed{Text: markdownReply},
 				core.TurnCompleted{Reason: core.StopEndTurn},
 			}})
-			teatest.RequireEqualOutput(t, []byte(renderPlainView(m)))
+			teatest.RequireEqualOutput(t, []byte(trimDynamicTranscriptPadding(renderPlainView(m))))
 		})
 	}
 
@@ -117,7 +118,7 @@ func TestGoldenFrames(t *testing.T) {
 		m.turnElapsed = 3 * time.Second
 		m.mascotFrame = 2
 		m.refreshTranscript()
-		teatest.RequireEqualOutput(t, []byte(renderPlainView(m)))
+		teatest.RequireEqualOutput(t, []byte(trimDynamicTranscriptPadding(renderPlainView(m))))
 	})
 
 	t.Run("turn_metrics_complete_width_80", func(t *testing.T) {
@@ -130,7 +131,7 @@ func TestGoldenFrames(t *testing.T) {
 		m.transcript.finishTurn(1, turnSucceeded, "", 4*time.Second)
 		m.lastTurnOutcome = turnSucceeded
 		m.refreshTranscript()
-		teatest.RequireEqualOutput(t, []byte(renderPlainView(m)))
+		teatest.RequireEqualOutput(t, []byte(trimDynamicTranscriptPadding(renderPlainView(m))))
 	})
 
 	spendCases := []struct {
@@ -162,6 +163,18 @@ func TestGoldenFrames(t *testing.T) {
 		m, _ = pressKeys(m, tea.KeyPressMsg{Code: tea.KeyDown})
 		teatest.RequireEqualOutput(t, []byte(renderPlainView(m)))
 	})
+}
+
+func trimDynamicTranscriptPadding(content string) string {
+	lines := strings.Split(content, "\n")
+	for index, line := range lines {
+		trimmed := strings.TrimLeft(line, " ")
+		if strings.HasPrefix(trimmed, "> ") ||
+			(strings.HasPrefix(trimmed, "◆ ") && strings.Contains(trimmed, " tokens · ")) {
+			lines[index] = strings.TrimRight(line, " ")
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 const markdownReply = "Your notes folder has **three** files:\n\n- `groceries.md`\n- `cs464.md`\n- `ideas.md`, which I couldn't open\n\n```go\nos.ReadDir(\"notes\")\n```"

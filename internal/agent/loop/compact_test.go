@@ -51,7 +51,9 @@ func (p *compactingProvider) Chat(_ context.Context, request core.ProviderReques
 			return nil, errSummariserDown
 		}
 		summary := cmp.Or(p.summary, testSummary)
-		return buildTextStream(core.Chunk{Text: summary, Finish: p.summaryFinish}), nil
+		return buildTextStream(core.Chunk{
+			Text: summary, Usage: &core.Usage{InputTokens: 11, OutputTokens: 3}, Finish: p.summaryFinish,
+		}), nil
 	}
 	if p.rejectAboveTokens > 0 && estimateTokens(request) > p.rejectAboveTokens {
 		p.rejectedCount++
@@ -133,6 +135,10 @@ func TestCompactionReplacesOlderTurnsWithASummaryOnceOverTheThreshold(t *testing
 	}
 	if prompt, _ := messages[0].Parts[1].(core.TextPart); prompt.Text != secondPrompt {
 		t.Fatal("the current prompt was altered by compaction")
+	}
+	snapshot := conversation.ReportContextSnapshot()
+	if !snapshot.HasSummarizerUsage || snapshot.SummarizerInputTokens != 11 || snapshot.SummarizerOutputTokens != 3 {
+		t.Fatalf("context snapshot summarizer usage = %+v, want 11 input and 3 output", snapshot)
 	}
 	if len(log.entries) != 4 {
 		t.Fatalf("session log has %d entries, want all 4 kept verbatim", len(log.entries))

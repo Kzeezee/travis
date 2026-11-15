@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -193,6 +194,54 @@ func (r *RemoteBroker) ReplaceMemory(ctx context.Context, content string) error 
 		return fmt.Errorf("memory exceeds 8 KB: %w", core.ErrInvalid)
 	}
 	_, err := r.exchangeEffect(ctx, core.CapabilityFSWrite, "memory", Request{Op: OpReplaceMemory, Path: "memory", Data: []byte(content)})
+	return err
+}
+
+func (r *RemoteBroker) ReadMemoryDocument(ctx context.Context) (core.MemoryDocument, error) {
+	resp, err := r.exchangeEffect(ctx, core.CapabilityFSRead, "memory", Request{Op: OpReadMemoryDocument, Path: "memory"})
+	if err != nil {
+		return core.MemoryDocument{}, err
+	}
+	var doc core.MemoryDocument
+	if err := json.Unmarshal(resp.Data, &doc); err != nil {
+		return core.MemoryDocument{}, fmt.Errorf("decode memory document: %w", err)
+	}
+	return doc, nil
+}
+
+func (r *RemoteBroker) ChangeMemory(ctx context.Context, change core.MemoryChange) (core.MemoryDocument, error) {
+	data, err := json.Marshal(change)
+	if err != nil {
+		return core.MemoryDocument{}, fmt.Errorf("encode memory change: %w", err)
+	}
+	resp, err := r.exchangeEffect(ctx, core.CapabilityFSWrite, "memory", Request{Op: OpChangeMemory, Path: "memory", Data: data})
+	if err != nil {
+		return core.MemoryDocument{}, err
+	}
+	var doc core.MemoryDocument
+	if err := json.Unmarshal(resp.Data, &doc); err != nil {
+		return core.MemoryDocument{}, fmt.Errorf("decode memory document: %w", err)
+	}
+	return doc, nil
+}
+
+func (r *RemoteBroker) ReportSecuritySnapshot(ctx context.Context) (SecuritySnapshot, error) {
+	resp, err := r.exchange(ctx, Request{Op: OpInspectSecurity})
+	if err != nil {
+		return SecuritySnapshot{}, err
+	}
+	var snapshot SecuritySnapshot
+	if err := json.Unmarshal(resp.Data, &snapshot); err != nil {
+		return SecuritySnapshot{}, fmt.Errorf("decode security snapshot: %w", err)
+	}
+	return snapshot, nil
+}
+
+func (r *RemoteBroker) RevokeDecisionRule(ctx context.Context, id string) error {
+	if err := validateDecisionRuleID(id); err != nil {
+		return err
+	}
+	_, err := r.exchange(ctx, Request{Op: OpRevokeDecisionRule, Path: id})
 	return err
 }
 
