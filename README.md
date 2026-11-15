@@ -1,66 +1,112 @@
+<div align="center">
+
 # travis
 
-A personal AI assistant for your terminal. Bring any model, plug in MCP servers and
-skills, and let it do real work on your files without handing it your machine.
+**A personal AI assistant for your terminal.**<br>
+Bring any model, plug in MCP servers and skills, and let it do real work on your files
+without handing it your machine.
+
+[![CI](https://github.com/Kzeezee/travis/actions/workflows/ci.yml/badge.svg)](https://github.com/Kzeezee/travis/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/github/go-mod/go-version/Kzeezee/travis?logo=go)](go.mod)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
+[![Eval](https://img.shields.io/badge/eval-108%2F108%20trials-brightgreen)](docs/EVAL.md)
+
+[Install](#installation) · [Quick start](#quick-start) · [How it works](#how-it-works) ·
+[Evaluation](#evaluation) · [Guide](#guide) · [Contributing](#contributing)
+
+</div>
+
+---
 
 ## What travis is
 
 travis is a terminal-native assistant written in Go with a
 [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) UI. It is a **general
-personal assistant**, not a coding agent: notes, journals, admin, research, and the
-odd script. It reads and edits files, searches, fetches web pages, runs commands you
-allow, remembers things between sessions, asks you when it's unsure, and can talk and
+personal assistant**, not a coding agent. Use it for notes, journals, admin, research,
+and the odd script. It reads and edits files, searches, fetches web pages, runs commands
+you allow, remembers things between sessions, asks when it's unsure, and can talk and
 listen.
 
 It runs natively on Linux, macOS, and Windows.
 
 ## What makes it different
 
-**Safety is enforced in code, not asked of the model.** Most agents tell the model to
-behave. travis doesn't trust the model at all:
+| | |
+| --- | --- |
+| 🛡️ **Safety in code, not in the prompt** | A separate broker process does every privileged effect and re-checks policy against the *resolved* path or host. Deny by default; a hard deny-list can't be relaxed. |
+| 🧱 **Sandboxed MCP servers** | Landlock on Linux, Seatbelt on macOS, a restricted token on Windows. The broker stops the model; the sandbox stops a compromised server. |
+| 🧪 **Untrusted stays untrusted** | Web pages, MCP results, and workspace `SKILL.md`/`AGENTS.md` are delimited, can't change grants, and raise the approval level. Compaction drops them instead of summarising them. |
+| ↩️ **Autonomy through undo** | Every write is snapshotted, so `/undo` rewinds any earlier turn. `[a] always` writes a scoped rule, so day one is chatty and day three is quiet. |
+| 🔌 **No vendor lock-in** | Any OpenAI-compatible endpoint: OpenAI, DeepSeek, Gemini, Ollama, llama.cpp, OpenRouter. Switch mid-chat with `/provider`. |
+| 🧩 **Existing ecosystems** | MCP servers and `SKILL.md` skills plug in with zero Go code. Installs are pinned to an exact version and integrity hash. |
+| 🔊 **Speaks selectively** | The model marks what's worth saying aloud, so you hear the summary, not the 400-line diff. Speech-to-text runs locally. |
+| 📏 **Measured, not vibed** | 36 tasks × 3 trials in a network-less container, plus a prompt-injection suite. See [Evaluation](#evaluation). |
 
-- **A separate broker process does every privileged effect.** File writes, network,
-  `exec`, and secrets all go through `travis-broker`, which re-checks policy against
-  the *resolved* path or host, not what the model said it would do. If the broker is
-  unreachable, travis fails closed. The broker binary is SHA-256 verified before every
-  session, so a swapped binary can't inherit its permissions.
-- **Deny by default.** No grant, no syscall. A hard deny-list (`~/.ssh`, `~/.aws`,
-  `**/.env`, OS keychains, persistence paths) is checked first and can't be relaxed.
-- **MCP servers run in an OS sandbox**: Landlock on Linux, Seatbelt on macOS, a
-  restricted token on Windows. The broker stops the model; the sandbox stops a
-  compromised server that calls the OS directly.
-- **Untrusted content stays untrusted.** Web pages, MCP results, and workspace
-  `SKILL.md`/`AGENTS.md` are delimited, can't change grants, and raise the approval
-  level for that step. At compaction they are dropped, never summarised into trusted
-  text.
-- **Approvals are keyboard-only.** Voice can tell you an approval is waiting; it can
-  never answer one.
+## How it works
 
-**Autonomy comes from undo, not from more prompts.**
+travis runs as two processes. The UI and agent loop never touch the disk, network, or
+shell directly. Every privileged effect is a request to `travis-broker`, which decides
+on its own.
 
-- Every write is snapshotted first, so `/undo` rewinds to before any earlier turn.
-- `[a] always` writes a scoped rule to `.travis/decisions.toml`. Day one is chatty, day
-  three is quiet. Only the broker writes that file, so the model can't approve itself.
-- Irreversible actions, like `exec`, **always** ask. No rule can relax that.
+```mermaid
+flowchart LR
+    you(["🧑 You"])
 
-**No vendor lock-in.** Any OpenAI-compatible endpoint works: OpenAI, DeepSeek, Gemini,
-Ollama, llama.cpp, OpenRouter. Switch mid-chat with `/provider`.
+    subgraph travis["travis (unprivileged)"]
+        ui["Terminal UI<br/>voice in / out"]
+        loop["Agent loop<br/>turns · budget · compaction"]
+        reg["Tool registry<br/>9 built-ins · MCP · skills"]
+    end
 
-**Uses the ecosystems that already exist.** MCP servers and `SKILL.md` skills plug in
-with zero Go code. `travis mcp add` shows a provenance card (publisher, downloads,
-integrity) and pins an exact version and its integrity hash before anything is installed;
-`travis mcp verify` re-checks every installed package against that pin.
+    subgraph broker["travis-broker (SHA-256 verified)"]
+        policy{"Policy<br/>deny-list · grants<br/>decisions.toml"}
+        effects["fs · net · exec · secrets"]
+        journal[("Snapshot journal<br/>for /undo")]
+    end
 
-**Speaks selectively.** The model marks what's worth saying out loud, so you hear the
-summary, not the 400-line diff. Speech-to-text runs on your machine.
+    llm[("Any OpenAI-compatible<br/>model endpoint")]
+    mcp["MCP servers<br/>🧱 OS sandbox"]
 
-**Measured, not vibed.** The [evaluation](docs/EVAL.md) runs 36 tasks × 3 trials in a
-network-less container, plus a prompt-injection suite across five attack surfaces.
-With policy on, attack success was 0/10.
+    you <--> ui
+    ui <--> loop
+    loop <--> llm
+    loop --> reg
+    reg -- "privileged ops" --> policy
+    reg -- "tool calls" --> mcp
+    policy -- allowed --> effects
+    effects --> journal
+```
+
+A tool call that needs approval goes like this:
+
+```mermaid
+sequenceDiagram
+    participant M as Model
+    participant L as Agent loop
+    participant U as You (keyboard)
+    participant B as Broker
+    M->>L: fs_write notes/todo.md
+    L->>B: request write
+    B->>B: resolve path, check deny-list and rules
+    alt a rule already allows it
+        B-->>L: allowed
+    else needs approval
+        L->>U: approve? [y] once · [a] always · [n] deny
+        U-->>L: a
+        L->>B: approve, remember rule
+        B->>B: append scoped rule to decisions.toml
+    end
+    B->>B: snapshot old bytes, then write
+    B-->>L: done
+    L-->>M: result
+```
+
+More detail: [docs/DESIGN-overview.md](docs/DESIGN-overview.md).
 
 ## Installation
 
-You need **Go 1.25+** and `make`. Windows users without `make`, see
+You need **Go 1.27+** and `make`. Windows users without `make` should see
 [DEV-SETUP §6](docs/DEV-SETUP.md#6-the-makefile-and-what-ci-will-run).
 
 ```sh
@@ -71,10 +117,12 @@ make install          # installs travis + travis-broker to $(go env GOPATH)/bin
 
 Make sure `$(go env GOPATH)/bin` is on your `PATH`.
 
+> [!IMPORTANT]
 > `go install` and `go run` won't give you a working chat. travis refuses any broker
 > whose hash wasn't stamped in at build time, and `make install` is what stamps it.
 
-Optional voice input (needs a C compiler; Linux x86_64/arm64 and Apple-silicon macOS):
+Optional voice input needs a C compiler and runs on Linux x86_64/arm64 and Apple-silicon
+macOS:
 
 ```sh
 make install-voice    # mic helper + local Whistle speech model
@@ -87,17 +135,20 @@ cd ~/notes            # travis works in the directory you start it from
 travis chat
 ```
 
-The first run opens a setup wizard: pick a provider, paste a key (saved to your OS
-keychain, never to a file), toggle voice, choose when MCP tools ask first, and pick a
-security profile. Ollama and
-llama.cpp running on this machine are detected and offered as `ollama` and `llamacpp`
-profiles; a server with several models starts on the first, and `←`/`→` picks another.
-The chosen model's context length is filled in when the server reports it; `t` on a
-provider sends it one tiny request to check it is reachable, streams, and calls tools.
-Quit part-way and the next `travis init` opens at the step you left. Re-run it any time
-with `travis init`.
+The first run opens a setup wizard with these steps:
 
-For a local model, point a profile at Ollama:
+1. **Provider.** Pick a provider and paste a key. The key goes to your OS keychain,
+   never to a file. Ollama and llama.cpp running locally are detected automatically;
+   `←`/`→` picks among their models, and `t` sends one tiny request to check the
+   endpoint streams and calls tools.
+2. **Voice.** Turn voice on or off.
+3. **Tools.** Choose when MCP tools ask before running.
+4. **Security profile.** Pick one.
+
+Quit part-way and `travis init` resumes at the step you left.
+
+<details>
+<summary>Pointing a profile at Ollama by hand</summary>
 
 ```toml
 # travis config path   → prints where this file lives
@@ -109,6 +160,50 @@ kind     = "openai_compatible"
 base_url = "http://127.0.0.1:11434/v1"
 model    = "qwen3:14b"
 ```
+
+</details>
+
+## Evaluation
+
+The published run uses **DeepSeek V4.1 Flash**: 36 tasks × 3 trials. Each trial runs
+travis headless in a network-less Docker container through
+[Inspect AI](https://inspect.aisi.org.uk/) and is graded by code on the final files,
+the tools called, and the answer.
+
+| Category | pass@1 | pass^k |
+| --- | --- | --- |
+| clarify | 12/12 | 4/4 |
+| edit | 18/18 | 6/6 |
+| fetch | 12/12 | 4/4 |
+| mcp | 12/12 | 4/4 |
+| multistep | 15/15 | 5/5 |
+| refusal | 12/12 | 4/4 |
+| retrieval | 18/18 | 6/6 |
+| skills | 9/9 | 3/3 |
+| **all** | **108/108 = 100%** [97, 100] | **36/36 = 100%** [90, 100] |
+
+**Cost** USD 0.0019 per run · **Latency** median 44 s · **Steps** mean 4.1 ·
+**Judge** κ = 1.00 on both calibrated criteria
+
+**Prompt injection.** Attacks were planted in five places: a workspace file,
+`AGENTS.md`, a skill, an MCP result, and a fetched page. Hard denials stay on in every
+condition.
+
+| Approval policy | Untrusted marking | Attack success | Utility under attack |
+| --- | --- | --- | --- |
+| ✅ on | ✅ on | **0/10** | 10/10 |
+| ✅ on | ❌ off | **0/10** | 10/10 |
+| ❌ off | ✅ on | 1/10 | 10/10 |
+| ❌ off | ❌ off | 2/10 | 10/10 |
+
+With the approval policy on, no attack succeeded, even with marking stripped.
+Ablations show that turning skills off drops pass@1 to 32/36.
+
+> [!NOTE]
+> These numbers cover one model, not travis in general. With 36 tasks the 95% interval
+> is wide. The full report includes methods, confidence intervals, ablations, and limits:
+> [docs/EVAL.md](docs/EVAL.md), regenerated by `make eval-report`. This summary is
+> copied by hand, so trust `EVAL.md` if the two disagree.
 
 ## Guide
 
@@ -141,17 +236,17 @@ model    = "qwen3:14b"
 | `/undo` | Rewind files to before an earlier turn |
 | `/quit` | Exit |
 
-Approval prompts: `y` once, `a` always (writes a durable rule), `n` deny. Irreversible
-actions only offer `y` or `n`.
+At an approval prompt, press `y` to allow once, `a` to always allow (this writes a
+durable rule), or `n` to deny. Irreversible actions such as `exec` only offer `y` or `n`.
 
-Hold `ctrl+t` to talk (if voice input is on). The transcript lands in the input box for
-you to edit, and you press enter. Terminals that can't report key releases fall back to
-press-to-start, press-to-stop.
+Hold `ctrl+t` to talk if voice input is on. The transcript lands in the input box for
+you to edit before you press enter. In terminals that can't report key releases, press
+once to start and again to stop.
 
 ### Tools
 
-Eight built-ins: `fs_read`, `fs_write`, `fs_edit`, `grep`, `exec`, `fetch`, `ask_user`,
-`memory`. MCP tools appear as `mcp__<server>__<tool>`.
+There are nine built-ins: `fs_read`, `fs_write`, `fs_edit`, `grep`, `exec`, `fetch`,
+`ask_user`, `memory`, and `history_search`. MCP tools appear as `mcp__<server>__<tool>`.
 
 ### Adding MCP servers
 
@@ -161,40 +256,46 @@ travis mcp add time --allow-net pypi:mcp-server-time
 travis mcp add mine -- npx -y some-server@1.2.3     # explicit command, exact version
 ```
 
-travis shows the package's provenance and saves it only when you type `y`. The runner
-(`npx`, `uvx`, …) must also be granted in your user config:
+travis shows the package's provenance (publisher, downloads, integrity) and saves it
+only when you type `y`. `travis mcp verify` re-checks every installed package against
+its pin. You also need to grant the runner (`npx`, `uvx`, …) in your user config:
 
 ```toml
 [security]
 exec_allow = ["npx", "uvx"]
 ```
 
-`allow_net` lets the first launch download the package. Without it the sandbox blocks
-the network (where the OS can). `tools = { allow = [...], deny = [...] }` limits which of
-the server's tools the model sees (globs on the server's own tool names; deny wins).
+`--allow-net` lets the first launch download the package. Without it, the sandbox blocks
+the network where the OS can. `tools = { allow = [...], deny = [...] }` limits which of
+the server's tools the model sees. The lists are globs on the server's own tool names,
+and deny wins.
 
 ### Skills
 
-Drop `SKILL.md` folders into the `skills/` folder next to your user config, or add more
+Put `SKILL.md` folders in the `skills/` folder next to your user config, or add more
 roots under `[skills] roots`. A workspace `AGENTS.md` or workspace skill needs one
 keyboard approval per content version per session.
 
 ### Configuration
 
-Config is layered: compiled defaults → system → user `config.toml` → workspace
-`.travis/config.toml` → `TRAVIS_*` env vars → flags. The workspace file **can't** set
-`[provider]` or `[security]`, so a cloned repo can't redirect your API key or grant
-itself permissions.
+Config is layered, with later layers overriding earlier ones:
 
-Keys are referenced, never stored: `auth.ref = "keyring://NAME"` or `"env://NAME"`.
+```mermaid
+flowchart LR
+    a[compiled defaults] --> b[system] --> c["user config.toml"] --> d["workspace .travis/config.toml"] --> e["TRAVIS_* env"] --> f[flags]
+```
 
-Voice output: `[voice.output] enabled = true` speaks through the OS (`say`, `espeak-ng`,
-or SAPI). Voice input: `[voice.input] enabled = true` after `make install-voice`.
+The workspace file **can't** set `[provider]` or `[security]`, so a cloned repo can't
+redirect your API key or grant itself permissions. Config refers to keys and never
+stores them: `auth.ref = "keyring://NAME"` or `"env://NAME"`.
 
-Each session writes a JSONL trace (prompts, tool calls, results, token use) to your
-state folder and prints its path on exit. Turn traces off with `[eval] traces = false`
-in your user config. Set `TRAVIS_HOME` to keep a throwaway session out of your real
-state.
+- **Voice output:** `[voice.output] enabled = true` speaks through the OS (`say`,
+  `espeak-ng`, or SAPI).
+- **Voice input:** `[voice.input] enabled = true` after `make install-voice`.
+- **Traces:** each session writes a JSONL trace (prompts, tool calls, results, token
+  use) to your state folder and prints its path on exit. Turn them off with
+  `[eval] traces = false`.
+- **Throwaway sessions:** set `TRAVIS_HOME` to keep them out of your real state.
 
 Full reference and troubleshooting: [docs/DEV-SETUP.md](docs/DEV-SETUP.md).
 
@@ -207,7 +308,16 @@ Read these first, in order:
 3. [`docs/DESIGN-overview.md`](docs/DESIGN-overview.md): the short design
 4. [`docs/DEV-SETUP.md`](docs/DEV-SETUP.md): clone to working editor
 
-Ground rules:
+```sh
+make check            # build, vet (3 OSes), lint, test -race, tidy, govulncheck
+```
+
+CI runs the same checks natively on Ubuntu and Windows. Add the `ci:macos` label to a PR
+that touches build tags, paths, security, voice, or golden files. Live evals
+(`make eval-live`) spend model credit and run only on your machine.
+
+<details>
+<summary><b>Ground rules</b></summary>
 
 - **One Go module, everything under `internal/`.** No `pkg/`.
 - **Inner layers never import outer ones.** `core` → `security` → `tools`/`providers`
@@ -218,24 +328,13 @@ Ground rules:
   and Windows are all first-class.
 - **Decisions D-01 to D-34 in [`docs/DESIGN.md`](docs/DESIGN.md) §0.5 are settled.**
   Reversing one needs an RFC, not a PR comment.
-- Conventional commits (`feat:`, `fix:`, `docs:`, `test:`, `chore:`, `style:`). Never
-  mix a whole-file format pass with content edits.
+- Use conventional commits (`feat:`, `fix:`, `docs:`, `test:`, `chore:`, `style:`).
+  Never mix a whole-file format pass with content edits.
 
-Before pushing:
+</details>
 
-```sh
-make check            # build, vet (3 OSes), lint, test -race, tidy, govulncheck
-```
-
-CI runs the same natively on Ubuntu and Windows; add the `ci:macos` label to a PR that
-touches build tags, paths, security, voice, or golden files.
-
-Live evals (`make eval-live`) spend model credit and run only on your machine. See
-[DEV-SETUP §6](docs/DEV-SETUP.md#6-the-makefile-and-what-ci-will-run).
-
-## Misc
-
-### Repository layout
+<details>
+<summary><b>Repository layout</b></summary>
 
 ```
 cmd/travis/          composition root: wiring and flags only
@@ -255,7 +354,10 @@ eval/                Inspect-based live eval, judge, published results
 docs/                design, plan, setup, eval report
 ```
 
-### Docs
+</details>
+
+<details>
+<summary><b>Docs</b></summary>
 
 | Doc | For |
 | --- | --- |
@@ -264,14 +366,16 @@ docs/                design, plan, setup, eval report
 | [`docs/PLAN.md`](docs/PLAN.md) | Build order and parallelism |
 | [`docs/EVAL.md`](docs/EVAL.md) | Evaluation results, generated by `make eval-report` |
 
-### Known limits
+</details>
 
-- Windows' restricted-token sandbox and Linux Landlock before kernel 7.1 can't block an
-  MCP server's network; the approval prompt says so. Linux 5.19 is the supported floor.
-- Traces aren't redacted yet. They're created readable only by you, but read one before
-  sharing it.
-- Published eval numbers are for one model (DeepSeek V4.1 Flash), not travis in general.
+## Known limits
 
-### License
+- Windows' restricted-token sandbox, and Linux Landlock before kernel 7.1, can't block
+  an MCP server's network access. The approval prompt says so. Linux 5.19 is the
+  supported floor.
+- Traces aren't redacted yet. Only you can read them, but check one before sharing it.
+- Published eval numbers cover one model (DeepSeek V4.1 Flash), not travis in general.
+
+## License
 
 [Apache License 2.0](LICENSE).
