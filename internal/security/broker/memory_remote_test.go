@@ -48,6 +48,41 @@ func TestRemoteMemoryRoundTripsWithoutExposingThePrivateStatePath(t *testing.T) 
 	}
 }
 
+func TestRemoteHumanMemoryEditingIsRevisionSafe(t *testing.T) {
+	effects, _ := buildMemoryBrokerForTest(t, "default")
+	remote, _ := startPipedBrokerWith(t, effects, broker.RemoteOptions{})
+	opened, err := remote.ReadMemoryDocument(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := remote.ChangeMemory(context.Background(), core.MemoryChange{
+		Kind: core.MemoryAppendTrusted, Content: "Call Alice.", ExpectedRevision: opened.Revision,
+	})
+	if err != nil || !strings.Contains(changed.Trusted, "Call Alice.") {
+		t.Fatalf("ChangeMemory = %+v, %v", changed, err)
+	}
+	if _, err := remote.ChangeMemory(context.Background(), core.MemoryChange{
+		Kind: core.MemoryClearTrusted, ExpectedRevision: opened.Revision,
+	}); !errors.Is(err, core.ErrInvalid) {
+		t.Fatalf("stale ChangeMemory = %v, want invalid", err)
+	}
+}
+
+func TestRemoteSecurityInspectionAndRevocationUseTheBroker(t *testing.T) {
+	effects, _ := buildMemoryBrokerForTest(t, "default")
+	remote, _ := startPipedBrokerWith(t, effects, broker.RemoteOptions{})
+	snapshot, err := remote.ReportSecuritySnapshot(context.Background())
+	if err != nil || len(snapshot.Rules) != 0 {
+		t.Fatalf("ReportSecuritySnapshot = %+v, %v", snapshot, err)
+	}
+	if err := remote.RevokeDecisionRule(context.Background(), "000000000000"); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("RevokeDecisionRule = %v, want not found", err)
+	}
+	if err := remote.RevokeDecisionRule(context.Background(), "../decisions.toml"); !errors.Is(err, core.ErrInvalid) {
+		t.Fatalf("malformed RevokeDecisionRule = %v, want invalid", err)
+	}
+}
+
 func TestParanoidMemoryWriteIsDeniedWithAnEventAndNoFile(t *testing.T) {
 	effects, state := buildMemoryBrokerForTest(t, "paranoid")
 	events := &recordingSink{}

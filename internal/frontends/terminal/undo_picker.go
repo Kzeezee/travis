@@ -37,11 +37,12 @@ type rewindFinishedMsg struct {
 
 func (m chatModel) requestTurnList() (chatModel, tea.Cmd) {
 	if m.actions.Undo.ListTurns == nil || m.actions.Undo.Rewind == nil {
-		m.transcript.addNotice("undo is not available in this session")
-		m.refreshTranscript()
-		return m, nil
+		return m.openCommandPanel(commandPanel{
+			kind: commandPanelUndo, title: "undo", lines: []string{"undo is not available in this session"},
+		}), nil
 	}
 	listTurns, ctx := m.actions.Undo.ListTurns, m.ctx
+	m = m.openCommandPanel(commandPanel{kind: commandPanelUndo, title: "undo", lines: []string{"loading turns…"}})
 	return m, func() tea.Msg {
 		turns, err := listTurns(ctx)
 		return turnsListedMsg{turns: turns, err: err}
@@ -49,15 +50,24 @@ func (m chatModel) requestTurnList() (chatModel, tea.Cmd) {
 }
 
 func (m chatModel) openUndoPicker(msg turnsListedMsg) (tea.Model, tea.Cmd) {
+	if m.commandPanel == nil || m.commandPanel.kind != commandPanelUndo {
+		return m, nil
+	}
 	switch {
 	case msg.err != nil:
-		m.transcript.addNotice("✗ undo: " + cutFirstLine(msg.err.Error()))
+		m = m.openCommandPanel(commandPanel{
+			kind: commandPanelUndo, title: "undo", lines: []string{"✗ " + cutFirstLine(msg.err.Error())},
+		})
 	case len(msg.turns) == 0:
-		m.transcript.addNotice("nothing to undo yet")
+		m = m.openCommandPanel(commandPanel{
+			kind: commandPanelUndo, title: "undo", lines: []string{"nothing to undo yet"},
+		})
 	default:
 		newestFirst := slices.Clone(msg.turns)
 		slices.Reverse(newestFirst)
+		m.commandPanel = nil
 		m.undoPicker = &undoPicker{turns: newestFirst, mode: undoModes[0]}
+		m.fitViewport()
 	}
 	m.refreshTranscript()
 	return m.muteDictationForModal()
@@ -75,9 +85,12 @@ func (m chatModel) handleUndoPickerKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		picker.mode = undoModes[(slices.Index(undoModes, picker.mode)+1)%len(undoModes)]
 	case "esc", "ctrl+c":
 		m.undoPicker = nil
+		m.input.Reset()
+		m.fitViewport()
 		return m, nil
 	case "enter":
 		m.undoPicker = nil
+		m.fitViewport()
 		fromTurn, mode := picker.turns[picker.cursor].Turn, picker.mode
 		rewind, ctx := m.actions.Undo.Rewind, m.ctx
 		return m, func() tea.Msg {
@@ -93,7 +106,8 @@ func (m chatModel) handleUndoPickerKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd)
 // the input, to edit and send again.
 func (m chatModel) finishRewind(msg rewindFinishedMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
-		m.transcript.addNotice("✗ undo failed: " + cutFirstLine(msg.err.Error()))
+		m.transcript.addNotice("✗ Could not rewind the conversation")
+		m.transcript.addNotice("  " + cutFirstLine(msg.err.Error()))
 		m.refreshTranscript()
 		return m, nil
 	}
@@ -139,11 +153,15 @@ func describeRewind(mode core.RewindMode, files core.FileReverts) string {
 // renderUndoPicker fills the transcript area: turns newest first, the mode, what the choice
 // would take back, and the keys. Rows scroll to keep the cursor visible.
 func renderUndoPicker(picker undoPicker, width, height int, theme terminalTheme) string {
+	legend := undoPickerLegend
+	if width < 50 {
+		legend = "↑↓ choose · tab mode · enter · esc"
+	}
 	footer := []string{
 		"",
-		truncateWithMargin(renderUndoModes(picker.mode), width),
+		truncateWithMargin(renderUndoModes(picker.mode, width), width),
 		truncateWithMargin(theme.dim.Render(describeUndoChoice(picker)), width),
-		truncateWithMargin(theme.dim.Render(undoPickerLegend), width),
+		truncateWithMargin(theme.dim.Render(legend), width),
 	}
 	rowsAvailable := max(height-1-len(footer), 1)
 	first := max(picker.cursor-rowsAvailable+1, 0)
@@ -183,13 +201,16 @@ func renderUndoRow(turn core.TurnSummary, isSelected bool, width int, theme term
 	return row
 }
 
-func renderUndoModes(selected core.RewindMode) string {
+func renderUndoModes(selected core.RewindMode, width int) string {
 	labels := map[core.RewindMode]string{
 		core.RewindFilesAndConversation: "files + conversation",
 		core.RewindConversationOnly:     "conversation only",
 		core.RewindFilesOnly:            "files only",
 	}
 	options := make([]string, 0, len(undoModes))
+	if width < 60 {
+		return "mode: " + labels[selected] + " · tab changes"
+	}
 	for _, mode := range undoModes {
 		mark := "○ "
 		if mode == selected {

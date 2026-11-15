@@ -78,3 +78,32 @@ func TestMemoryRejectsDelimiterInjectionAndSymlink(t *testing.T) {
 		t.Fatalf("outside file changed: %q", content)
 	}
 }
+
+func TestHumanMemoryChangesPreserveUntrustedNotesAndRejectStaleEditors(t *testing.T) {
+	state := t.TempDir()
+	store := memory.BuildStore(state)
+	if err := store.ReplaceMemory(context.Background(), "trusted"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReplaceMemory(core.MarkUntrustedStep(context.Background()), "untrusted"); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := store.ReadMemoryDocument(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := memory.BuildStore(state).ChangeMemory(context.Background(), core.MemoryChange{
+		Kind: core.MemoryReplaceTrusted, Content: "human edit", ExpectedRevision: opened.Revision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.Trusted != "human edit" || !strings.Contains(changed.Untrusted, "untrusted") {
+		t.Fatalf("changed document = %+v", changed)
+	}
+	if _, err := store.ChangeMemory(context.Background(), core.MemoryChange{
+		Kind: core.MemoryClearTrusted, ExpectedRevision: opened.Revision,
+	}); !errors.Is(err, core.ErrInvalid) {
+		t.Fatalf("stale change error = %v, want invalid", err)
+	}
+}

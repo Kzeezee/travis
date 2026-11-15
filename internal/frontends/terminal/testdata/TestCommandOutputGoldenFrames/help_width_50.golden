@@ -1,0 +1,16 @@
+ ◆ travis
+   / commands · PgUp/PgDn scroll
+ /help
+ Conversation:
+ ▸ /new · start a new conversation
+ Configure:
+   /settings · change saved preferences
+   /model [name] · view or change the model
+   /theme [name] · change terminal colours
+   /voice [status|input on|off|output on|off|key
+ <binding>] · change voice controls
+ ↑↓ scroll · esc close
+──────────────────────────────────────────────────
+ ›
+──────────────────────────────────────────────────
+ ◆ test-model · idle · last turn: none

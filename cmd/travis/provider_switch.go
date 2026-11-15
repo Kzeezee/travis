@@ -129,3 +129,16 @@ func (s *providerSwitcher) ListModels(ctx context.Context) ([]string, error) {
 	s.mu.Unlock()
 	return provider.ListModels(ctx)
 }
+
+func (s *providerSwitcher) ReportActiveProvider() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active
+}
+
+func (s *providerSwitcher) ChangeModel(model string, pricing loop.Pricing, contextLength int) error {
+	s.mu.Lock()
+	provider := s.current
+	s.mu.Unlock()
+	return s.conversation.SelectProvider(provider, model, pricing, contextLength)
+}

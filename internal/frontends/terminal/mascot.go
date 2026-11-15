@@ -11,13 +11,18 @@ import (
 )
 
 const (
-	mascotFrameInterval  = 110 * time.Millisecond
-	metricsFrameInterval = time.Second
-	startupFrameCount    = 6
-	settleFrameCount     = 4
+	mascotFrameInterval      = 300 * time.Millisecond
+	mascotBlinkFrameInterval = 110 * time.Millisecond
+	metricsFrameInterval     = time.Second
+	mascotBlinkInterval      = 6 * time.Second
+	startupFrameCount        = 6
+	settleFrameCount         = 4
 )
 
-type mascotTickMsg struct{ at time.Time }
+type mascotTickMsg struct {
+	at         time.Time
+	generation uint64
+}
 
 type mascotState int
 
@@ -31,9 +36,9 @@ const (
 	mascotFailure
 )
 
-func scheduleMascotTick(clock core.Clock, interval time.Duration) tea.Cmd {
+func scheduleMascotTick(clock core.Clock, interval time.Duration, generation uint64) tea.Cmd {
 	return func() tea.Msg {
-		return mascotTickMsg{at: <-clock.After(interval)}
+		return mascotTickMsg{at: <-clock.After(interval), generation: generation}
 	}
 }
 
@@ -76,12 +81,25 @@ func (m chatModel) shouldAnimateMascot() bool {
 }
 
 func (m chatModel) shouldTickMascot() bool {
-	return m.cancelTurn != nil || m.shouldAnimateMascot()
+	return m.cancelTurn != nil || m.shouldAnimateMascot() || m.shouldBlinkMascot() || m.isMascotBlinking
+}
+
+func (m chatModel) shouldBlinkMascot() bool {
+	return !m.isReducedMotion &&
+		m.reportMascotState() == mascotIdle &&
+		len(m.transcript.turns) == 0 &&
+		len(m.transcript.notices) == 0
 }
 
 func (m chatModel) reportMascotTickInterval() time.Duration {
+	if m.isMascotBlinking {
+		return mascotBlinkFrameInterval
+	}
 	if m.shouldAnimateMascot() {
 		return mascotFrameInterval
+	}
+	if m.shouldBlinkMascot() {
+		return mascotBlinkInterval
 	}
 	return metricsFrameInterval
 }

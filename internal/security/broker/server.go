@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -175,7 +176,24 @@ func (s *connectionSession) perform(ctx context.Context, req Request) (Response,
 			return Response{}, err
 		}
 		return Response{Page: BuildFetchedPageMessage(page)}, nil
-	case OpReadMemory, OpReplaceMemory:
+	case OpInspectSecurity, OpRevokeDecisionRule:
+		inspector, canInspect := s.effects.(interface {
+			ReportSecuritySnapshot(context.Context) (SecuritySnapshot, error)
+			RevokeDecisionRule(context.Context, string) error
+		})
+		if !canInspect {
+			return Response{}, fmt.Errorf("this broker exposes no security snapshot: %w", core.ErrUnsupported)
+		}
+		if req.Op == OpRevokeDecisionRule {
+			return Response{}, inspector.RevokeDecisionRule(ctx, req.Path)
+		}
+		snapshot, err := inspector.ReportSecuritySnapshot(ctx)
+		if err != nil {
+			return Response{}, err
+		}
+		data, err := json.Marshal(snapshot)
+		return Response{Data: data}, err
+	case OpReadMemory, OpReplaceMemory, OpReadMemoryDocument, OpChangeMemory:
 		store, isStore := s.effects.(core.MemoryStore)
 		if !isStore {
 			return Response{}, fmt.Errorf("this broker keeps no memory: %w", core.ErrUnsupported)
@@ -184,7 +202,31 @@ func (s *connectionSession) perform(ctx context.Context, req Request) (Response,
 			content, err := store.ReadMemory(ctx)
 			return Response{Data: []byte(content)}, err
 		}
-		return Response{}, store.ReplaceMemory(ctx, string(req.Data))
+		if req.Op == OpReplaceMemory {
+			return Response{}, store.ReplaceMemory(ctx, string(req.Data))
+		}
+		editor, canEdit := s.effects.(core.MemoryEditor)
+		if !canEdit {
+			return Response{}, fmt.Errorf("this broker cannot edit memory: %w", core.ErrUnsupported)
+		}
+		if req.Op == OpReadMemoryDocument {
+			doc, err := editor.ReadMemoryDocument(ctx)
+			if err != nil {
+				return Response{}, err
+			}
+			data, err := json.Marshal(doc)
+			return Response{Data: data}, err
+		}
+		var change core.MemoryChange
+		if err := json.Unmarshal(req.Data, &change); err != nil {
+			return Response{}, fmt.Errorf("decode memory change: %w", core.ErrInvalid)
+		}
+		doc, err := editor.ChangeMemory(ctx, change)
+		if err != nil {
+			return Response{}, err
+		}
+		data, err := json.Marshal(doc)
+		return Response{Data: data}, err
 	}
 	return Response{}, fmt.Errorf("unknown op %q: %w", req.Op, core.ErrInvalid)
 }

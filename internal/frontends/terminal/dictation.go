@@ -33,7 +33,8 @@ func (m chatModel) isDictationAvailable() bool {
 }
 
 func (m chatModel) isModalOpen() bool {
-	return m.pendingApproval != nil || m.pendingQuestion != nil || m.undoPicker != nil || m.keyPromptProfile != ""
+	return m.pendingApproval != nil || m.pendingQuestion != nil || m.undoPicker != nil || m.confirmation != nil ||
+		m.memoryEditor != nil || m.settingsPanel != nil || m.commandPanel != nil || m.keyPromptProfile != ""
 }
 
 // handlePushToTalkPress starts a recording, or stops one where the terminal cannot report the
@@ -70,7 +71,8 @@ func (m chatModel) handlePushToTalkRelease(key tea.KeyReleaseMsg) (tea.Model, te
 func (m chatModel) handleDictationStarted(msg dictationStartedMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.dictation = dictationIdle
-		m.transcript.addNotice("✗ voice: " + cutFirstLine(msg.err.Error()))
+		m.transcript.addNotice("✗ Could not start voice input")
+		m.transcript.addNotice("  " + cutFirstLine(msg.err.Error()))
 		m.refreshTranscript()
 		return m, nil
 	}
@@ -117,7 +119,8 @@ func (m chatModel) handleDictationFinished(msg dictationFinishedMsg) (tea.Model,
 	switch {
 	case msg.isDiscarded || m.isModalOpen():
 	case msg.err != nil:
-		m.transcript.addNotice("✗ voice: " + cutFirstLine(msg.err.Error()))
+		m.transcript.addNotice("✗ Could not transcribe voice input")
+		m.transcript.addNotice("  " + cutFirstLine(msg.err.Error()))
 		m.refreshTranscript()
 	case msg.text != "":
 		value := m.input.Value()

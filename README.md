@@ -228,14 +228,28 @@ Ablations show that turning skills off drops pass@1 to 32/36.
 | --- | --- |
 | `/help` | List commands |
 | `/new` | Start a new conversation |
+| `/status` | Show provider, model, session, context, limits, security, MCP, theme, and voice state |
+| `/settings` | Search and edit typed user settings; each row shows whether it is saved |
+| `/permissions [revoke <rule-id>]` | Show effective security settings, remembered rules, and recent denials; revoke after confirmation |
+| `/instructions` | List active instruction sources, paths, and trust tiers without reloading them |
+| `/context` | Show the latest actual provider request's exact byte counts, token estimate, and provider usage |
+| `/doctor [live]` | Check local configuration and subsystem health; `live` also makes a bounded provider probe |
+| `/session` | Show the current session and the five most recent session logs |
 | `/model [name]` | Show or switch the model |
 | `/theme [name]` | Preview `auto`, `dark`, `light`, `high_contrast`, or `mono` for this session |
+| `/voice status\|input on\|off\|output on\|off\|key <binding>` | Inspect or configure voice immediately and save it for later sessions |
 | `/provider [name]` | List or switch provider profiles (asks for a key if needed) |
 | `/tools` · `/mcp` · `/skills` | What's loaded, and each MCP server's state |
-| `/memory` | Show what travis remembers |
+| `/memory add <text>\|edit\|clear` | Edit or clear trusted memory, or append a note directly; generated notes remain protected |
 | `/cost` | Tokens used this session |
 | `/undo` | Rewind files to before an earlier turn |
-| `/quit` | Exit |
+| `/quit` · `/exit` | Exit the current Travis session |
+
+`/doctor` is offline and read-only. `/doctor live` makes bounded model-list and local-server
+probes, but never sends a generation request, launches an MCP server, records audio, or speaks.
+Settings rows identify saved values, session-only overrides, and retention changes that take
+effect at the next sweep. New permanent permissions still originate only from approval prompts;
+`/permissions` can inspect and revoke them, not create them.
 
 At an approval prompt, press `y` to allow once, `a` to always allow (this writes a
 durable rule), or `n` to deny. Irreversible actions such as `exec` only offer `y` or `n`.

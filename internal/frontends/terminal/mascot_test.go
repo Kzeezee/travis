@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"image/color"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,7 +13,7 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 )
 
-func TestStartupMascotStopsTicking(t *testing.T) {
+func TestStartupMascotSettlesIntoSixSecondBlinkTimer(t *testing.T) {
 	m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "model"})
 	m.startupFrames, m.isMascotTickArmed = startupFrameCount, true
 
@@ -23,8 +24,48 @@ func TestStartupMascotStopsTicking(t *testing.T) {
 			t.Fatal("startup animation stopped before its final frame")
 		}
 	}
-	if m.isMascotTickArmed || m.shouldAnimateMascot() {
-		t.Fatal("idle mascot kept a timer armed after startup")
+	if !m.isMascotTickArmed || m.mascotTickInterval != mascotBlinkInterval || m.shouldAnimateMascot() {
+		t.Fatalf("post-startup timer = armed %t, interval %s; want six-second idle blink", m.isMascotTickArmed, m.mascotTickInterval)
+	}
+}
+
+func TestIdleMascotBlinksBrieflyEverySixSeconds(t *testing.T) {
+	m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "model"})
+	m.startupFrames, m.isMascotTickArmed, m.mascotTickInterval = 0, false, 0
+	m.mascotFrame = 2
+
+	cmd := m.armMascotAnimation(nil)
+	if cmd == nil || !m.isMascotTickArmed || m.mascotTickInterval != mascotBlinkInterval {
+		t.Fatalf("idle timer = armed %t, interval %s", m.isMascotTickArmed, m.mascotTickInterval)
+	}
+	next, _ := m.Update(mascotTickMsg{})
+	m = next.(chatModel)
+	if !m.isMascotBlinking || m.mascotFrame != 1 || m.mascotTickInterval != mascotBlinkFrameInterval {
+		t.Fatalf("closed blink = blinking %t, frame %d, next %s", m.isMascotBlinking, m.mascotFrame, m.mascotTickInterval)
+	}
+	next, _ = m.Update(mascotTickMsg{})
+	m = next.(chatModel)
+	if m.isMascotBlinking || m.mascotFrame != 2 || m.mascotTickInterval != mascotBlinkInterval {
+		t.Fatalf("open blink = blinking %t, frame %d, next %s", m.isMascotBlinking, m.mascotFrame, m.mascotTickInterval)
+	}
+}
+
+func TestTaskAnimationSupersedesPendingIdleBlink(t *testing.T) {
+	m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "model"})
+	m.startupFrames = 0
+	m.isMascotTickArmed = true
+	m.mascotTickInterval = mascotBlinkInterval
+	m.mascotTickGeneration = 4
+	m.cancelTurn = func() {}
+
+	if cmd := m.armMascotAnimation(nil); cmd == nil || m.mascotTickInterval != mascotFrameInterval || m.mascotTickGeneration != 5 {
+		t.Fatalf("active timer = cmd %v, interval %s, generation %d", cmd != nil, m.mascotTickInterval, m.mascotTickGeneration)
+	}
+	frame := m.mascotFrame
+	next, _ := m.Update(mascotTickMsg{generation: 4})
+	m = next.(chatModel)
+	if m.mascotFrame != frame || !m.isMascotTickArmed {
+		t.Fatal("stale idle blink disrupted the active animation")
 	}
 }
 
@@ -113,7 +154,9 @@ func TestThemePreviewChangesTheSemanticPalette(t *testing.T) {
 	}
 
 	m, _ = selectTheme(m, "unknown")
-	if !strings.Contains(m.transcript.notices[len(m.transcript.notices)-1], "unknown theme") {
+	if !slices.ContainsFunc(m.transcript.notices, func(notice string) bool {
+		return strings.Contains(notice, "Unknown theme")
+	}) {
 		t.Fatal("unknown theme did not produce a notice")
 	}
 }

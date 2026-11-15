@@ -310,6 +310,7 @@ func (c *AssistantConversation) summarise(ctx context.Context, input string) (st
 
 	var text strings.Builder
 	var usage core.Usage
+	hasUsage := false
 	isCutOff := false
 	for {
 		chunk, err := stream.Next()
@@ -322,10 +323,12 @@ func (c *AssistantConversation) summarise(ctx context.Context, input string) (st
 		text.WriteString(chunk.Text)
 		if chunk.Usage != nil {
 			usage = *chunk.Usage
+			hasUsage = true
 		}
 		isCutOff = isCutOff || chunk.Finish == core.StopLength
 	}
 	c.chargeStep(ctx, usage)
+	c.recordSummarizerUsage(usage, hasUsage)
 	summary := strings.TrimSpace(text.String())
 	return summary, summary != "" && !isCutOff && len(summary) < len(input)
 }

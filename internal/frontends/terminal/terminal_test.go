@@ -71,7 +71,7 @@ func TestSubmittedPromptRunsATurnAndReportsItsOutcome(t *testing.T) {
 		wantView    string
 		wantOutcome string
 	}{
-		{name: "success", wantView: "you › hello", wantOutcome: "last turn: ok"},
+		{name: "success", wantView: "> hello", wantOutcome: "last turn: ok"},
 		{name: "failure", turnErr: errors.New("provider unavailable"), wantView: "✗ error: provider unavailable", wantOutcome: "last turn: error"},
 	}
 
@@ -113,9 +113,9 @@ func TestRunningTurnContinuouslyReportsTokensAndElapsedTime(t *testing.T) {
 	}})
 	m, cmd := updateModel(m, mascotTickMsg{at: startedAt.Add(3 * time.Second)})
 
-	status := ansi.Strip(m.renderStatusBar())
-	if !strings.Contains(status, "1.2k tok · 3s") {
-		t.Fatalf("status = %q, want live turn tokens and elapsed time", status)
+	view := renderPlainView(m)
+	if !strings.Contains(view, "◆ 1.2k tokens · 3s") {
+		t.Fatalf("view\n%s\nwant live turn tokens and elapsed time below the prompt", view)
 	}
 	if cmd == nil {
 		t.Fatal("running turn stopped its activity ticker")
@@ -156,8 +156,8 @@ func TestReducedMotionKeepsTheDiamondStaticWhileElapsedTimeUpdates(t *testing.T)
 	if m.mascotFrame != frame {
 		t.Fatalf("reduced-motion frame changed from %d to %d", frame, m.mascotFrame)
 	}
-	if status := ansi.Strip(m.renderStatusBar()); !strings.Contains(status, "0 tok · 2s") {
-		t.Fatalf("status = %q, want elapsed time to update without motion", status)
+	if view := renderPlainView(m); !strings.Contains(view, "◆ 0 tokens · 2s") {
+		t.Fatalf("view\n%s\nwant elapsed time to update without motion", view)
 	}
 }
 
@@ -191,6 +191,9 @@ func TestQuestionIsShownAndTheTypedAnswerIsReturned(t *testing.T) {
 	}
 	if m.pendingQuestion != nil {
 		t.Fatal("answered question remains pending")
+	}
+	if view := renderPlainView(m); !strings.Contains(view, "> Tuesday") {
+		t.Fatalf("answered question missing its user marker:\n%s", view)
 	}
 }
 
@@ -416,6 +419,25 @@ func renderPlainView(m chatModel) string {
 	return ansi.Strip(m.View().Content)
 }
 
+func TestMainPromptCursorMatchesRenderedInput(t *testing.T) {
+	m := buildTestModel(ChatActions{})
+	m, _ = pressKeys(m, typedKeys("hello")...)
+	view := renderPlainView(m)
+	input := strings.Index(view, " › hello")
+	cursor := m.View().Cursor
+	if input < 0 || cursor == nil {
+		t.Fatalf("cursor = %v, view\n%s\nwant visible prompt cursor", cursor != nil, view)
+	}
+	if got, want := cursor.Y, strings.Count(view[:input], "\n"); got != want {
+		t.Fatalf("prompt cursor row = %d, want input row %d", got, want)
+	}
+	inputLine := strings.Split(view, "\n")[cursor.Y]
+	valueEnd := strings.Index(inputLine, "hello") + len("hello")
+	if got, want := cursor.X, ansi.StringWidth(inputLine[:valueEnd]); got != want {
+		t.Fatalf("prompt cursor column = %d, want value end %d", got, want)
+	}
+}
+
 func TestRenderTurnLabelsOnlyRepliesNeverWorkOrBlankText(t *testing.T) {
 	turn := chatTurn{prompt: "q", parts: []turnPart{
 		{text: "Let me look."},
@@ -428,6 +450,43 @@ func TestRenderTurnLabelsOnlyRepliesNeverWorkOrBlankText(t *testing.T) {
 	got := ansi.Strip(renderTurn(turn, 80, &replyRenderer{}, buildTerminalTheme(themeDark)))
 	if strings.Count(got, "travis ›") != 2 || !strings.Contains(got, "travis › Let me look.") || !strings.Contains(got, "travis › On the 13th.") {
 		t.Fatalf("got\n%s\nwant a label on each reply only, none on the blank chunk, card, or thought", got)
+	}
+}
+
+func TestTurnMetricsMoveFromBelowThePromptToAfterTheReply(t *testing.T) {
+	theme := buildTerminalTheme(themeDark)
+	turn := chatTurn{prompt: "measure this", parts: []turnPart{{text: "Done."}}}
+	active := activeTurnMetrics{
+		usage:   core.Usage{InputTokens: 10, OutputTokens: 2},
+		elapsed: 3 * time.Second,
+		mark:    "◆",
+	}
+
+	running := ansi.Strip(renderTurnWithActiveMetrics(turn, 80, &replyRenderer{}, theme, &active))
+	runningLines := strings.Split(running, "\n")
+	if len(runningLines) < 4 || strings.TrimSpace(runningLines[0]) != "> measure this" ||
+		!strings.Contains(runningLines[1], "◆ 12 tokens · 3s") ||
+		!strings.Contains(runningLines[3], "travis › Done.") {
+		t.Fatalf("running turn\n%s\nwant live metrics directly below the prompt and before output", running)
+	}
+
+	turn.usage = active.usage
+	turn.elapsed = active.elapsed
+	turn.hasMetrics = true
+	finished := ansi.Strip(renderTurn(turn, 80, &replyRenderer{}, theme))
+	if replyAt, metricsAt := strings.Index(finished, "travis › Done."), strings.Index(finished, "◆ 12 tokens · 3s"); replyAt < 0 || metricsAt < replyAt {
+		t.Fatalf("finished turn\n%s\nwant final metrics after the last output", finished)
+	}
+}
+
+func TestStatusBarDoesNotDuplicateActiveTurnMetrics(t *testing.T) {
+	m := buildTestModel(ChatActions{})
+	m.cancelTurn = func() {}
+	m.activeTurnUsage = core.Usage{InputTokens: 1200, OutputTokens: 34}
+	m.turnElapsed = 3 * time.Second
+
+	if status := ansi.Strip(m.renderStatusBar()); strings.Contains(status, "1.2k tok") || strings.Contains(status, "3s") {
+		t.Fatalf("status %q duplicates active turn metrics", status)
 	}
 }
 

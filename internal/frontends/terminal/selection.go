@@ -46,7 +46,7 @@ func (s textSelection) spanOnRow(row int) (from, to int, ok bool) {
 // handleMouseSelection drives a drag over the transcript; release copies to the system clipboard.
 func (m chatModel) handleMouseSelection(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	mouse := msg.Mouse()
-	if m.undoPicker != nil {
+	if m.inlinePanelHeight() > 0 {
 		return m, nil
 	}
 	switch msg.(type) {

@@ -4,12 +4,12 @@
                                                                                 
    /help            list commands
  › /quit            exit travis
+   /exit            exit travis
    /new             start a new conversation
-   /model [name]    show or switch the model
-   /theme [name]    preview a colour theme
-   /provider [name] list or switch provider profiles
-   /mcp             list MCP servers and their state
-   /tools           list available tools
+   /status          show current configuration
+   /settings        change saved preferences
+   /permissions [revoke <rule-id>] review access and remembered permissions
+   /instructions    show instructions Travis can use
 ────────────────────────────────────────────────────────────────────────────────
  › /                                                                            
 ────────────────────────────────────────────────────────────────────────────────

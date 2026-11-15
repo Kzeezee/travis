@@ -121,6 +121,7 @@ func discoverSkillsUnderRoot(root string, tier Tier, workspaceDir string, diagno
 			Body:        body,
 			Tier:        skillTier,
 			Root:        root,
+			Path:        skillPath,
 			ContentHash: sha256.Sum256(data),
 		})
 	}

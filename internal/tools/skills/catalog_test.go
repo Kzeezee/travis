@@ -62,6 +62,10 @@ func TestBuildCatalogListsValidSkillAsTrusted(t *testing.T) {
 	if strings.Contains(sections[0], "BEGIN UNTRUSTED") {
 		t.Fatalf("index = %q, a user-tier skill must never be wrapped as untrusted", sections[0])
 	}
+	sources := catalog.ReportInstructionSources()
+	if len(sources) != 1 || sources[0].Path == "" || sources[0].Hash == "" || sources[0].Tier != "user" {
+		t.Fatalf("instruction sources = %+v, want path, hash, and user trust without rereading", sources)
+	}
 
 	found, ok := catalog.selectSkill("example")
 	body := found.Body

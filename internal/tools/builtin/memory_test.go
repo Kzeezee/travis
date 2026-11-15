@@ -59,6 +59,14 @@ func TestMemoryToolDoesNotWriteWhenStoreDenies(t *testing.T) {
 	}
 }
 
+func TestMemoryToolMarksAnUntrustedStepReplacementOutput(t *testing.T) {
+	tool := builtin.BuildMemoryTool(&recordingMemoryStore{}, "/state/memory.md")
+	output, err := tool.Invoke(core.MarkUntrustedStep(context.Background()), json.RawMessage(`{"action":"replace","content":"note"}`))
+	if err != nil || output.IsError || !output.IsUntrusted {
+		t.Fatalf("Invoke = %+v, %v; want untrusted successful output", output, err)
+	}
+}
+
 func TestMemoryToolMeetsTheToolContract(t *testing.T) {
 	tooltest.Run(t, builtin.BuildMemoryTool(&recordingMemoryStore{}, "/state/memory.md"))
 }

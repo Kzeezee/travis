@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -90,6 +91,27 @@ func TestSaveSecurityProfileKeepsTheOtherSecuritySettings(t *testing.T) {
 	}
 }
 
+func TestSaveVoiceInputRoundTripsEnabledStateAndKey(t *testing.T) {
+	paths := buildWritablePathSet(t)
+
+	if err := SaveVoiceInput(paths, VoiceInputCfg{Enabled: true, PushToTalkKey: "ctrl+r"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := loadUserConfigOnly(t, paths).Voice.Input
+	if !got.Enabled || got.PushToTalkKey != "ctrl+r" {
+		t.Fatalf("got %+v, want enabled with ctrl+r", got)
+	}
+}
+
+func TestSaveVoiceInputRejectsEnabledInputWithoutAKey(t *testing.T) {
+	paths := buildWritablePathSet(t)
+
+	if err := SaveVoiceInput(paths, VoiceInputCfg{Enabled: true}); err == nil {
+		t.Fatal("enabled voice input with no key was saved")
+	}
+}
+
 func TestSaveAndRemoveMCPServerRoundTrip(t *testing.T) {
 	paths := buildWritablePathSet(t)
 	server := MCPServerCfg{Command: "npx", Args: []string{"-y", "pkg@1.2.3"}, Env: map[string]string{"A": "b"}, AllowNet: true,
@@ -153,5 +175,43 @@ func TestSaveApprovalDefaultRoundTrips(t *testing.T) {
 	}
 	if got := loadUserConfigOnly(t, paths).Tools; got.ApprovalDefault != "never" || got.MaxExposed != 60 {
 		t.Fatalf("got %+v; want never saved and the other [tools] defaults kept", got)
+	}
+}
+
+func TestConcurrentTypedSettingsWritesDoNotLoseEachOther(t *testing.T) {
+	paths := buildWritablePathSet(t)
+	var wait sync.WaitGroup
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		if err := SaveUI(paths, UICfg{Theme: "mono", ReducedMotion: true}); err != nil {
+			t.Error(err)
+		}
+	}()
+	go func() {
+		defer wait.Done()
+		if err := SaveCostBudgets(paths, 1.25, 10); err != nil {
+			t.Error(err)
+		}
+	}()
+	wait.Wait()
+	cfg := loadUserConfigOnly(t, paths)
+	if cfg.UI.Theme != "mono" || !cfg.UI.ReducedMotion || cfg.Brain.MaxTurnCostUSD != 1.25 || cfg.Brain.MaxDailyCostUSD != 10 {
+		t.Fatalf("merged config = %+v, want both concurrent writes", cfg)
+	}
+}
+
+func TestSaveProviderModelWritesACompleteProfileAndClearsStaleMetadata(t *testing.T) {
+	paths := buildWritablePathSet(t)
+	profile := ProviderProfileCfg{
+		Kind: "openai_compatible", BaseURL: "http://localhost:11434/v1", Model: "new-model",
+		ContextLength: 32000, MaxTokens: 1000, InputUSDPerMTok: 1, OutputUSDPerMTok: 2,
+	}
+	if err := SaveProviderModel(paths, "local", profile); err != nil {
+		t.Fatal(err)
+	}
+	got := loadUserConfigOnly(t, paths).Provider.Profiles["local"]
+	if got.BaseURL != profile.BaseURL || got.Model != "new-model" || got.ContextLength != 0 || got.MaxTokens != 0 || got.InputUSDPerMTok != 0 {
+		t.Fatalf("saved profile = %+v", got)
 	}
 }

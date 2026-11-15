@@ -15,10 +15,10 @@ func TestDraggingOverTheTranscriptSelectsAndCopiesThatText(t *testing.T) {
 	drag := func(x, y int) tea.Msg { return tea.MouseMotionMsg{X: x, Y: y, Button: tea.MouseLeft} }
 	release := tea.MouseReleaseMsg{Button: tea.MouseNone}
 
-	// Row 0 renders as " you › copy the path please"; "copy" starts at cell 7.
+	// Row 0 renders as " > copy the path please"; "copy" starts at cell 3.
 	for name, gesture := range map[string][]tea.Msg{
-		"forward":  {press(7, 0), drag(10, 0), drag(14, 0), release},
-		"backward": {press(14, 0), drag(7, 0), release},
+		"forward":  {press(3, 0), drag(6, 0), drag(10, 0), release},
+		"backward": {press(10, 0), drag(3, 0), release},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "gpt-x"})
@@ -43,7 +43,7 @@ func TestDraggingOverTheTranscriptSelectsAndCopiesThatText(t *testing.T) {
 		m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "gpt-x"})
 		m.transcript.startTurn("copy the path please")
 		m.refreshTranscript()
-		m, cmd := pressKeys(m, press(7, 0), release)
+		m, cmd := pressKeys(m, press(3, 0), release)
 		if cmd != nil || m.selection.isActive {
 			t.Fatalf("a plain click selected text: active=%v, command=%v", m.selection.isActive, cmd != nil)
 		}
@@ -51,8 +51,8 @@ func TestDraggingOverTheTranscriptSelectsAndCopiesThatText(t *testing.T) {
 }
 
 func TestCopySelectedTextSpansRowsWithoutStylingOrPadding(t *testing.T) {
-	content := " " + buildTerminalTheme(themeDark).userLabel.Render("you ›") + " first line   \n second line\n third line"
-	selection := textSelection{anchor: cellPos{row: 0, col: 7}, head: cellPos{row: 2, col: 6}, isActive: true}
+	content := " " + buildTerminalTheme(themeDark).userLabel.Render(">") + " first line   \n second line\n third line"
+	selection := textSelection{anchor: cellPos{row: 0, col: 3}, head: cellPos{row: 2, col: 6}, isActive: true}
 	if got, want := copySelectedText(content, selection), "first line\n second line\n third"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}

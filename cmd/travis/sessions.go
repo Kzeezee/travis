@@ -118,8 +118,12 @@ func runSessions(out io.Writer) error {
 
 // sessionRow is one logged session as `travis sessions` and the --resume picker show it.
 type sessionRow struct {
-	ID   core.ID
-	Line string
+	ID      core.ID
+	Line    string
+	Started string
+	Prompt  string
+	Turns   int
+	Err     error
 }
 
 // buildSessionRows describes each logged session, oldest first.
@@ -132,7 +136,7 @@ func buildSessionRows(dir string) ([]sessionRow, error) {
 	for _, sessionID := range ids {
 		entries, err := filestore.ReadEntries(dir, sessionID)
 		if err != nil {
-			rows = append(rows, sessionRow{ID: sessionID, Line: fmt.Sprintf("%s  unreadable: %v", sessionID, err)})
+			rows = append(rows, sessionRow{ID: sessionID, Line: fmt.Sprintf("%s  unreadable: %v", sessionID, err), Err: err})
 			continue
 		}
 		turns := session.BuildTurnSummaries(entries)
@@ -140,7 +144,11 @@ func buildSessionRows(dir string) ([]sessionRow, error) {
 		if len(turns) > 0 {
 			started, prompt = turns[0].At.Local().Format("2006-01-02 15:04"), turns[0].Prompt
 		}
-		rows = append(rows, sessionRow{ID: sessionID, Line: fmt.Sprintf("%s  %s  %3d turns  %s", sessionID, started, len(turns), buildPromptPreview(prompt))})
+		preview := buildPromptPreview(prompt)
+		rows = append(rows, sessionRow{
+			ID: sessionID, Line: fmt.Sprintf("%s  %s  %3d turns  %s", sessionID, started, len(turns), preview),
+			Started: started, Prompt: preview, Turns: len(turns),
+		})
 	}
 	return rows, nil
 }
