@@ -56,6 +56,18 @@ func TestGoldenFrames(t *testing.T) {
 		})
 	}
 
+	for _, themeName := range themeNames {
+		for _, width := range []int{50, 80} {
+			t.Run(fmt.Sprintf("home_%s_width_%d", themeName, width), func(t *testing.T) {
+				m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{
+					ModelName: "gpt-4o-mini", Theme: themeName, ReducedMotion: true,
+				})
+				m.resize(width, 20)
+				teatest.RequireEqualOutput(t, []byte(renderPlainView(m)))
+			})
+		}
+	}
+
 	// teatest runs without a terminal, so the frames above use the plain-text fallback; these build the model directly to render markdown.
 	for _, width := range []int{50, 80} {
 		t.Run(fmt.Sprintf("markdown_width_%d", width), func(t *testing.T) {
@@ -95,6 +107,31 @@ func TestGoldenFrames(t *testing.T) {
 			teatest.RequireEqualOutput(t, []byte(renderPlainView(m)))
 		})
 	}
+
+	t.Run("turn_metrics_running_width_80", func(t *testing.T) {
+		m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "gpt-4o-mini"})
+		m.resize(80, 12)
+		m.transcript.startTurn("measure this task")
+		m.cancelTurn = func() {}
+		m.activeTurnUsage = core.Usage{InputTokens: 1200, OutputTokens: 34}
+		m.turnElapsed = 3 * time.Second
+		m.mascotFrame = 2
+		m.refreshTranscript()
+		teatest.RequireEqualOutput(t, []byte(renderPlainView(m)))
+	})
+
+	t.Run("turn_metrics_complete_width_80", func(t *testing.T) {
+		m := buildChatModel(context.Background(), make(chan core.Event), nil, ChatActions{}, Options{ModelName: "gpt-4o-mini"})
+		m.resize(80, 12)
+		m.transcript.startTurn("measure this task")
+		m.transcript.applyEvent(core.UserMessageSubmitted{})
+		m.transcript.applyEvent(core.AssistantTextStreamed{Text: "Done."})
+		m.transcript.applyEvent(core.TurnCompleted{Usage: core.Usage{InputTokens: 1200, OutputTokens: 34}})
+		m.transcript.finishTurn(1, turnSucceeded, "", 4*time.Second)
+		m.lastTurnOutcome = turnSucceeded
+		m.refreshTranscript()
+		teatest.RequireEqualOutput(t, []byte(renderPlainView(m)))
+	})
 
 	spendCases := []struct {
 		name    string

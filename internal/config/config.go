@@ -33,6 +33,14 @@ type Config struct {
 	Skills   SkillsCfg   `toml:"skills"`
 	Security SecurityCfg `toml:"security"`
 	Voice    VoiceCfg    `toml:"voice"`
+	UI       UICfg       `toml:"ui"`
+}
+
+// UICfg controls terminal presentation. It is user-owned, so a workspace cannot change
+// appearance or enable motion merely by being opened.
+type UICfg struct {
+	Theme         string `toml:"theme"`
+	ReducedMotion bool   `toml:"reduced_motion"`
 }
 
 // VoiceCfg turns speech on (DESIGN.md §5.10, §5.11). User-config only, like EvalCfg: the
@@ -340,6 +348,7 @@ func buildDefaultConfig() Config {
 		MCP:      MCPCfg{},
 		Skills:   SkillsCfg{Roots: []string{"config:skills"}},
 		Voice:    VoiceCfg{Input: VoiceInputCfg{PushToTalkKey: "ctrl+t"}},
+		UI:       UICfg{Theme: "auto"},
 	}
 }
 
@@ -591,6 +600,14 @@ func (c *Config) Validate() Diagnostics {
 
 	if c.Voice.Input.Enabled && strings.TrimSpace(c.Voice.Input.PushToTalkKey) == "" {
 		diags = append(diags, Diagnostic{Severity: SeverityError, Message: "voice.input.ptt_key is empty"})
+	}
+	switch c.UI.Theme {
+	case "", "auto", "dark", "light", "high_contrast", "mono":
+	default:
+		diags = append(diags, Diagnostic{
+			Severity: SeverityError,
+			Message:  fmt.Sprintf("ui.theme %q is not one of auto, dark, light, high_contrast, mono", c.UI.Theme),
+		})
 	}
 
 	// A server with no command is a silent no-op at best and a confusing exec target at

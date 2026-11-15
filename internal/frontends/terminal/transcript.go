@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Kzeezee/travis/internal/core"
 )
@@ -34,8 +35,11 @@ type chatTurn struct {
 	changedPaths []string
 	// isRewound turns stay in place, so later events still find their turn, but only their
 	// notices render; notices are /undo results shown after (or instead of) the turn.
-	isRewound bool
-	notices   []string
+	isRewound  bool
+	notices    []string
+	usage      core.Usage
+	elapsed    time.Duration
+	hasMetrics bool
 }
 
 // turnPart is assistant text, model reasoning when isThought, or a tool card when tool is set;
@@ -107,9 +111,10 @@ func (t *transcript) resetTranscript() {
 	t.turns, t.notices, t.observedTurns = nil, nil, 0
 }
 
-func (t *transcript) finishTurn(turnNumber int, outcome turnOutcome, failure string) {
+func (t *transcript) finishTurn(turnNumber int, outcome turnOutcome, failure string, elapsed time.Duration) {
 	turn := &t.turns[turnNumber-1]
 	turn.outcome, turn.failure = outcome, failure
+	turn.elapsed, turn.hasMetrics = elapsed, true
 }
 
 func (t *transcript) applyEvent(event core.Event) {
@@ -124,6 +129,9 @@ func (t *transcript) applyEvent(event core.Event) {
 		t.usage.InputTokens += completed.Usage.InputTokens
 		t.usage.OutputTokens += completed.Usage.OutputTokens
 		t.costUSD += completed.CostUSD
+		if t.observedTurns > 0 && t.observedTurns <= len(t.turns) {
+			t.turns[t.observedTurns-1].usage = completed.Usage
+		}
 		if completed.Reason == core.StopBudget {
 			t.addNotice("turn stopped: it reached its step or spending limit")
 		}

@@ -123,6 +123,7 @@ type setupModel struct {
 	actions SetupActions
 	opts    SetupOptions
 	step    setupStep
+	theme   terminalTheme
 
 	providers    []ProviderSummary
 	localServers []LocalServerSummary
@@ -168,7 +169,7 @@ func buildSetupModel(actions SetupActions, opts SetupOptions) setupModel {
 	}
 	approvalCursor := max(slices.IndexFunc(setupApprovalChoices, func(c struct{ mode, effect string }) bool { return c.mode == opts.ApprovalDefault }), 0)
 	step := setupStep(max(slices.Index(setupStepNames, opts.StartStep), 0))
-	return setupModel{actions: actions, opts: opts, step: step, keyInput: keyInput, isVoiceOn: opts.IsVoiceOutputEnabled,
+	return setupModel{actions: actions, opts: opts, step: step, theme: buildTerminalTheme(themeDark), keyInput: keyInput, isVoiceOn: opts.IsVoiceOutputEnabled,
 		profileCursor: profileCursor, approvalCursor: approvalCursor}
 }
 
@@ -412,13 +413,13 @@ func (m setupModel) View() tea.View {
 	}
 	lines = append(lines, m.renderStep()...)
 	if m.notice != "" {
-		lines = append(lines, "", " "+errorStyle.Render(m.notice))
+		lines = append(lines, "", " "+m.theme.error.Render(m.notice))
 	}
 	legend := setupLegend
 	if m.step == setupProvider {
 		legend = setupProviderLegend
 	}
-	lines = append(lines, "", " "+dimStyle.Render(legend))
+	lines = append(lines, "", " "+m.theme.dim.Render(legend))
 	view := tea.NewView(strings.Join(lines, "\n"))
 	view.AltScreen = true
 	return view
@@ -443,12 +444,12 @@ func (m setupModel) renderStep() []string {
 		for i, provider := range rows {
 			row := fmt.Sprintf("   %-10s %-24s %s", provider.name, describeRowModel(provider), provider.status)
 			if i == m.cursor {
-				row = selectedRowStyle.Render("▸" + row[1:])
+				row = m.theme.selectedRow.Render("▸" + row[1:])
 			}
 			lines = append(lines, row)
 		}
 		if !m.hasLookedForLocalServers {
-			lines = append(lines, dimStyle.Render("   looking for Ollama and llama.cpp on this machine…"))
+			lines = append(lines, m.theme.dim.Render("   looking for Ollama and llama.cpp on this machine…"))
 		}
 		if len(m.connectionTest) > 0 {
 			lines = append(append(lines, "", " "+m.connectionTest[0]), indentLines(m.connectionTest[1:])...)
@@ -464,18 +465,18 @@ func (m setupModel) renderStep() []string {
 			choice = " off  [ on ]"
 		}
 		return []string{" Speak replies aloud?", "", "   " + choice, "",
-			dimStyle.Render(" Push-to-talk dictation also needs the voice module: make install-voice (docs/DEV-SETUP.md).")}
+			m.theme.dim.Render(" Push-to-talk dictation also needs the voice module: make install-voice (docs/DEV-SETUP.md).")}
 	case setupTools:
 		lines := []string{" When should MCP tools ask first?", ""}
 		for i, choice := range setupApprovalChoices {
 			row := fmt.Sprintf("   %-6s %s", choice.mode, choice.effect)
 			if i == m.approvalCursor {
-				row = selectedRowStyle.Render("▸" + row[1:])
+				row = m.theme.selectedRow.Render("▸" + row[1:])
 			}
 			lines = append(lines, row)
 		}
-		return append(lines, "", dimStyle.Render(" travis cannot undo what an MCP tool does. Built-in tools keep fixed rules:"),
-			dimStyle.Render(" writes in the workspace run and /undo rewinds them; commands always ask."))
+		return append(lines, "", m.theme.dim.Render(" travis cannot undo what an MCP tool does. Built-in tools keep fixed rules:"),
+			m.theme.dim.Render(" writes in the workspace run and /undo rewinds them; commands always ask."))
 	case setupMCP:
 		lines := []string{" MCP servers give travis more tools.", ""}
 		servers := m.actions.ListMCPServers()
@@ -487,13 +488,13 @@ func (m setupModel) renderStep() []string {
 		}
 		return append(lines, "", " Add one after setup, with its version pinned:",
 			"   travis mcp add <name> --allow-net -- npx -y <package>@<version>",
-			dimStyle.Render(" travis shows where the package comes from and asks before installing it."))
+			m.theme.dim.Render(" travis shows where the package comes from and asks before installing it."))
 	case setupSecurity:
 		lines := []string{" Choose what travis may do", ""}
 		for i, profile := range setupSecurityProfiles {
 			row := "   " + profile
 			if i == m.profileCursor {
-				row = selectedRowStyle.Render("▸" + row[1:])
+				row = m.theme.selectedRow.Render("▸" + row[1:])
 			}
 			lines = append(lines, row)
 		}

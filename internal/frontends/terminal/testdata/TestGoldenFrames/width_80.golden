@@ -5,7 +5,7 @@
    ✓ list_dir                                                                   
    ✗ read_file: permission denied: /home/kez/notes/ideas.md                     
  travis › You have groceries.md, cs464.md and ideas.md (which I couldn't open). 
-                                                                                
+   ◆ 0 tokens · <1s                                                             
                                                                                 
                                                                                 
                                                                                 

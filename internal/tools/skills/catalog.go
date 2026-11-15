@@ -113,10 +113,10 @@ func (c *Catalog) BuildSystemPromptSections(ctx context.Context) ([]string, erro
 		c.isApproved = false
 		if (len(workspaceSkills) > 0 || agentsBlock != "") && c.approver != nil {
 			decision, err := c.approver.RequestApproval(ctx, core.Operation{
-				Kind:           core.CapabilityFSRead,
-				Target:         c.paths.WorkspaceDir,
-				Explanation:    fmt.Sprintf("load workspace AGENTS.md and %d skills for this session (SHA-256 %x); changed content asks again", len(workspaceSkills), fingerprint),
-				IsIrreversible: true,
+				Kind:                    core.CapabilityFSRead,
+				Target:                  c.paths.WorkspaceDir,
+				Explanation:             fmt.Sprintf("load workspace AGENTS.md and %d skills for this session (SHA-256 %x); changed content asks again", len(workspaceSkills), fingerprint),
+				RequiresOneTimeApproval: true,
 			})
 			if err != nil {
 				return nil, err

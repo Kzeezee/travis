@@ -22,6 +22,7 @@ func buildSlashCommands() []slashCommand {
 		}},
 		{name: "new", usage: "/new", summary: "start a new conversation", run: startNewConversation},
 		{name: "model", usage: "/model [name]", summary: "show or switch the model", run: selectModel},
+		{name: "theme", usage: "/theme [name]", summary: "preview a colour theme", run: selectTheme},
 		{name: "provider", usage: "/provider [name]", summary: "list or switch provider profiles", run: func(m chatModel, name string) (chatModel, tea.Cmd) {
 			return m.requestProviderSwitch(name)
 		}},
@@ -34,6 +35,38 @@ func buildSlashCommands() []slashCommand {
 			return m.requestTurnList()
 		}},
 	}
+}
+
+func selectTheme(m chatModel, name string) (chatModel, tea.Cmd) {
+	if name == "" {
+		m.transcript.addNotice("theme: " + m.themePreference + " · " + strings.Join(themeNames, ", "))
+		return m, nil
+	}
+	isKnown := false
+	for _, candidate := range themeNames {
+		if name == candidate {
+			isKnown = true
+			break
+		}
+	}
+	if !isKnown {
+		m.transcript.addNotice("unknown theme " + name + " · choose " + strings.Join(themeNames, ", "))
+		return m, nil
+	}
+	m.themePreference = name
+	resolved := name
+	if name == themeAuto {
+		resolved = themeDark
+		if !m.isDarkBackground {
+			resolved = themeLight
+		}
+	}
+	m.applyTheme(buildTerminalTheme(resolved))
+	m.transcript.addNotice("theme → " + name + " (preview for this session)")
+	if name == themeAuto {
+		return m, tea.RequestBackgroundColor
+	}
+	return m, nil
 }
 
 // findSlashCommand matches a command by name.

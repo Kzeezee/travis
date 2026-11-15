@@ -51,6 +51,9 @@ func TestRedTeamGateWorkspaceInstructionsRequireContentApproval(t *testing.T) {
 		if op.Kind != core.CapabilityFSRead || !strings.Contains(op.Explanation, "SHA-256") {
 			t.Fatalf("approval does not identify its snapshot: %+v", op)
 		}
+		if op.IsIrreversible || !op.RequiresOneTimeApproval {
+			t.Fatalf("approval = %+v, want a reversible content-version approval", op)
+		}
 		return decision, nil
 	})
 	catalog = BuildCatalog(config.SkillsCfg{Roots: []string{root}}, buildTestPathSet(workspace), nil, approver)

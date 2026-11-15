@@ -297,6 +297,8 @@ func runChat(args []string, in io.Reader, out io.Writer) error {
 	chatErr := terminal.RunChat(context.Background(), events, approvals, actions,
 		terminal.Options{
 			ModelName: profile.Model, ContextLength: profile.ContextLength,
+			Clock: core.SystemClock{},
+			Theme: cfg.UI.Theme, ReducedMotion: cfg.UI.ReducedMotion,
 			MaxTurnCostUSD: cfg.Brain.MaxTurnCostUSD, MaxDailyCostUSD: cfg.Brain.MaxDailyCostUSD, SpentTodayUSD: spentToday,
 			IsPriced:        profile.InputUSDPerMTok > 0 || profile.OutputUSDPerMTok > 0,
 			StartupWarnings: startupWarnings, Input: in, Output: out, Questions: questions, Diagnostics: diagnostics, PushToTalkKey: cfg.Voice.Input.PushToTalkKey, History: restoredHistory,

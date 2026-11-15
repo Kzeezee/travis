@@ -229,6 +229,7 @@ Ablations show that turning skills off drops pass@1 to 32/36.
 | `/help` | List commands |
 | `/new` | Start a new conversation |
 | `/model [name]` | Show or switch the model |
+| `/theme [name]` | Preview `auto`, `dark`, `light`, `high_contrast`, or `mono` for this session |
 | `/provider [name]` | List or switch provider profiles (asks for a key if needed) |
 | `/tools` · `/mcp` · `/skills` | What's loaded, and each MCP server's state |
 | `/memory` | Show what travis remembers |
@@ -242,6 +243,9 @@ durable rule), or `n` to deny. Irreversible actions such as `exec` only offer `y
 Hold `ctrl+t` to talk if voice input is on. The transcript lands in the input box for
 you to edit before you press enter. In terminals that can't report key releases, press
 once to start and again to stop.
+
+Set `[ui] theme = "auto"` and `reduced_motion = true|false` in the user config to keep
+your preferred appearance across sessions.
 
 ### Tools
 
