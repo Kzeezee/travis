@@ -135,6 +135,91 @@ func TestPickSessionIDOffersOnlyTheNewestFive(t *testing.T) {
 	}
 }
 
+// A session whose broker has already exited deletes cleanly: its liveness marker still names
+// the broker's pid (shutdown never removes it), but that pid is no longer running.
+func TestSessionsDeleteRemovesAnExistingSession(t *testing.T) {
+	travisHome := t.TempDir()
+	t.Setenv("TRAVIS_HOME", travisHome)
+	paths := config.PathSet{WorkspaceDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t), StateDir: filepath.Join(travisHome, "state")}
+	runBrokeredSession(t, paths, sessionStart{ID: "01DELETE"}, "hi")
+
+	var out strings.Builder
+	if err := runSessionsDelete([]string{"01DELETE", "--yes"}, &out); err != nil {
+		t.Fatalf("runSessionsDelete: %v", err)
+	}
+	if !strings.Contains(out.String(), "deleted session 01DELETE") {
+		t.Fatalf("output = %q, want a deletion confirmation naming the session", out.String())
+	}
+	for _, suffix := range []string{".jsonl", ".lock"} {
+		if _, err := os.Stat(filepath.Join(paths.StateDir, "sessions", "01DELETE"+suffix)); !os.IsNotExist(err) {
+			t.Fatalf("01DELETE%s still exists after delete: %v", suffix, err)
+		}
+	}
+}
+
+// Without --yes, nothing is removed; the command only reports what it would do.
+func TestSessionsDeleteWithoutYesChangesNothing(t *testing.T) {
+	travisHome := t.TempDir()
+	t.Setenv("TRAVIS_HOME", travisHome)
+	paths := config.PathSet{WorkspaceDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t), StateDir: filepath.Join(travisHome, "state")}
+	runBrokeredSession(t, paths, sessionStart{ID: "01KEEP"}, "hi")
+
+	var out strings.Builder
+	if err := runSessionsDelete([]string{"01KEEP"}, &out); err != nil {
+		t.Fatalf("runSessionsDelete without --yes: %v", err)
+	}
+	if !strings.Contains(out.String(), "--yes") {
+		t.Fatalf("output = %q, want it to point at --yes", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(paths.StateDir, "sessions", "01KEEP.jsonl")); err != nil {
+		t.Fatalf("01KEEP.jsonl missing without --yes: %v", err)
+	}
+}
+
+// A session a chat is still using cannot be deleted out from under it.
+func TestSessionsDeleteRefusesASessionStillInUse(t *testing.T) {
+	travisHome := t.TempDir()
+	t.Setenv("TRAVIS_HOME", travisHome)
+	paths := config.PathSet{WorkspaceDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t), StateDir: filepath.Join(travisHome, "state")}
+	var diagnostics strings.Builder
+	sessionBroker, err := startSessionBroker(paths, sessionStart{ID: "01LIVE"}, "default", config.SessionCfg{SnapshotMaxBytes: 1 << 20}, &diagnostics, broker.RemoteOptions{})
+	if err != nil {
+		t.Fatalf("start session broker: %v (diagnostics: %s)", err, &diagnostics)
+	}
+	t.Cleanup(func() {
+		if err := sessionBroker.Close(); err != nil {
+			t.Errorf("session broker: %v", err)
+		}
+	})
+
+	if err := runSessionsDelete([]string{"01LIVE", "--yes"}, io.Discard); err == nil {
+		t.Fatal("runSessionsDelete accepted a session its own broker is still running")
+	}
+	if _, err := os.Stat(filepath.Join(paths.StateDir, "sessions", "01LIVE.jsonl")); err != nil {
+		t.Fatalf("01LIVE.jsonl removed although the session is in use: %v", err)
+	}
+}
+
+func TestSessionsDeleteRefusesAnUnknownID(t *testing.T) {
+	t.Setenv("TRAVIS_HOME", t.TempDir())
+	if err := runSessionsDelete([]string{"01NOPE", "--yes"}, io.Discard); err == nil {
+		t.Fatal("runSessionsDelete accepted an id no session has")
+	}
+}
+
+func TestParseSessionsDeleteArgsSeparatesTheFlagFromTheID(t *testing.T) {
+	id, confirmed, err := parseSessionsDeleteArgs([]string{"01ABC", "--yes"})
+	if err != nil || id != "01ABC" || !confirmed {
+		t.Fatalf("parseSessionsDeleteArgs = %q, %v, %v", id, confirmed, err)
+	}
+	if _, _, err := parseSessionsDeleteArgs(nil); err == nil {
+		t.Fatal("parseSessionsDeleteArgs accepted no id")
+	}
+	if _, _, err := parseSessionsDeleteArgs([]string{"a", "b"}); err == nil {
+		t.Fatal("parseSessionsDeleteArgs accepted two positional arguments")
+	}
+}
+
 func TestAllowBareResumeOnlyRewritesAValuelessFlag(t *testing.T) {
 	for _, tc := range []struct{ args, want string }{
 		{"--resume", "--resume="},

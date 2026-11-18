@@ -139,6 +139,29 @@ func TestDeleteSessionFilesToleratesAlreadyMissingFiles(t *testing.T) {
 	}
 }
 
+func TestReportLiveSessionPIDReportsOnlyARunningMarkedPID(t *testing.T) {
+	sessionsDir := t.TempDir()
+	if _, alive := broker.ReportLiveSessionPID(sessionsDir, "nomarker"); alive {
+		t.Fatal("a session with no marker was reported alive")
+	}
+
+	if err := broker.WriteSessionLivenessMarker(sessionsDir, "dead", 99999999); err != nil {
+		t.Fatalf("WriteSessionLivenessMarker: %v", err)
+	}
+	if pid, alive := broker.ReportLiveSessionPID(sessionsDir, "dead"); alive {
+		t.Fatalf("pid %d reported alive, want an implausible pid to be dead", pid)
+	}
+
+	cmd, stop := startLongRunningProcess(t)
+	defer stop()
+	if err := broker.WriteSessionLivenessMarker(sessionsDir, "live", cmd.Process.Pid); err != nil {
+		t.Fatalf("WriteSessionLivenessMarker: %v", err)
+	}
+	if pid, alive := broker.ReportLiveSessionPID(sessionsDir, "live"); !alive || pid != cmd.Process.Pid {
+		t.Fatalf("ReportLiveSessionPID = %d, %v; want %d, true", pid, alive, cmd.Process.Pid)
+	}
+}
+
 func mustAbsPath(t *testing.T, name, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)

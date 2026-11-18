@@ -65,6 +65,19 @@ func reportMarkedLivePID(sessionsDir string, sessionID core.ID) (pid int, ok boo
 	return n, true
 }
 
+// ReportLiveSessionPID reports the pid a session's liveness marker names and whether that pid
+// is currently running, the same check reportSessionIsExpired makes before ever considering a
+// session for removal. alive is false both when there is no marker and when its pid is no
+// longer running — callers outside this package (a manual `travis sessions delete`) use this to
+// refuse deleting a session out from under the chat still using it.
+func ReportLiveSessionPID(sessionsDir string, sessionID core.ID) (pid int, alive bool) {
+	pid, ok := reportMarkedLivePID(sessionsDir, sessionID)
+	if !ok {
+		return 0, false
+	}
+	return pid, IsProcessAlive(pid)
+}
+
 // ReportExpiredSessionIDs names every session in sessionsDir whose log is past retention and
 // is not still in use. A session is kept, regardless of age, when its liveness marker names a
 // pid isAlive reports as running, or when its log or marker was written within sweepGraceWindow
