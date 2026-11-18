@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -173,7 +174,7 @@ func parseSessionsDeleteArgs(args []string) (id string, confirmed bool, err erro
 		positional = append(positional, arg)
 	}
 	if len(positional) != 1 {
-		return "", false, fmt.Errorf(sessionsDeleteUsage)
+		return "", false, errors.New(sessionsDeleteUsage)
 	}
 	return positional[0], confirmed, nil
 }
