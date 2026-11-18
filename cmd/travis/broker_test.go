@@ -155,6 +155,13 @@ func TestEmptySessionIsDeletedOnACleanBrokerExit(t *testing.T) {
 	var diagnostics strings.Builder
 	sessionBroker, stateDir := startTestSessionBrokerProcess(t, config.PathSet{WorkspaceDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t)}, &diagnostics, broker.RemoteOptions{})
 
+	// A round trip first makes sure the broker has accepted and verified this connection before
+	// it closes; closing immediately after connecting races the broker's own Accept on some OSes
+	// (the peer can already read as disconnected by the time it checks who connected).
+	if _, err := sessionBroker.Remote.ListTurns(context.Background()); err != nil {
+		t.Fatalf("list turns: %v (diagnostics: %s)", err, diagnostics.String())
+	}
+
 	if err := sessionBroker.Close(); err != nil {
 		t.Fatalf("session broker close: %v (diagnostics: %s)", err, diagnostics.String())
 	}
