@@ -89,6 +89,13 @@ func (s *Store) ReadEntries() []core.SessionEntry {
 	return slices.Clone(s.entries)
 }
 
+// ReportEntryCount reports how many entries have been appended, without cloning them.
+func (s *Store) ReportEntryCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.entries)
+}
+
 // ReadEntries replays <dir>/<sessionID>.jsonl without changing it: a torn last line is skipped,
 // not dropped, since the broker that owns the log may still be appending.
 func ReadEntries(dir string, sessionID core.ID) ([]core.SessionEntry, error) {

@@ -82,7 +82,7 @@ func run(args []string, in io.Reader, out io.Writer) error {
 	case "chat":
 		return runChat(args[1:], in, out)
 	case "sessions":
-		return runSessions(out)
+		return runSessions(args[1:], out)
 	case "run":
 		return runHeadless(args[1:], out)
 	case "config":

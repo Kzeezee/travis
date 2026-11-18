@@ -58,6 +58,20 @@ func TestAppendedEntriesReplayAfterReopen(t *testing.T) {
 	}
 }
 
+func TestReportEntryCountReflectsAppends(t *testing.T) {
+	dir := t.TempDir()
+	store := openStore(t, dir)
+	if got := store.ReportEntryCount(); got != 0 {
+		t.Fatalf("ReportEntryCount on a fresh log = %d, want 0", got)
+	}
+	if err := store.Append(buildEntries(t)...); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if got, want := store.ReportEntryCount(), len(buildEntries(t)); got != want {
+		t.Fatalf("ReportEntryCount after append = %d, want %d", got, want)
+	}
+}
+
 func TestAppendRefusesAnInvalidEntryAndWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	store := openStore(t, dir)

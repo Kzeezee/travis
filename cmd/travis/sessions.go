@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/Kzeezee/travis/internal/core"
 	"github.com/Kzeezee/travis/internal/frontends/terminal"
 	"github.com/Kzeezee/travis/internal/id"
+	"github.com/Kzeezee/travis/internal/security/broker"
 	"github.com/Kzeezee/travis/internal/state/session"
 	"github.com/Kzeezee/travis/internal/state/session/filestore"
 )
@@ -95,8 +97,22 @@ func loadRestoredSession(paths config.PathSet, sessionID core.ID) ([]core.Sessio
 	return entries, history, nil
 }
 
-// runSessions lists past sessions, oldest first, for picking one to resume or fork.
-func runSessions(out io.Writer) error {
+// sessionsDeleteUsage is shown for a malformed `travis sessions delete`.
+const sessionsDeleteUsage = "usage: travis sessions delete <id|last> [--yes]"
+
+// runSessions lists past sessions, oldest first, for picking one to resume or fork, or deletes
+// one by id when args names the delete subcommand.
+func runSessions(args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return listSessions(out)
+	}
+	if args[0] != "delete" {
+		return fmt.Errorf("unknown sessions subcommand %q (travis sessions lists; %s)", args[0], sessionsDeleteUsage)
+	}
+	return runSessionsDelete(args[1:], out)
+}
+
+func listSessions(out io.Writer) error {
 	paths, err := config.BuildCurrentPathSet()
 	if err != nil {
 		return err
@@ -112,8 +128,55 @@ func runSessions(out io.Writer) error {
 	for _, row := range rows {
 		fmt.Fprintln(out, row.Line)
 	}
-	fmt.Fprintln(out, "\nresume: travis chat --resume [id|last]   fork: travis chat --fork <id> [--at <turns>]")
+	fmt.Fprintln(out, "\nresume: travis chat --resume [id|last]   fork: travis chat --fork <id> [--at <turns>]   delete: travis sessions delete <id|last> --yes")
 	return nil
+}
+
+// runSessionsDelete removes a session's log and liveness marker, refusing one that is still in
+// use (its liveness marker names a pid that is still running) and requiring --yes, since
+// deletion is irreversible and the session log is the only record that session ever existed
+// (docs/DESIGN.md §5.15).
+func runSessionsDelete(args []string, out io.Writer) error {
+	id, confirmed, err := parseSessionsDeleteArgs(args)
+	if err != nil {
+		return err
+	}
+	paths, err := config.BuildCurrentPathSet()
+	if err != nil {
+		return err
+	}
+	sessionsDir := buildSessionsDir(paths)
+	sessionID, err := resolveLoggedSessionID(paths, id)
+	if err != nil {
+		return err
+	}
+	if pid, alive := broker.ReportLiveSessionPID(sessionsDir, sessionID); alive {
+		return fmt.Errorf("session %s is in use (pid %d); stop that chat first", sessionID, pid)
+	}
+	if !confirmed {
+		fmt.Fprintf(out, "would delete session %s; rerun with --yes to delete it\n", sessionID)
+		return nil
+	}
+	if err := broker.DeleteSessionFiles(sessionsDir, sessionID, broker.DeletionUserRequested, core.SystemClock{}); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "deleted session %s\n", sessionID)
+	return nil
+}
+
+func parseSessionsDeleteArgs(args []string) (id string, confirmed bool, err error) {
+	var positional []string
+	for _, arg := range args {
+		if arg == "--yes" || arg == "-y" {
+			confirmed = true
+			continue
+		}
+		positional = append(positional, arg)
+	}
+	if len(positional) != 1 {
+		return "", false, errors.New(sessionsDeleteUsage)
+	}
+	return positional[0], confirmed, nil
 }
 
 // sessionRow is one logged session as `travis sessions` and the --resume picker show it.

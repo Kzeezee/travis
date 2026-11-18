@@ -1,7 +1,9 @@
 package broker
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,6 +15,28 @@ import (
 	"github.com/Kzeezee/travis/internal/state/blobs"
 	"github.com/Kzeezee/travis/internal/state/session/filestore"
 )
+
+// deletedSessionsLogName is the tombstone ledger every deletion path appends to (TRA-88): the
+// session log is itself the audit log (§5.15), so deleting it leaves no trace of its own
+// deletion unless something outside it records one.
+const deletedSessionsLogName = "deleted.log"
+
+// SessionDeletionReason names which of the three paths removed a session, for deleted.log.
+type SessionDeletionReason string
+
+const (
+	DeletionRetentionExpired SessionDeletionReason = "retention-expired"
+	DeletionEmptyOnExit      SessionDeletionReason = "empty-on-exit"
+	DeletionUserRequested    SessionDeletionReason = "user-deleted"
+)
+
+// sessionDeletionRecord is one line of deleted.log: a tombstone, not a backup. It carries no
+// conversation content, just enough to say a session existed and why it is gone.
+type sessionDeletionRecord struct {
+	SessionID core.ID               `json:"session_id"`
+	DeletedAt time.Time             `json:"deleted_at"`
+	Reason    SessionDeletionReason `json:"reason"`
+}
 
 // sweepGraceWindow protects two races the sweep cannot otherwise see: a session between
 // filestore.Open and WriteSessionLivenessMarker (startup gap), and a blob written by
@@ -63,6 +87,19 @@ func reportMarkedLivePID(sessionsDir string, sessionID core.ID) (pid int, ok boo
 		return 0, false
 	}
 	return n, true
+}
+
+// ReportLiveSessionPID reports the pid a session's liveness marker names and whether that pid
+// is currently running, the same check reportSessionIsExpired makes before ever considering a
+// session for removal. alive is false both when there is no marker and when its pid is no
+// longer running — callers outside this package (a manual `travis sessions delete`) use this to
+// refuse deleting a session out from under the chat still using it.
+func ReportLiveSessionPID(sessionsDir string, sessionID core.ID) (pid int, alive bool) {
+	pid, ok := reportMarkedLivePID(sessionsDir, sessionID)
+	if !ok {
+		return 0, false
+	}
+	return pid, IsProcessAlive(pid)
 }
 
 // ReportExpiredSessionIDs names every session in sessionsDir whose log is past retention and
@@ -150,7 +187,7 @@ func SweepExpiredSessions(stateDir string, retention time.Duration, clock core.C
 		return SweepReport{}, err
 	}
 	for _, id := range expired {
-		if err := deleteSessionFiles(sessionsDir, id); err != nil {
+		if err := DeleteSessionFiles(sessionsDir, id, DeletionRetentionExpired, clock); err != nil {
 			return SweepReport{}, err
 		}
 	}
@@ -166,13 +203,52 @@ func SweepExpiredSessions(stateDir string, retention time.Duration, clock core.C
 	return SweepReport{ExpiredSessions: len(expired), DeletedBlobs: deletedBlobs}, nil
 }
 
-func deleteSessionFiles(sessionsDir string, id core.ID) error {
+// DeleteSessionFiles records why id's session is being removed, then removes its log and
+// liveness marker; a missing file is not an error, since a caller may race a sweep or call this
+// more than once for the same session. The tombstone is recorded first (§5.15.1's write
+// ordering): a crash between the two steps leaves a harmless leftover file with a tombstone
+// already claiming it is gone, never a session that vanishes with no record at all.
+func DeleteSessionFiles(sessionsDir string, id core.ID, reason SessionDeletionReason, clock core.Clock) error {
+	if err := recordSessionDeletion(sessionsDir, id, reason, clock); err != nil {
+		return err
+	}
 	for _, suffix := range []string{".jsonl", ".lock"} {
 		if err := os.Remove(filepath.Join(sessionsDir, string(id)+suffix)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 	}
 	return nil
+}
+
+// recordSessionDeletion appends one line to deleted.log under an exclusive lock (D-32: StateDir
+// is shared, so retention, a broker's own exit, and a manual `travis sessions delete` can all
+// write concurrently), mirroring how AddDecisionRule appends to decisions.toml.
+func recordSessionDeletion(sessionsDir string, id core.ID, reason SessionDeletionReason, clock core.Clock) error {
+	if err := os.MkdirAll(sessionsDir, privateStateDirMode); err != nil {
+		return err
+	}
+	file, err := openPrivateFileNoFollow(filepath.Join(sessionsDir, deletedSessionsLogName))
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	if err := lockExclusive(file); err != nil {
+		return err
+	}
+	defer func() { _ = unlockExclusive(file) }()
+
+	if _, err := file.Seek(0, io.SeekEnd); err != nil {
+		return err
+	}
+	line, err := json.Marshal(sessionDeletionRecord{SessionID: id, DeletedAt: clock.ReportCurrentTime().UTC(), Reason: reason})
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(append(line, '\n')); err != nil {
+		return err
+	}
+	return file.Sync()
 }
 
 // reportRetainedBlobRefs collects every blob ref any surviving session's log still points to.
