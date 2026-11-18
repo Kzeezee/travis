@@ -115,6 +115,30 @@ func TestSweepExpiredSessionsKeepsASessionWithNoShutdownDeletion(t *testing.T) {
 	}
 }
 
+func TestDeleteSessionFilesRemovesLogAndMarker(t *testing.T) {
+	sessionsDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sessionsDir, "s1.jsonl"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := broker.WriteSessionLivenessMarker(sessionsDir, "s1", 1); err != nil {
+		t.Fatalf("WriteSessionLivenessMarker: %v", err)
+	}
+	if err := broker.DeleteSessionFiles(sessionsDir, "s1"); err != nil {
+		t.Fatalf("DeleteSessionFiles: %v", err)
+	}
+	for _, name := range []string{"s1.jsonl", "s1.lock"} {
+		if _, err := os.Stat(filepath.Join(sessionsDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s still exists after DeleteSessionFiles: %v", name, err)
+		}
+	}
+}
+
+func TestDeleteSessionFilesToleratesAlreadyMissingFiles(t *testing.T) {
+	if err := broker.DeleteSessionFiles(t.TempDir(), "missing"); err != nil {
+		t.Fatalf("DeleteSessionFiles on a missing session: %v", err)
+	}
+}
+
 func mustAbsPath(t *testing.T, name, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)

@@ -82,20 +82,20 @@ func run(ctx context.Context, args []string, readiness, diagnostics io.Writer) e
 	if err != nil {
 		return err
 	}
-	sessionLog, err := filestore.Open(filepath.Join(paths.StateDir, "sessions"), core.ID(*sessionID))
+	sessionsDir := filepath.Join(paths.StateDir, "sessions")
+	sessionLog, err := filestore.Open(sessionsDir, core.ID(*sessionID))
 	if err != nil {
 		return err
 	}
-	defer sessionLog.Close()
 	// Written before anything else touches the session so retention's sweep never sees a
 	// session with no liveness marker yet and mistakes "just starting" for "abandoned"; it is
 	// never removed on shutdown, only by the sweep itself once it independently confirms this
 	// session's PID is no longer running (D-32).
-	if err := broker.WriteSessionLivenessMarker(filepath.Join(paths.StateDir, "sessions"), core.ID(*sessionID), os.Getpid()); err != nil {
+	if err := broker.WriteSessionLivenessMarker(sessionsDir, core.ID(*sessionID), os.Getpid()); err != nil {
 		fmt.Fprintf(diagnostics, "travis-broker: session liveness marker: %v\n", err)
 	}
 	if *forkFrom != "" {
-		if err := seedForkedLog(sessionLog, filepath.Join(paths.StateDir, "sessions"), core.ID(*forkFrom), *forkTurns); err != nil {
+		if err := seedForkedLog(sessionLog, sessionsDir, core.ID(*forkFrom), *forkTurns); err != nil {
 			return err
 		}
 	}
@@ -113,9 +113,21 @@ func run(ctx context.Context, args []string, readiness, diagnostics io.Writer) e
 	}
 	if _, err := fmt.Fprintln(readiness, broker.BrokerReadyLine); err != nil {
 		_ = sessionListener.Close()
+		_ = sessionLog.Close()
 		return err
 	}
-	return sessionListener.ServeOneClient(ctx, *clientPID, effects)
+	serveErr := sessionListener.ServeOneClient(ctx, *clientPID, effects)
+	_ = sessionLog.Close()
+	// A clean end (serveErr == nil) with nothing ever said is just a session nobody used: delete
+	// it now rather than leave it for retention to notice, possibly days later (TRA-86). Any other
+	// end — an error, a crash — leaves the log in place for retention to handle as usual: shutdown
+	// here is not atomic, so a non-clean end is not good evidence the log is really still empty.
+	if serveErr == nil && sessionLog.ReportEntryCount() == 0 {
+		if err := broker.DeleteSessionFiles(sessionsDir, core.ID(*sessionID)); err != nil {
+			fmt.Fprintf(diagnostics, "travis-broker: delete empty session: %v\n", err)
+		}
+	}
+	return serveErr
 }
 
 // seedForkedLog copies the source session's log through forkTurns into the new, empty log. The

@@ -93,6 +93,21 @@ func startTestSessionBroker(t *testing.T, paths config.PathSet, diagnostics *str
 	return sessionBroker.Remote, filepath.Join(travisHome, "state")
 }
 
+// startTestSessionBrokerProcess is startTestSessionBroker for tests that need to close the
+// broker themselves and then observe what its process left behind, so it does not also
+// register an automatic Close on cleanup that would race the test's own.
+func startTestSessionBrokerProcess(t *testing.T, paths config.PathSet, diagnostics *strings.Builder, client broker.RemoteOptions) (*broker.SessionBroker, string) {
+	t.Helper()
+	travisHome := t.TempDir()
+	t.Setenv("TRAVIS_HOME", travisHome)
+	sessionCfg := config.SessionCfg{SnapshotMaxBytes: 1 << 20}
+	sessionBroker, err := startSessionBroker(paths, sessionStart{ID: testSessionID}, "default", sessionCfg, diagnostics, client)
+	if err != nil {
+		t.Fatalf("start session broker: %v (diagnostics: %s)", err, diagnostics)
+	}
+	return sessionBroker, filepath.Join(travisHome, "state")
+}
+
 // The broker process, not the tool, refuses a deny-listed file inside the workspace, and the
 // refusal is published as PolicyDenied (D-29); the Phase 1 LocalBroker would have read it.
 func TestFileReadThroughTheBrokerProcessIsRefusedByPolicy(t *testing.T) {
@@ -130,5 +145,46 @@ func TestFileReadThroughTheBrokerProcessIsRefusedByPolicy(t *testing.T) {
 	allowed, err := fileRead.Invoke(context.Background(), json.RawMessage(`{"path":"notes.md"}`))
 	if err != nil || allowed.IsError || !strings.Contains(allowed.Content, "hello") {
 		t.Fatalf("fs_read notes.md = %+v, %v; want its content", allowed, err)
+	}
+}
+
+// A session nobody ever said anything in is deleted the moment its broker exits cleanly
+// (TRA-86), rather than left for retention to notice, possibly days later.
+func TestEmptySessionIsDeletedOnACleanBrokerExit(t *testing.T) {
+	var diagnostics strings.Builder
+	sessionBroker, stateDir := startTestSessionBrokerProcess(t, config.PathSet{WorkspaceDir: t.TempDir(), RuntimeDir: buildShortRuntimeDir(t)}, &diagnostics, broker.RemoteOptions{})
+
+	if err := sessionBroker.Close(); err != nil {
+		t.Fatalf("session broker close: %v (diagnostics: %s)", err, diagnostics.String())
+	}
+
+	sessionsDir := filepath.Join(stateDir, "sessions")
+	for _, suffix := range []string{".jsonl", ".lock"} {
+		if _, err := os.Stat(filepath.Join(sessionsDir, string(testSessionID)+suffix)); !os.IsNotExist(err) {
+			t.Fatalf("test-session%s still exists after a clean exit with nothing said: %v (diagnostics: %s)", suffix, err, diagnostics.String())
+		}
+	}
+}
+
+// A session that did hold a message is left alone on a clean exit: only emptiness triggers
+// TRA-86's cleanup, never age or content.
+func TestNonEmptySessionSurvivesACleanBrokerExit(t *testing.T) {
+	workspace := t.TempDir()
+	var diagnostics strings.Builder
+	sessionBroker, stateDir := startTestSessionBrokerProcess(t, config.PathSet{WorkspaceDir: workspace, RuntimeDir: buildShortRuntimeDir(t)}, &diagnostics, broker.RemoteOptions{})
+	fileWrite := builtin.BuildFileWriteTool(sessionBroker.Remote, workspace, defaultMaxReadBytes, "")
+
+	turnCtx := core.WithTurnID(context.Background(), "turn-1")
+	written, err := fileWrite.Invoke(turnCtx, json.RawMessage(`{"path":"notes.md","content":"hi"}`))
+	if err != nil || written.IsError {
+		t.Fatalf("fs_write notes.md = %+v, %v", written, err)
+	}
+
+	if err := sessionBroker.Close(); err != nil {
+		t.Fatalf("session broker close: %v (diagnostics: %s)", err, diagnostics.String())
+	}
+
+	if _, err := os.Stat(filepath.Join(stateDir, "sessions", string(testSessionID)+".jsonl")); err != nil {
+		t.Fatalf("session log removed although it held an entry: %v", err)
 	}
 }

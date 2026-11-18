@@ -150,7 +150,7 @@ func SweepExpiredSessions(stateDir string, retention time.Duration, clock core.C
 		return SweepReport{}, err
 	}
 	for _, id := range expired {
-		if err := deleteSessionFiles(sessionsDir, id); err != nil {
+		if err := DeleteSessionFiles(sessionsDir, id); err != nil {
 			return SweepReport{}, err
 		}
 	}
@@ -166,7 +166,9 @@ func SweepExpiredSessions(stateDir string, retention time.Duration, clock core.C
 	return SweepReport{ExpiredSessions: len(expired), DeletedBlobs: deletedBlobs}, nil
 }
 
-func deleteSessionFiles(sessionsDir string, id core.ID) error {
+// DeleteSessionFiles removes a session's log and liveness marker; a missing file is not an
+// error, since a caller may race a sweep or call this more than once for the same session.
+func DeleteSessionFiles(sessionsDir string, id core.ID) error {
 	for _, suffix := range []string{".jsonl", ".lock"} {
 		if err := os.Remove(filepath.Join(sessionsDir, string(id)+suffix)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
