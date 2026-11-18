@@ -2,9 +2,12 @@ package broker_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,6 +85,9 @@ func TestSweepExpiredSessionsEndToEnd(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(sessionsDir, "kept.jsonl")); err != nil {
 		t.Fatalf("kept.jsonl was removed: %v", err)
 	}
+	if records := readSessionDeletionLog(t, sessionsDir); len(records) != 1 || records[0].SessionID != "expired" || records[0].Reason != broker.DeletionRetentionExpired {
+		t.Fatalf("deleted.log = %+v, want one retention-expired tombstone for expired", records)
+	}
 	if err := backups.Restore(context.Background(), mustAbsPath(t, "restored.txt", ""), keptRef); err != nil {
 		t.Fatalf("restore surviving blob: %v", err)
 	}
@@ -123,7 +129,8 @@ func TestDeleteSessionFilesRemovesLogAndMarker(t *testing.T) {
 	if err := broker.WriteSessionLivenessMarker(sessionsDir, "s1", 1); err != nil {
 		t.Fatalf("WriteSessionLivenessMarker: %v", err)
 	}
-	if err := broker.DeleteSessionFiles(sessionsDir, "s1"); err != nil {
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := broker.DeleteSessionFiles(sessionsDir, "s1", broker.DeletionUserRequested, core.FixedClock{Time: at}); err != nil {
 		t.Fatalf("DeleteSessionFiles: %v", err)
 	}
 	for _, name := range []string{"s1.jsonl", "s1.lock"} {
@@ -131,12 +138,72 @@ func TestDeleteSessionFilesRemovesLogAndMarker(t *testing.T) {
 			t.Fatalf("%s still exists after DeleteSessionFiles: %v", name, err)
 		}
 	}
+	records := readSessionDeletionLog(t, sessionsDir)
+	if len(records) != 1 || records[0].SessionID != "s1" || records[0].Reason != broker.DeletionUserRequested || !records[0].DeletedAt.Equal(at) {
+		t.Fatalf("deleted.log = %+v, want one tombstone for s1", records)
+	}
 }
 
 func TestDeleteSessionFilesToleratesAlreadyMissingFiles(t *testing.T) {
-	if err := broker.DeleteSessionFiles(t.TempDir(), "missing"); err != nil {
+	sessionsDir := t.TempDir()
+	if err := broker.DeleteSessionFiles(sessionsDir, "missing", broker.DeletionRetentionExpired, core.SystemClock{}); err != nil {
 		t.Fatalf("DeleteSessionFiles on a missing session: %v", err)
 	}
+	if records := readSessionDeletionLog(t, sessionsDir); len(records) != 1 || records[0].Reason != broker.DeletionRetentionExpired {
+		t.Fatalf("deleted.log = %+v, want a tombstone even when the files were already gone", records)
+	}
+}
+
+// TestDeleteSessionFilesAppendsConcurrentlyWithoutTearingLines guards the one failure mode an
+// append-only, multi-writer ledger actually has: two writers racing the same file must each get
+// a whole, independently-decodable line, never an interleaved or truncated one.
+func TestDeleteSessionFilesAppendsConcurrentlyWithoutTearingLines(t *testing.T) {
+	sessionsDir := t.TempDir()
+	const writers = 8
+	done := make(chan error, writers)
+	for n := range writers {
+		go func(n int) {
+			id := core.ID(fmt.Sprintf("s%d", n))
+			done <- broker.DeleteSessionFiles(sessionsDir, id, broker.DeletionRetentionExpired, core.SystemClock{})
+		}(n)
+	}
+	for range writers {
+		if err := <-done; err != nil {
+			t.Fatalf("DeleteSessionFiles: %v", err)
+		}
+	}
+	records := readSessionDeletionLog(t, sessionsDir)
+	if len(records) != writers {
+		t.Fatalf("deleted.log has %d records, want %d (no torn or lost lines)", len(records), writers)
+	}
+}
+
+// sessionDeletionRecord mirrors the unexported type broker.recordSessionDeletion writes, so the
+// test can decode deleted.log without broker exporting a reader it has no production need for.
+type sessionDeletionRecord struct {
+	SessionID core.ID                      `json:"session_id"`
+	DeletedAt time.Time                    `json:"deleted_at"`
+	Reason    broker.SessionDeletionReason `json:"reason"`
+}
+
+func readSessionDeletionLog(t *testing.T, sessionsDir string) []sessionDeletionRecord {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(sessionsDir, "deleted.log"))
+	if err != nil {
+		t.Fatalf("read deleted.log: %v", err)
+	}
+	var records []sessionDeletionRecord
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		var record sessionDeletionRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode deleted.log line %q: %v", line, err)
+		}
+		records = append(records, record)
+	}
+	return records
 }
 
 func TestReportLiveSessionPIDReportsOnlyARunningMarkedPID(t *testing.T) {

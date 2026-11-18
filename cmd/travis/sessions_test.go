@@ -155,6 +155,9 @@ func TestSessionsDeleteRemovesAnExistingSession(t *testing.T) {
 			t.Fatalf("01DELETE%s still exists after delete: %v", suffix, err)
 		}
 	}
+	if records := readSessionDeletionLog(t, filepath.Join(paths.StateDir, "sessions")); len(records) != 1 || records[0].SessionID != "01DELETE" || records[0].Reason != broker.DeletionUserRequested {
+		t.Fatalf("deleted.log = %+v, want one user-deleted tombstone for 01DELETE", records)
+	}
 }
 
 // Without --yes, nothing is removed; the command only reports what it would do.

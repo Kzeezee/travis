@@ -123,7 +123,7 @@ func run(ctx context.Context, args []string, readiness, diagnostics io.Writer) e
 	// end — an error, a crash — leaves the log in place for retention to handle as usual: shutdown
 	// here is not atomic, so a non-clean end is not good evidence the log is really still empty.
 	if serveErr == nil && sessionLog.ReportEntryCount() == 0 {
-		if err := broker.DeleteSessionFiles(sessionsDir, core.ID(*sessionID)); err != nil {
+		if err := broker.DeleteSessionFiles(sessionsDir, core.ID(*sessionID), broker.DeletionEmptyOnExit, clock); err != nil {
 			fmt.Fprintf(diagnostics, "travis-broker: delete empty session: %v\n", err)
 		}
 	}

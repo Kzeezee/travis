@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kzeezee/travis/internal/config"
 	"github.com/Kzeezee/travis/internal/core"
@@ -164,6 +165,9 @@ func TestEmptySessionIsDeletedOnACleanBrokerExit(t *testing.T) {
 			t.Fatalf("test-session%s still exists after a clean exit with nothing said: %v (diagnostics: %s)", suffix, err, diagnostics.String())
 		}
 	}
+	if records := readSessionDeletionLog(t, sessionsDir); len(records) != 1 || records[0].SessionID != testSessionID || records[0].Reason != broker.DeletionEmptyOnExit {
+		t.Fatalf("deleted.log = %+v, want one empty-on-exit tombstone for %s", records, testSessionID)
+	}
 }
 
 // A session that did hold a message is left alone on a clean exit: only emptiness triggers
@@ -187,4 +191,33 @@ func TestNonEmptySessionSurvivesACleanBrokerExit(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(stateDir, "sessions", string(testSessionID)+".jsonl")); err != nil {
 		t.Fatalf("session log removed although it held an entry: %v", err)
 	}
+}
+
+// sessionDeletionRecord mirrors the unexported type broker.recordSessionDeletion writes, so
+// tests can decode deleted.log (TRA-88) without broker exporting a reader it has no production
+// need for.
+type sessionDeletionRecord struct {
+	SessionID core.ID                      `json:"session_id"`
+	DeletedAt time.Time                    `json:"deleted_at"`
+	Reason    broker.SessionDeletionReason `json:"reason"`
+}
+
+func readSessionDeletionLog(t *testing.T, sessionsDir string) []sessionDeletionRecord {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(sessionsDir, "deleted.log"))
+	if err != nil {
+		t.Fatalf("read deleted.log: %v", err)
+	}
+	var records []sessionDeletionRecord
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		var record sessionDeletionRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode deleted.log line %q: %v", line, err)
+		}
+		records = append(records, record)
+	}
+	return records
 }

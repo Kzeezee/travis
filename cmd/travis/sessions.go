@@ -156,7 +156,7 @@ func runSessionsDelete(args []string, out io.Writer) error {
 		fmt.Fprintf(out, "would delete session %s; rerun with --yes to delete it\n", sessionID)
 		return nil
 	}
-	if err := broker.DeleteSessionFiles(sessionsDir, sessionID); err != nil {
+	if err := broker.DeleteSessionFiles(sessionsDir, sessionID, broker.DeletionUserRequested, core.SystemClock{}); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "deleted session %s\n", sessionID)
